@@ -21,8 +21,9 @@ const mainBundlePath = path.join(outputDirectory, 'index.js')
 // 端口漂移时 Vite 会直接失败，而不是安静地让 Electron 加载一张空白页。
 const consoleDevUrl = process.env.CONSOLE_DEV_URL ?? 'http://localhost:5173'
 
-// 从仓库根解析 Electron：它是根 devDependency，宿主包自己不重复声明。
-const electronPath = createRequire(path.join(repositoryRoot, 'package.json'))('electron')
+// Electron 由本包声明，不从仓库根借：electron-builder 只认 `<projectDir>/node_modules/electron`
+// （它不会逐级向上找），而打包时的 projectDir 就是本包。声明在根会让 dev 能用、打包失败。
+const electronPath = createRequire(import.meta.url)('electron')
 
 let electronProcess = null
 const viteProcesses = []
