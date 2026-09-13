@@ -65,7 +65,7 @@ interface OneSwitchRuntime {
 }
 
 interface Window {
-  /** 只有 Electron 形态（preload 注入）才有；浏览��形态是 `undefined`。 */
+  /** 只有 Electron 形态（preload 注入）才有；浏览器形态是 `undefined` 。 */
   electronAPI?: ElectronAPI
   __ONE_SWITCH__?: OneSwitchRuntime
 }
