@@ -15,6 +15,7 @@
     "release:mac": "pnpm build && pnpm --filter @one-switch/app run package:mac",
     "release:win": "pnpm build && pnpm --filter @one-switch/app run package:win",
     "release:linux": "pnpm build && pnpm --filter @one-switch/app run package:linux",
+    "release:notes": "node apps/app/scripts/release-notes.mjs",
     "lint": "node packages/toolkit/scripts/lint.mjs",
     "lint:layers": "node packages/core/scripts/check-proxy-layers.mjs",
     "db": "node packages/core/scripts/db.mjs",

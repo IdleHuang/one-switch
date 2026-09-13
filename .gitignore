@@ -27,8 +27,7 @@ release
 *.sln
 *.sw?
 
-# TypeScript
+# 工具缓存与产物
 *.tsbuildinfo
+.eslintcache
 coverage
-
-.turbo

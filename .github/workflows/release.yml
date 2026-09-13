@@ -36,6 +36,10 @@ jobs:
 
       - name: Set up environment
         uses: ./.github/actions/setup
+        with:
+          # 这一节跑的是裸 lint / typecheck / vitest，不经过 turbo。
+          turbo-cache: 'false'
+          tool-cache: 'true'
 
       - name: Validate version
         id: version
@@ -121,15 +125,18 @@ jobs:
       - name: Build installer
         run: ${{ runner.os == 'macOS' && 'pnpm release:mac' || runner.os == 'Windows' && 'pnpm release:win' || 'pnpm release:linux' }}
 
-      - name: Create macOS checksum
-        if: runner.os == 'macOS'
+      - name: Create installer checksums
         shell: bash
         run: |
-          DMG_PATH=$(find release -name '*.dmg' -type f -print -quit)
-          DMG_DIR=$(dirname "$DMG_PATH")
-          DMG_NAME=$(basename "$DMG_PATH")
-          cd "$DMG_DIR"
-          shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"
+          # 每个安装包都配一份 `.sha256`：发布说明的下载表把校验链接放在文件名旁边，
+          # 只给 macOS 的 dmg 算，表里其余几行就只能写「—」，看起来像漏了。
+          # Windows 的 bash 来自 Git for Windows，只保证有其中之一。
+          HASHER=$(command -v shasum || command -v sha256sum)
+          while IFS= read -r INSTALLER; do
+            DIR=$(dirname "$INSTALLER")
+            NAME=$(basename "$INSTALLER")
+            (cd "$DIR" && "$HASHER" -a 256 "$NAME" > "$NAME.sha256")
+          done < <(find release -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.AppImage' \))
 
       - name: Collect installer and update metadata
         uses: actions/upload-artifact@v6
@@ -144,7 +151,7 @@ jobs:
             ${{ matrix.asset }}
             release/**/*.blockmap
             release/**/latest*.yml
-            release/**/*.dmg.sha256
+            release/**/*.sha256
           if-no-files-found: error
 
   publish:
@@ -157,6 +164,8 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.commit }}
           fetch-depth: 0
+          # 发布说明要按「离 HEAD 最近的发布标签」划变更范围，标签必须都在本地。
+          fetch-tags: true
 
       - name: Create release tag
         env:
@@ -173,13 +182,28 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # 发布说明由提交记录生成：按提交类型分组、从中读出破坏性变更、再用真实产物拼下载表。
+      # 脚本只用 node 内建模块，不需要依赖安装，所以这里不引入 setup 步骤。
+      - name: Generate release notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          node apps/app/scripts/release-notes.mjs \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --assets-dir artifacts \
+            --output "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: One Switch ${{ needs.prepare.outputs.tag }}
-          body_path: .github/release-body.md
-          generate_release_notes: true
+          body_path: ${{ runner.temp }}/release-notes.md
+          # 不开 `generate_release_notes`：它附带的那行 Full Changelog 与生成脚本自己写的
+          # 重复，两行怎么合并由 action 决定，不如自己只留一行。
           prerelease: ${{ inputs.prerelease }}
           fail_on_unmatched_files: true
           overwrite_files: true

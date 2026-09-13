@@ -20,8 +20,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      # `pnpm typecheck` 直接跑 tsc（一次覆盖四棵源码树），不经过 turbo，
+      # 所以 `.turbo` 缓存永远 miss；tool-cache 换来的则是 tsc 增量信息。
       - name: Set up environment
         uses: ./.github/actions/setup
+        with:
+          turbo-cache: 'false'
+          tool-cache: 'true'
 
       - name: Run typecheck
         run: pnpm typecheck
@@ -33,8 +38,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      # 同 typecheck：ESLint 从仓库根一次跑完，不经过 turbo。
       - name: Set up environment
         uses: ./.github/actions/setup
+        with:
+          turbo-cache: 'false'
+          tool-cache: 'true'
 
       - name: Run lint
         run: pnpm lint
@@ -46,8 +55,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      # vitest 同样不由 turbo 驱动，也没有值得留到下轮的产物。
       - name: Set up environment
         uses: ./.github/actions/setup
+        with:
+          turbo-cache: 'false'
 
       # 只跑一次：`test:coverage` 本身就是「跑全部测试 + 收集覆盖率」，
       # 再单独跑一遍 `test:server` 等于把 1100 个用例执行两遍。
@@ -73,8 +85,11 @@ jobs:
       - name: Set up environment
         uses: ./.github/actions/setup
 
-      # `pnpm build` 就是 `turbo run build`：按包依赖顺序构建，
-      # 并且 `typecheck` / `test` 已经跑过一遍的包在这里会直接命中缓存。
+      # `pnpm build` 就是 `turbo run build`：按包依赖顺序构建。
+      # 这是全仓唯一会写 `.turbo` 的 job，所以缓存开关保持默认开启：
+      # 上游没变的包会直接命中缓存，`Time: 34ms >>> FULL TURBO` 是常态。
+      # 注意缓存来自本 job 的历史运行，不是同一轮里 typecheck / test 的结果
+      # ——那两个 job 跑的是裸 tsc 与 vitest，根本不产生 turbo 任务记录。
       - name: Build application
         run: pnpm build
 
