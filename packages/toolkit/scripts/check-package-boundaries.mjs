@@ -10,9 +10,8 @@ import { log } from './lib/log.mjs'
 // 直到想把 core 单独发布或想在 CLI 里复用时才发现拆不开。这里把
 // contract / core / console / cli / app 的依赖方向变成可执行的检查。
 //
-// 这条检查刻意**先于重构生效**：S0 平移（见 product/packaging.md §7）
-// 已在 `packages/` / `apps/` 布局上完成，规则自始至终未改；接下来的
-// 拆分过程中一旦顺手把边界弄脏会立刻失败。
+// 规则表（`RULES`）是声明式的：包边界见 product/packaging.md §3，任何一次搬目录
+// 或新包都要在同一份表里表达出来，边界被顺手弄脏会立刻失败。
 //
 // 与 check-proxy-layers.mjs 同一思路：静态 import 检查，新增文件自动纳入，不维护白名单。
 
@@ -70,7 +69,7 @@ const RULES = {
   },
 }
 
-/** 别名到包的映射。同时覆盖当前别名与 S0 平移后的包名。 */
+/** 别名到包的映射。历史别名（`@common` / `@server` / `@render` / `@`）与包名别名并存。 */
 const ALIASES = [
   { pattern: /^@common(\/|$)/, packageName: 'contracts' },
   { pattern: /^@one-switch\/contracts(\/|$)/, packageName: 'contracts' },
