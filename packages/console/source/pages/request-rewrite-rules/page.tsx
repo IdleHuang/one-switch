@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ShieldCheck } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ShieldCheck, TriangleAlert } from 'lucide-react'
 import { requestRewriteRuleApi } from '@/api/models'
+import { localizeErrorCode } from '@/api/errors'
 import { PageContent, PageHeader, PageLayout } from '@/components/layout'
+import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useToast } from '@/components/ui/toast'
 import { useTranslation } from '@/i18n/provider'
@@ -43,7 +45,28 @@ export function RequestRewriteRulesPage() {
   const [editingRuleId, setEditingRuleId] = useState('')
   const [draft, setDraft] = useState<RequestRewriteRule>(() => createBlankRule(t))
   const [loading, setLoading] = useState(true)
-  useEffect(() => { void requestRewriteRuleApi.list().then(result => { if (result.success) { const next = result.data.map(toUiRule); setRules(next); if (next[0]) { setEditingRuleId(next[0].id); setDraft(next[0]) } } setLoading(false) }) }, [])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  /**
+   * 列表加载失败要留在界面上，并留一个「重试」。
+   *
+   * 之前只在 `success` 分支里写状态：服务端失败时页面一声不吭，用户看到的是空表加一个
+   * 「新建」按钮——像是规则从来没配过，而不是没读到。
+   */
+  const loadRules = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    const result = await requestRewriteRuleApi.list()
+    if (!result.success) {
+      setLoadError(localizeErrorCode(result.errorCode, result.errorMessage, result.errorParams))
+      setLoading(false)
+      return
+    }
+    const next = result.data.map(toUiRule)
+    setRules(next)
+    if (next[0]) { setEditingRuleId(next[0].id); setDraft(next[0]) }
+    setLoading(false)
+  }, [])
+  useEffect(() => { void loadRules() }, [loadRules])
   const [editorOpen, setEditorOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<RequestRewriteRule | null>(null)
   const [search, setSearch] = useState('')
@@ -97,6 +120,29 @@ export function RequestRewriteRulesPage() {
 
   const deleteRule = (target: RequestRewriteRule) => { void (async () => { const result = await requestRewriteRuleApi.remove(target.id); if (!result.success) { toast.error(result.errorMessage); return }; setRules(current => current.filter(rule => rule.id !== target.id)); setDeleteTarget(null); setEditorOpen(false); toast.success(t('rules.deleted')) })() }
 
+  /**
+   * 开关先改本地、再发请求，服务端失败就翻回来并报错。
+   *
+   * 之前这里既不看返回值也不回滚：请求被拒绝时界面上开关是新值、库里还是旧值，
+   * 用户要等到下次打开页面才发现那次点击根本没生效。
+   *
+   * 成功时只回填服务端真正确认的字段（`enabled` 与 `updatedTime`），不整行替换：
+   * 列表行里的绑定数不在这个响应里，整行替换会把它抹成 0。
+   */
+  const toggleRule = (rule: RequestRewriteRule, enabled: boolean) => {
+    void (async () => {
+      const previous = rule.enabled
+      setRules(current => current.map(item => item.id === rule.id ? { ...item, enabled } : item))
+      const result = await requestRewriteRuleApi.update(rule.id, toApiRule({ ...rule, enabled }))
+      if (result.success) {
+        setRules(current => current.map(item => item.id === rule.id ? { ...item, enabled: result.data.enabled, updatedTime: result.data.updatedTime } : item))
+        return
+      }
+      setRules(current => current.map(item => item.id === rule.id ? { ...item, enabled: previous } : item))
+      toast.error(localizeErrorCode(result.errorCode, result.errorMessage, result.errorParams))
+    })()
+  }
+
   return (
     <PageLayout>
       <PageHeader
@@ -110,6 +156,13 @@ export function RequestRewriteRulesPage() {
       />
       <PageContent>
         {loading && <div className="system-xs-regular text-text-tertiary">{t('rules.loading')}</div>}
+        {loadError && (
+          <div className="flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/8 px-3 py-2 system-xs-regular text-text-destructive">
+            <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void loadRules()}>{t('common.action.retry')}</Button>
+          </div>
+        )}
         <div className="flex items-center gap-2 rounded-lg border border-info/20 bg-info/8 px-3 py-2 system-xs-regular text-text-tertiary">
           <ShieldCheck className="size-3.5 shrink-0 text-info" />
           {t('rules.notice')}
@@ -124,7 +177,7 @@ export function RequestRewriteRulesPage() {
           onEdit={editRule}
           onDuplicate={duplicateRule}
           onDelete={setDeleteTarget}
-          onToggle={(rule, enabled) => { setRules(current => current.map(item => item.id === rule.id ? { ...item, enabled } : item)); void requestRewriteRuleApi.update(rule.id, toApiRule({ ...rule, enabled })) }}
+          onToggle={toggleRule}
         />
         <RuleEditorDialog
           open={editorOpen}

@@ -132,11 +132,16 @@ function isPortOpen(port) {
   })
 }
 
-/** 管理 API 全部是 POST，`GET` 一律 405。 */
-async function postJson(port, apiPath) {
+/**
+ * 管理 API 全部是 POST，`GET` 一律 405；而且每个 `/api/*` 都要求实例 token
+ * （`x-one-switch-token`，见 core 的 `management/core/request-guards.ts`）。
+ * token 从运行时文件里拿：这正是「宿主怎么得到身份」的真实路径，
+ * 顺手把「运行时文件里确实写着一个能用的 token」这件事也验了。
+ */
+async function postJson(port, apiPath, token) {
   const response = await fetch(`http://127.0.0.1:${port}${apiPath}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-one-switch-token': token },
     body: '{}',
   })
   const body = await response.json().catch(() => null)
@@ -202,7 +207,10 @@ async function main() {
   log.info(`banner ok, pid ${main1.child.pid}`)
 
   log.step(2, TOTAL_STEPS, 'management API and console')
-  const proxyStatus = await postJson(managementPort, '/api/proxy/status')
+  const instanceToken = readRuntimeFile(dataDir).shutdownToken
+  const unauthorized = await postJson(managementPort, '/api/proxy/status', 'not-the-token')
+  assert.equal(unauthorized.status, 403, 'the management API must refuse a wrong instance token')
+  const proxyStatus = await postJson(managementPort, '/api/proxy/status', instanceToken)
   assert.equal(proxyStatus.status, 200, `POST /api/proxy/status → ${proxyStatus.status}`)
   assert.equal(proxyStatus.body?.success, true, 'the management API must answer with success: true')
   const consoleResponse = await fetch(`http://127.0.0.1:${managementPort}/`)
@@ -277,15 +285,28 @@ async function main() {
   assert.equal(staleReport.staleRuntimeFile, true, 'the leftover must be reported, not silently ignored')
   assert.equal(staleReport.pid, null, 'a leftover must not leak the dead pid into the report')
   assert.equal(staleReport.instanceVersion, null)
+  // 崩溃留下的总是一对：运行时文件与实例锁（名字与字段见 core 的 `runtime/instance-lock.ts`）。
+  // 两份都写上去，第 8 步才算真的在「接管」而不是在空地起步。
+  fs.writeFileSync(
+    path.join(dataDir, 'instance.lock'),
+    JSON.stringify({ pid: DEAD_PID, startedAt: new Date(0).toISOString(), heartbeatAt: new Date(0).toISOString() }),
+  )
 
   log.step(8, TOTAL_STEPS, 'start with --no-web')
   const main2 = launch(['start', '--no-web', ...baseArgs])
   await waitForBanner(main2)
   assert.equal(fs.existsSync(runtimeFilePathOf(dataDir)), true, 'a stale runtime file must be replaced, not reused')
   assert.equal(readRuntimeFile(dataDir).pid, main2.child.pid, 'the stale runtime file must be overwritten')
+  // 这一步同时证明了「遗留的锁不会卡住下一次启动」——清理残留只发生在取锁那一刻，
+  // 宿主（包括 `stop`）都不再插手。
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(dataDir, 'instance.lock'), 'utf8')).pid,
+    main2.child.pid,
+    'the stale instance lock must be taken over by the new instance',
+  )
   const noWebIndex = await fetch(`http://127.0.0.1:${managementPort}/`)
   assert.equal(noWebIndex.status, 404, '--no-web must not serve the console')
-  const stillAlive = await postJson(managementPort, '/api/proxy/status')
+  const stillAlive = await postJson(managementPort, '/api/proxy/status', readRuntimeFile(dataDir).shutdownToken)
   assert.equal(stillAlive.body?.success, true, '--no-web must still expose the management API')
   assertExitCode(await runOnce(['stop', '--data-dir', dataDir]), 0)
 

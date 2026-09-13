@@ -8,7 +8,7 @@ import type { HealthFailureScope } from '@server/proxy/response/response'
 import type { UpstreamTarget } from '@server/proxy/contracts'
 import type { RequestContext } from '@server/proxy/request/request-context'
 import { isClientRequestCancelled, LocalAttemptError, RecordedAttemptError, serializeLocalFailure } from './attempt-errors'
-import { formatTarget, recordHealthFailure, toRequestContentOutcome, type AttemptOutcome } from './attempt-outcome'
+import { formatTarget, healthFailureHints, recordHealthFailure, toRequestContentOutcome, type AttemptOutcome } from './attempt-outcome'
 
 export interface RequestFinalizerOptions {
   context: RequestContext
@@ -40,6 +40,16 @@ export function createRequestFinalizer(options: RequestFinalizerOptions): Reques
   const { context, targets, response, requestLogger, captureRequestContent, startedAt } = options
   const { requestId, logicalModelId, clientProtocol: protocol } = context
 
+  /**
+   * 最后一个「上游自己回了非 2xx」的候选。
+   *
+   * `lastError` 只装**抛异常**的失败（连接错误、搬运中断）；上游明确回 4xx/5xx 走的是
+   * failover 分支，不会留下任何一层 `Error`。于是全部候选告罄时客户端只会收到一句
+   * 「All providers failed」——上游到底回了什么、是 401 还是 503、是不是「模型不存在」
+   * 全丢了，而这些正是客户端唯一能自救的线索。
+   */
+  let lastUpstreamFailure: UpstreamFailureSummary | null = null
+
   return {
     onSuccess: async (target, outcome, attemptIndex) => {
       if (outcome.disposition === 'success') {
@@ -65,7 +75,8 @@ export function createRequestFinalizer(options: RequestFinalizerOptions): Reques
 
     onFailover: async (target, outcome, attemptIndex) => {
       const nextTarget = targets[attemptIndex + 1]
-      const healthScope = await recordHealthFailure(target, outcome.statusCode, outcome.upstreamResponseBody, outcome.transportMismatch)
+      lastUpstreamFailure = { statusCode: outcome.statusCode, body: outcome.upstreamResponseBody ?? null }
+      const healthScope = await recordHealthFailure(target, outcome.statusCode, healthFailureHints(outcome))
       console.warn(
         `[proxy] upstream failover scheduled requestId=${requestId} method=${context.method} path=${context.path} target=${formatTarget(target)} clientProtocol=${protocol} attempt=${attemptIndex} status=${outcome.statusCode} duration=${outcome.durationMilliseconds}ms nextProviderModelId=${nextTarget?.providerModelId ?? 'none'} healthFailureScope=${healthScope}`,
       )
@@ -157,7 +168,7 @@ export function createRequestFinalizer(options: RequestFinalizerOptions): Reques
       const recordedOutcome = error instanceof RecordedAttemptError ? error.outcome : null
       let healthScope: HealthFailureScope = 'none'
       if (!isOutboundProxyConnectionError(rootError)) {
-        healthScope = await recordHealthFailure(target, recordedOutcome?.statusCode ?? null, recordedOutcome?.upstreamResponseBody, recordedOutcome?.transportMismatch)
+        healthScope = await recordHealthFailure(target, recordedOutcome?.statusCode ?? null, recordedOutcome === null ? {} : healthFailureHints(recordedOutcome))
       }
       if (healthScope !== 'none') {
         console.debug(
@@ -182,17 +193,46 @@ export function createRequestFinalizer(options: RequestFinalizerOptions): Reques
 
     onExhausted: async lastError => {
       if (!response.headersSent) {
+        const message = describeExhaustion(lastError, lastUpstreamFailure)
         console.error(
-          `[proxy] all providers failed requestId=${requestId} method=${context.method} path=${context.path} clientProtocol=${protocol} logicalModelId=${logicalModelId} attempts=${targets.length} totalDuration=${Date.now() - startedAt}ms error=${lastError?.message ?? 'unknown'}`,
+          `[proxy] all providers failed requestId=${requestId} method=${context.method} path=${context.path} clientProtocol=${protocol} logicalModelId=${logicalModelId} attempts=${targets.length} lastUpstreamStatus=${lastUpstreamFailure?.statusCode ?? 'none'} totalDuration=${Date.now() - startedAt}ms error=${message}`,
         )
-        const responseBody = response.fail(
-          502,
-          'ALL_PROVIDERS_FAILED',
-          lastError?.message ?? 'All providers failed',
-        )
+        const responseBody = response.fail(502, 'ALL_PROVIDERS_FAILED', message)
         await requestLogger.finalizeLocalErrorContent(502, response.headers(), responseBody)
       }
       await requestLogger.finalizeRequestLog('failed', startedAt)
     },
   }
+}
+
+/** 最后一次上游 HTTP 层失败的事实，用于在全候选告罄时给出可归因的失败原因。 */
+interface UpstreamFailureSummary {
+  statusCode: number
+  body: string | null
+}
+
+/** 上游错误正文可能是一整页 HTML：摘要只留一小段，长一点就够归因了。 */
+const UPSTREAM_FAILURE_BODY_LIMIT = 200
+
+/**
+ * 「所有候选都失败」时给客户端的解释。
+ *
+ * 优先级是「谁知道得更多谁来说」：异常（连接层、搬运中断）最接近根因，因此先看它；
+ * 没有异常时用最后一次上游响应的状态码与正文——状态码是客户端唯一能据以自救的东西
+ * （401 该换密钥、404 该换模型），把它换掉只等于把「为什么失败」推回给用户。
+ */
+function describeExhaustion(lastError: Error | null, upstreamFailure: UpstreamFailureSummary | null): string {
+  if (lastError !== null) return lastError.message
+  if (upstreamFailure === null) return 'All providers failed'
+  const detail = summarizeUpstreamBody(upstreamFailure.body)
+  const head = `All providers failed: the last upstream responded with ${upstreamFailure.statusCode}`
+  return detail === null ? head : `${head} (${detail})`
+}
+
+/** 把上游错误正文压成单行短句；没有可用内容时返回 `null`，让调用方只说状态码。 */
+function summarizeUpstreamBody(body: string | null): string | null {
+  if (body === null) return null
+  const collapsed = body.replace(/\s+/g, ' ').trim()
+  if (collapsed.length === 0) return null
+  return collapsed.length > UPSTREAM_FAILURE_BODY_LIMIT ? `${collapsed.slice(0, UPSTREAM_FAILURE_BODY_LIMIT)}…` : collapsed
 }

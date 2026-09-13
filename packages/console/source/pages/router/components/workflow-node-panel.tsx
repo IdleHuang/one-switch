@@ -79,6 +79,7 @@ export function WorkflowNodePanel(props: WorkflowNodePanelProps) {
   const [dragging, setDragging] = useState(false)
   const widthRef = useRef(width)
   widthRef.current = width
+  const detachOnUnmount = useRef<(() => void) | null>(null)
 
   const maxWidth = computeMaxPanelWidth(canvasWidth)
   const boundedWidth = Math.min(Math.max(width, MIN_PANEL_WIDTH), maxWidth)
@@ -111,18 +112,32 @@ export function WorkflowNodePanel(props: WorkflowNodePanelProps) {
       })
     }
 
-    const handleUp = () => {
+    const cleanup = () => {
       if (frame !== null) cancelAnimationFrame(frame)
       window.removeEventListener('pointermove', handleMove)
       window.removeEventListener('pointerup', handleUp)
+      detachOnUnmount.current = null
+    }
+
+    const handleUp = () => {
+      cleanup()
       onWidthChange(pending)
       setDragging(false)
     }
 
+    detachOnUnmount.current = cleanup
     setDragging(true)
     window.addEventListener('pointermove', handleMove)
     window.addEventListener('pointerup', handleUp)
   }, [onWidthChange])
+
+  /**
+   * 拖拽中途卸载（面板被关掉、节点被删掉）时把挂在 `window` 上的监听器收回来。
+   *
+   * 不收的话它们会继续按着那次拖拽的旧闭包调 `onWidthChange`：指针早就抬起来了，
+   * 画布宽度却还在被一次已经结束的拖动推着走。
+   */
+  useEffect(() => () => { detachOnUnmount.current?.() }, [])
 
   const Body = PANEL_COMPONENT_MAP[model.kind]
   const protectedNode = isProtectedNode(model)

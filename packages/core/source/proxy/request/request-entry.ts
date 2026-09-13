@@ -63,9 +63,18 @@ type AbortedExchange = ExchangeIdentity & ExchangeResolution
 /** 尚未读到请求体时的占位，避免在多个分支里重复分配。 */
 const NO_REQUEST_BODY = Buffer.alloc(0)
 
-/** 读取客户端请求体的结果；`aborted` 为真表示客户端没把正文发完就断开了。 */
+/**
+ * 读取客户端请求体的结果。
+ *
+ * 正文**不设大小上限**：代理必须整份读完才谈得上转发（协议转换、正文改写、模型名校验
+ * 都要看完整正文），拿字节数拒掉「太大」的请求，等于替用户决定他的多模态请求能有多大。
+ * 这是本地工具，不做资源消耗攻击假设——同一条判断在规则引擎里也是这么下的
+ * （见 `product/request-rewrite-rules.md`）。
+ */
 interface RequestBodyReadResult {
+  /** 已读到的正文；`aborted` 时只保留到那一刻为止收到的部分。 */
   body: Buffer
+  /** 客户端没把正文发完就断开了。 */
   aborted: boolean
 }
 
@@ -235,7 +244,10 @@ function readRequestBody(req: IncomingMessage): Promise<RequestBodyReadResult> {
       settled = true
       resolve({ body: Buffer.concat(chunks), aborted })
     }
-    req.on('data', chunk => chunks.push(chunk))
+    req.on('data', chunk => {
+      if (settled) return
+      chunks.push(chunk)
+    })
     req.on('end', () => finish(false))
     req.on('aborted', () => finish(true))
     req.on('error', () => finish(true))

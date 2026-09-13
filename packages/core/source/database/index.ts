@@ -165,6 +165,12 @@ function openDatabase(role: DatabaseRole, dataDir: string): OpenedDatabase {
  * 观测库要的是「每个请求一次写入扛得住」加上「删了日志能真的还空间」。
  */
 function applyPragmas(role: DatabaseRole, client: DatabaseSync): void {
+  // 排队等锁而不是当场报 `SQLITE_BUSY`。默认值是 0——任何一次短暂的重叠写入都会直接
+  // 失败，而这里有两类「第三方写手」：`stop` 的另一个进程可能正在收尾，用户也可能拿
+  // 别的工具（sqlite3 CLI）打开同一个文件。没有这条，一次几毫秒的锁竞争就会变成
+  // 「日志写不进去」或「启动失败」。5s 与 SQLite 生态里的常见取值一致。
+  client.exec('PRAGMA busy_timeout = 5000')
+
   // WAL 两边都要：读不被写挡住。分析页在跑长聚合时，代理仍在写日志——回滚日志模式下这两件事
   // 会互相阻塞，而 WAL 下写只追加、读走快照。两个库都是「一边读一边写」的形态。
   client.exec('PRAGMA journal_mode = WAL')

@@ -3,7 +3,16 @@ import type { IncomingHttpHeaders, OutgoingHttpHeaders, ServerResponse } from 'n
 /** 响应写出口的最小形状：只要能把字符串写出去并收尾，就能作为出口（含测试替身）。 */
 export interface ResponseSink {
   readonly writableEnded: boolean
-  write(chunk: string): void
+  /**
+   * 写出一块正文。
+   *
+   * 返回值是背压信号：`false` 表示这块正文只是进了内核缓冲区、客户端还没收走，
+   * 调用方应当等 `drained()` 之后再继续写。不表达背压的实现可以返回 `void`
+   * （内存缓冲与测试替身没有这个状态）。
+   */
+  write(chunk: string): boolean | void
+  /** 等到内核缓冲区排空；只在上一次 `write` 返回 `false` 之后调用。 */
+  drained?(): Promise<void>
   end(): void
 }
 
@@ -33,7 +42,28 @@ export class NodeProxyResponse implements ProxyResponse {
     if (!this.response.headersSent) this.response.writeHead(statusCode, headers)
   }
 
-  write(chunk: string): void { this.response.write(chunk) }
+  write(chunk: string): boolean { return this.response.write(chunk) }
+
+  /**
+   * 等客户端把内核缓冲区读空。
+   *
+   * `close` / `error` 也要收尾：客户端断开的连接永远不会再发 `drain`，
+   * 只等它会把整条管道挂在一次已经结束的请求上。
+   */
+  drained(): Promise<void> {
+    return new Promise(resolve => {
+      const finish = () => {
+        this.response.off('drain', finish)
+        this.response.off('close', finish)
+        this.response.off('error', finish)
+        resolve()
+      }
+      this.response.once('drain', finish)
+      this.response.once('close', finish)
+      this.response.once('error', finish)
+    })
+  }
+
   end(): void { this.response.end() }
   destroy(error: Error): void { this.response.destroy(error) }
   headers(): OutgoingHttpHeaders { return this.response.getHeaders() }
@@ -67,7 +97,7 @@ export class BufferedProxyResponse implements ProxyResponse {
     this.responseHeaders = { ...headers }
   }
 
-  write(chunk: string): void { this.chunks.push(chunk) }
+  write(chunk: string): boolean { this.chunks.push(chunk); return true }
   end(): void { this.ended = true }
   destroy(error: Error): void { this.failure = error; this.ended = true }
   headers(): OutgoingHttpHeaders { return this.responseHeaders }

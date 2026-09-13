@@ -253,7 +253,7 @@ export const uiEn = {
   'requestLogs.table.emptyAll.description': 'Requests show up here once the proxy receives them.',
   'requestLogs.attempt.noResponse': 'No response received',
   'requestLogs.attempt.retryable': 'Retryable',
-  'requestLogs.attempt.transportMismatch': 'Not streamed back',
+  'requestLogs.attempt.transportMismatch': 'Response shape mismatch',
   'requestLogs.attempt.firstToken': 'First token {value}',
   'requestLogs.attempt.converted': 'Converted to {protocol}',
   'requestLogs.attempt.label': 'Attempt {index}',
@@ -1242,6 +1242,7 @@ export const uiEn = {
   'settings.outboundProxy.testDescription': 'Send one lightweight request with the current configuration to verify the proxy',
   'settings.outboundProxy.testTargetAria': 'Test target URL',
   'settings.outboundProxy.testSuccess': 'Connected, HTTP {status}, took {duration} ms',
+  'settings.outboundProxy.testTimeout': 'The test did not finish in time. The proxy or the target may be hanging.',
 
   // 故障转移
   'settings.failover.title': 'Failover',

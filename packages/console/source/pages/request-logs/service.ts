@@ -9,6 +9,15 @@ import { useRequestLogsUiStore } from './store'
 
 export interface RequestLogFilter { providerId: string; providerModelId: string; logicalModelId: string; clientProtocol: string; status: string; createdTimeFrom: number | null; createdTimeTo: number | null }
 
+/**
+ * 这个页面的筛选下拉只需要「id + 名字」，因此它缓存的是**接口原始载荷**。
+ *
+ * 键必须与模型管理页的 `['provider-models']` 分开：那个键里放的是映射成
+ * `ProviderModelRoute` 的编辑器数据（还会被乐观写入），两个形状不同、写入方也不同的
+ * 数据共用一个缓存键时，谁先挂载谁就决定了对方读到的是什么。
+ */
+const PROVIDER_MODEL_OPTIONS_KEY = ['provider-model-options'] as const
+
 export function useRequestLogsService() {
   const queryClient = useQueryClient()
   const page = useRequestLogsUiStore(state => state.page)
@@ -21,7 +30,7 @@ export function useRequestLogsService() {
   const detailQuery = useRequestLogDetailQuery(expandedId)
   const providers = useProviders()
   const logicalModels = useLogicalModels()
-  const providerModelsQuery = useQuery({ queryKey: ['provider-models'], queryFn: () => unwrap(providerModelApi.list()), staleTime: 30_000 })
+  const providerModelsQuery = useQuery({ queryKey: PROVIDER_MODEL_OPTIONS_KEY, queryFn: () => unwrap(providerModelApi.list()), staleTime: 30_000 })
   const providerOptions = useMemo(() => providers.map(p => ({ id: p.id, name: p.name })).sort((a, b) => a.name.localeCompare(b.name)), [providers])
   const providerNameById = useMemo(() => new Map(providers.map(provider => [provider.id, provider.name])), [providers])
   const providerModelOptions = useMemo(() => {

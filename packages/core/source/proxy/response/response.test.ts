@@ -7,6 +7,8 @@ describe('classifyUpstreamStatus', () => {
   })
 
   it.each([300, 301, 399, 400, 401, 403, 404, 405, 408, 409, 422, 429, 500, 502, 503, 599])('allows failover for %i', status => {
+    // 上游 4xx 最常见的来源是「这家不支持这个参数」：状态码不能证明换一家也无效，
+    // 因此包括 400/422 在内的非 2xx 一律优先切换候选（见 `request-entry.test.ts` 的用例）。
     expect(classifyUpstreamStatus(status)).toBe('failover')
   })
 })
@@ -36,5 +38,10 @@ describe('classifyHealthFailure', () => {
     // 上游用 200 + 非 SSE 正文回答了一个要增量传输的请求：状态码看起来是成功的，
     // 违约事实因此必须由调用方显式告知，否则这类失败会被当成没发生。
     expect(classifyHealthFailure({ statusCode: 200, responseBody: '{"choices":[]}', transportMismatch: true })).toBe('provider-model')
+  })
+
+  it('attributes an interrupted stream to the provider model even though the status is 2xx', () => {
+    // 上游已经回了 200 并在中途断掉：状态码同样是成功的，失败只存在于「正文没搬完」这个事实里。
+    expect(classifyHealthFailure({ statusCode: 200, responseBody: '{"choices":[', streamInterrupted: true })).toBe('provider-model')
   })
 })

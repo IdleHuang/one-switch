@@ -38,12 +38,14 @@ export const PROTOCOL_AUTH_PRESETS: Readonly<Record<Protocol, ProtocolAuthPreset
 
 /**
  * 构造指定协议的认证头。
- * 配置了自定义认证头时只使用该头承载密钥，不附加固定头
- * （因此 Anthropic 的版本固定头也会一并省略）。
+ *
+ * 固定头**永远**附加：它们描述的是协议的形态而不是密钥的落点（Anthropic 的
+ * `anthropic-version` 缺了就是 400，跟密钥放在哪个头里毫无关系）。
+ * 自定义认证头只改变「密钥由谁承载」，不改变「这个协议需要哪些头」。
  */
 export function createProtocolAuthHeaders(protocol: Protocol, apiKey: string | null, customAuthHeader: string | null): Record<string, string> {
   const preset = PROTOCOL_AUTH_PRESETS[protocol]
-  if (apiKey !== null && customAuthHeader !== null && customAuthHeader !== '') return { [customAuthHeader]: apiKey }
+  if (apiKey !== null && customAuthHeader !== null && customAuthHeader !== '') return { ...preset.fixedHeaders, [customAuthHeader]: apiKey }
   if (apiKey === null || preset.headerName === null) return { ...preset.fixedHeaders }
   return { ...preset.fixedHeaders, [preset.headerName]: `${preset.valuePrefix}${apiKey}` }
 }

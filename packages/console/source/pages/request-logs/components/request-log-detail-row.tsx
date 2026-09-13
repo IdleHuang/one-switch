@@ -314,8 +314,10 @@ function AttemptRow(props: AttemptRowProps) {
   const message = distinctAttemptErrorMessage(attempt)
   const errorMessage = message && message !== summary.commonErrorMessage ? message : null
   const errorCode = distinctAttemptErrorCode(attempt)
-  // 客户端跳要了增量、上游跳却回了整包，是上游没兑现预期；一致时不再占用版面。
-  const transportMismatch = !ok && props.transport === 'http-stream' && attempt.upstreamTransport === 'http'
+  // 客户端跳与上游跳对「这份响应是不是增量」的说法不一致，是上游没兑现预期；一致时不再占用版面。
+  const transportMismatch = !ok
+    && attempt.upstreamTransport !== null
+    && (props.transport === 'http-stream') !== (attempt.upstreamTransport === 'http-stream')
 
   return (
     <div

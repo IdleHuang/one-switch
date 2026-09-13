@@ -12,6 +12,9 @@ export const IDLE_TIMEOUT_MESSAGE = 'Idle timeout'
 /** 客户端取消时销毁上游请求用的文案；执行器按它区分取消与真实故障。 */
 export const CLIENT_ABORTED_MESSAGE = 'CLIENT_REQUEST_ABORTED'
 
+/** 上游正文搬到一半就断了连接时的文案。 */
+export const UPSTREAM_CLOSED_MESSAGE = 'Upstream closed the connection before finishing the response'
+
 export interface HttpTransportOptions {
   /**
    * 上游两个数据块之间允许的最长静默时间（毫秒），<=0 表示不超时。
@@ -118,16 +121,27 @@ function connectHttp(target: UpstreamTarget, exchange: ExchangeView, attempt: At
           status: upstreamResponse.statusCode ?? 502,
           headers: upstreamResponse.headers,
         })
-        void Promise.resolve(options.resolveIdleTimeoutMilliseconds()).then(milliseconds => {
-          idleTimeoutMilliseconds = milliseconds
-          armTimer()
-        })
+        // 读不到静默时长（例如设置读取失败）不能放大成未处理的拒绝：那会让一次无关的
+        // 读取失败掀掉整个进程。正确的降级是「这次尝试不设静默超时」，并留下一条日志。
+        void Promise.resolve(options.resolveIdleTimeoutMilliseconds())
+          .then(milliseconds => {
+            idleTimeoutMilliseconds = milliseconds
+            armTimer()
+          })
+          .catch((error: unknown) => {
+            console.warn(`[proxy] idle timeout unavailable requestId=${exchange.requestId} attempt=${attempt.index} error=${String(error)}`)
+          })
         upstreamResponse.on('data', chunk => {
           armTimer()
           queue.push({ kind: 'data', body: Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk) })
         })
         upstreamResponse.once('end', () => emitTerminal({ kind: 'end' }))
         upstreamResponse.once('error', error => emitTerminal({ kind: 'error', error }))
+        // 上游没把正文交完就断开时，`end` 与 `error` 都不会来（只有 `close`）。
+        // 不在这里收尾，帧序列就永远等不到终止帧，消费者会一直挂到客户端自己放弃。
+        upstreamResponse.once('close', () => {
+          if (!upstreamResponse.readableEnded) emitTerminal({ kind: 'error', error: new Error(UPSTREAM_CLOSED_MESSAGE) })
+        })
       },
       onError: error => {
         if (!settled) {

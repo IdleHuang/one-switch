@@ -2,12 +2,20 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { acquireInstanceLock, clearStaleInstanceLock, lockFilePath, readLockHolder, releaseInstanceLock } from './instance-lock'
-import { isProcessAlive } from './runtime-state'
+import {
+  acquireInstanceLock,
+  isProcessAlive,
+  lockFilePath,
+  readLockHolder,
+  refreshHeartbeat,
+  releaseInstanceLock,
+} from './instance-lock'
 
 // 全程用临时目录：这个模块写的是磁盘上的真实文件，绝不能碰开发机上的数据目录。
 
 const DEAD_PID = 2_147_483_646
+/** 心跳间隔的 6 倍之外，任何一份实现都必须把它当成过期。 */
+const LONG_AGO = new Date(Date.now() - 10 * 60_000).toISOString()
 
 let dataDir: string
 
@@ -36,7 +44,10 @@ describe('acquireInstanceLock', () => {
   })
 
   it('refuses a second instance while the holder is alive', async () => {
-    await acquireInstanceLock(dataDir)
+    // 父进程在测试跑完之前一直活着，正好当「别人」：既不是我们的 pid，也确实是活的。
+    const foreignPid = process.ppid
+    expect(foreignPid).not.toBe(process.pid)
+    writeLockFile({ pid: foreignPid, startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString() })
 
     const second = await acquireInstanceLock(dataDir)
     expect(second).toMatchObject({ ok: false, reason: 'held' })
@@ -45,11 +56,19 @@ describe('acquireInstanceLock', () => {
   })
 
   it('takes over a lock left behind by a dead process', async () => {
-    writeLockFile({ pid: DEAD_PID, startedAt: new Date(0).toISOString() })
+    writeLockFile({ pid: DEAD_PID, startedAt: LONG_AGO })
 
     const result = await acquireInstanceLock(dataDir)
     expect(result.ok).toBe(true)
     expect((await readLockHolder(lockFilePath(dataDir)))?.pid).toBe(process.pid)
+  })
+
+  it('takes over a lock whose pid was reused by an unrelated process', async () => {
+    // 只看 pid 会被系统坑：锁的主人早就没了，pid 被复用给了一个活着但与此无关的进程。
+    // 心跳是唯一能区分这两者的东西——被复用的进程不会替我们续期。
+    writeLockFile({ pid: process.ppid, startedAt: LONG_AGO, heartbeatAt: LONG_AGO })
+
+    expect((await acquireInstanceLock(dataDir)).ok).toBe(true)
   })
 
   it('waits out an empty lock file instead of stealing it', async () => {
@@ -71,7 +90,7 @@ describe('acquireInstanceLock', () => {
     const result = await acquireInstanceLock(dataDir)
     if (!result.ok) throw new Error('expected the lock')
 
-    await result.release()
+    await result.lock.release()
     expect(fs.existsSync(lockFilePath(dataDir))).toBe(false)
     expect((await acquireInstanceLock(dataDir)).ok).toBe(true)
   })
@@ -80,17 +99,15 @@ describe('acquireInstanceLock', () => {
     const result = await acquireInstanceLock(dataDir)
     if (!result.ok) throw new Error('expected the lock')
 
-    await result.release()
-    await expect(result.release()).resolves.toBeUndefined()
+    await result.lock.release()
+    await expect(result.lock.release()).resolves.toBeUndefined()
   })
 })
 
 describe('releaseInstanceLock', () => {
   it('keeps a lock that belongs to a different process', async () => {
-    // 父进程在测试跑完之前一直活着，正好当「别人」：既不是我们的 pid，也确实是活的。
     const foreignPid = process.ppid
     expect(foreignPid).not.toBe(process.pid)
-    expect(isProcessAlive(foreignPid)).toBe(true)
     writeLockFile({ pid: foreignPid, startedAt: new Date().toISOString() })
 
     await releaseInstanceLock(dataDir)
@@ -98,18 +115,42 @@ describe('releaseInstanceLock', () => {
   })
 })
 
-describe('clearStaleInstanceLock', () => {
-  it('removes a lock whose holder is gone', async () => {
-    writeLockFile({ pid: DEAD_PID, startedAt: new Date(0).toISOString() })
+describe('refreshHeartbeat', () => {
+  it('rewrites the timestamp while we are the holder', async () => {
+    writeLockFile({ pid: process.pid, startedAt: LONG_AGO, heartbeatAt: LONG_AGO })
 
-    await clearStaleInstanceLock(dataDir)
-    expect(fs.existsSync(lockFilePath(dataDir))).toBe(false)
+    await refreshHeartbeat(dataDir)
+
+    const holder = await readLockHolder(lockFilePath(dataDir))
+    expect(holder?.heartbeatAt).toBeDefined()
+    expect(Date.parse(holder!.heartbeatAt!)).toBeGreaterThan(Date.parse(LONG_AGO))
+    // 心跳只续期，不改写身份：`startedAt` 是「这个实例什么时候开始的」。
+    expect(holder?.startedAt).toBe(LONG_AGO)
   })
 
-  it('keeps a lock whose holder is alive', async () => {
-    writeLockFile({ pid: process.ppid, startedAt: new Date().toISOString() })
+  it('leaves someone else lock alone', async () => {
+    // 锁可能已经被判残留并被新实例接管；这时再按自己的 pid 覆写，等于凭空造出一个
+    // 「我也是持有者」的假象。
+    const foreign = { pid: process.ppid, startedAt: LONG_AGO, heartbeatAt: LONG_AGO }
+    writeLockFile(foreign)
 
-    await clearStaleInstanceLock(dataDir)
-    expect(fs.existsSync(lockFilePath(dataDir))).toBe(true)
+    await refreshHeartbeat(dataDir)
+
+    expect(await readLockHolder(lockFilePath(dataDir))).toEqual(foreign)
+  })
+
+  it('does nothing when the lock file is gone', async () => {
+    await expect(refreshHeartbeat(dataDir)).resolves.toBeUndefined()
+    expect(fs.existsSync(lockFilePath(dataDir))).toBe(false)
+  })
+})
+
+describe('isProcessAlive', () => {
+  it('recognizes the current process', () => {
+    expect(isProcessAlive(process.pid)).toBe(true)
+  })
+
+  it('reports a pid that cannot exist as dead', () => {
+    expect(isProcessAlive(DEAD_PID)).toBe(false)
   })
 })

@@ -42,11 +42,29 @@ function resolveApiBaseFromEnvironment(fallback: string): string {
   return fallback
 }
 
+/**
+ * 管理 API 的请求头。
+ *
+ * 每个 `/api/*` 都要求实例 token（见 core 的 `runtime/runtime-identity.ts`）：管理服务
+ * 监听回环并不等于安全，本机任意网页都能向 `127.0.0.1` 发请求。token 由宿主注入
+ * `window.__ONE_SWITCH__`——桌面形态走 preload，命令行形态由托管静态文件的 core
+ * 注入到 `index.html` 里。
+ *
+ * 拿不到 token 也照发：让服务端回答 403「没有访问权限」，比在前端造一个自己编的错误码
+ * 诚实——“页面是从哪儿打开的”直接写进了错误里。
+ */
+function buildHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = typeof window === 'undefined' ? undefined : window.__ONE_SWITCH__?.token
+  if (token) headers['x-one-switch-token'] = token
+  return headers
+}
+
 export async function request<T>(path: string, body: unknown = {}, options: RequestOptions = {}): Promise<ApiResponse<T>> {
   try {
     const response = await fetch(`${resolveApiBase()}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildHeaders(),
       body: JSON.stringify(body),
       signal: options.signal,
     })

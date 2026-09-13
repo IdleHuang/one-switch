@@ -48,6 +48,18 @@ describe('proxy headers', () => {
     })
   })
 
+  it('never asks the upstream for a compressed body', () => {
+    // 没有任何解压环节能读懂压缩正文，所以这个协商头必须就地丢掉，
+    // 而不是跟着客户端的偏好一起转给上游。
+    const result = createUpstreamRequestHeaders(
+      { accept: 'application/json', 'accept-encoding': 'gzip, deflate, br', 'x-request-id': 'request-1' },
+      {},
+      0,
+    )
+
+    expect(result).toEqual({ accept: 'application/json', 'x-request-id': 'request-1' })
+  })
+
   it('preserves SSE response headers while removing hop-by-hop headers', () => {
     const result = createDownstreamHeaders({
       'content-type': 'text/event-stream; charset=utf-8',

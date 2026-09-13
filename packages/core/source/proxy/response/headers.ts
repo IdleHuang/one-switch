@@ -18,6 +18,21 @@ const CLIENT_AUTH_HEADERS = new Set([
   'x-goog-api-key',
 ])
 
+/**
+ * 向上游协商正文压缩的头。
+ *
+ * 代理必须读懂上游回回来的正文：协议转换要按它的字段重排、正文改写要按它的结构改、
+ * 失败归因要按它的话解释、日志要把它存下来。而这条链路上**没有**任何解压环节，
+ * 所以一旦上游按 `gzip` 回，上面每一处拿到的都是二进制乱码——最坏的情况是日志里
+ * 留下一段坏字符串、失败归因读出乱码、改写把压缩字节当 JSON 解析。
+ *
+ * 既然读得懂才算代理，就不要去要压缩：HTTP 规定 `identity` 永远合法，去掉这个头
+ * 不会让上游拒收请求，客户端拿到的正文只会更直白。
+ */
+const COMPRESSION_HEADERS = new Set([
+  'accept-encoding',
+])
+
 const SENSITIVE_HEADERS = new Set([
   ...CLIENT_AUTH_HEADERS,
   'proxy-authorization',
@@ -55,6 +70,7 @@ export function createUpstreamRequestHeaders(source: IncomingHttpHeaders, authHe
     if (value === undefined) continue
     if (normalizedName === 'host' || normalizedName === 'content-length') continue
     if (HOP_BY_HOP_HEADERS.has(normalizedName) || connectionHeaders.has(normalizedName)) continue
+    if (COMPRESSION_HEADERS.has(normalizedName)) continue
     if (CLIENT_AUTH_HEADERS.has(normalizedName) || replacementAuthHeaders.has(normalizedName)) continue
     headers[name] = value
   }

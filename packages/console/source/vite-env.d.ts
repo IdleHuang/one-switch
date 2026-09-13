@@ -47,19 +47,21 @@ interface UpdaterAPI {
 
 interface ElectronAPI {
   platform: string
-  sendMessage: (channel: string, data: unknown) => void
-  onMessage: (channel: string, callback: (...args: unknown[]) => void) => void
+  /** 用系统默认方式打开外部链接。主进程只放行 `https:`。 */
+  openExternal: (url: string) => void
   updater: UpdaterAPI
 }
 
 /**
  * 宿主注入的运行时信息（`window.__ONE_SWITCH__`）。
  *
- * 目前只用于覆盖管理 API 基地址（见 `source/api/client.ts`）：Electron 形态从 `file://`
- * 加载页面，靠 URL 推不出管理服务在哪儿，需要宿主明说。
+ * 两个字段都在回答「控制台这份产物只有一份，它怎么找到并访问管理服务」：
+ *   `apiBase`——Electron 形态从 `file://` 加载页面，靠 URL 推不出管理服务在哪儿；
+ *   `token`——管理 API 的凭证，每个 `/api/*` 都要带（见 core 的 `runtime/runtime-identity.ts`）。
  */
 interface OneSwitchRuntime {
   apiBase?: string
+  token?: string
 }
 
 interface Window {

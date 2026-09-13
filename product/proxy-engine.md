@@ -74,7 +74,7 @@
 
 按「定位」里的不变式，这里只能有一个结论：上游违约，报错并按切换策略处理。理由不是「实现不了合成事件流」，而是**我们不该合成它**。
 
-出口的分派依据只有客户端跳的 `transport`（预期），响应头只用来选解析器与**校验**预期；两者不一致时该次尝试记 `transportMismatch` → 按切换策略换下一个候选，并打一条 `[proxy] transport mismatch …` 的告警。
+出口的分派依据只有客户端跳的 `transport`（预期），响应头只用来选解析器与**校验**预期；两者不一致时该次尝试记 `transportMismatch` → 按切换策略换下一个候选，并打一条 `[proxy] transport mismatch …` 的告警。比较是**双向**的：客户端要整包而收到 SSE、以及客户端要 `http-stream` 而收到整包，都算预期落空——只查一个方向时，「客户端没要流、上游硬塞流」这一类会被当成成功交给协议层解析。
 
 **为什么预期不是响应期才知道的。** 「客户端要整包还是增量」只在客户端跳存在，而上游跳根本没有这个声明——上游只会收到一个请求体。关键在于：我们**自己把 `stream` 字段转发过去**（`native-adapter.ts:13` 的 `prepareRequest` 只重写模型名，`stream` 原样透传），并且当我们转发 `stream: false` 时上游看到的就是 `stream: false`。因此：
 
@@ -100,7 +100,7 @@
 | `protocol-conversion` 用哪个解析器 | 事实（`isEventStreamResponse`） | `isEventStreamResponse(head.headers)` ✅ |
 | `request_attempts.upstreamTransport` 落库 | 事实（`isEventStreamResponse`） | `isEventStreamResponse(head.headers)` ✅ |
 
-「预期落空」本身成了一个显式的失败状态：响应是 2xx、客户端声明 `http-stream`、而响应头不是 SSE 时，执行器记 `transportMismatch`，按 failover 换下一个候选，并按 `provider-model` 记一次健康失败（上游违约是上游的事，不该算成客户端的错，也不该算成这个模型「健康但没用」）。
+「预期落空」本身成了一个显式的失败状态：响应是 2xx、但响应头里的流式形态与客户端声明的 `transport` 不符（客户端要 `http-stream` 却拿到整包，或客户端要整包却拿到 SSE）时，执行器记 `transportMismatch`，按 failover 换下一个候选，并按 `provider-model` 记一次健康失败（上游违约是上游的事，不该算成客户端的错，也不该算成这个模型「健康但没用」）。
 
 「两者是否一致」是**一次比较**，用完即弃：不需要任何常驻的合成量。
 
@@ -516,7 +516,7 @@ flowchart TD
 - [x] 新增一个协议只需新增 `protocols/<id>/descriptor.ts` 一个文件，不改内核、不改其他协议
 - [x] 新增一个接口只需在已有协议目录里新增一个 `EndpointSpec`（注册表的匹配、封装查找与拒绝路径都由声明驱动，不需要改注册表代码）
 - [x] 新增一档传输形态只需扩展 `TransportKind` 词表 + 实现 `Transport`（用 `transports: [...]` 声明服务哪几档，`transports/registry.ts` 自动发现），不改内核、不改任何 Modifier/Observer（实现按 `resolveUpstreamTransport(target.url, exchange.transport)` 选取）
-- [x] 新增一个观察能力只需注册 `Observer`，不改内核；观察者抛错不影响请求结果（`frame-pipe.test.ts` 覆盖）
+- [x] 新增一个观察能力只需注册 `Observer`，不改内核；观察者抛错不影响请求结果，且**逐个隔离**：`kernel/relay.ts` 的 `notifyObservers` 一个观察者一个 try/catch，抛错的只留一条告警，它之后的观察者照样收到通知（`kernel/relay.test.ts` 断言抛错观察者后面的那个拿到了 `start` 与 `end`）
 - [x] 新增一个修改能力只需注册 `Modifier`，不改内核；未匹配修改器时字节逐帧透传
 - [x] 无匹配的 `buffered` 修改器时，流式响应不做任何缓冲（与 [proxy.md](./proxy.md) 行为一致）
 - [x] `attempt-executor.ts` 保留为候选循环编排，帧搬运在 `kernel/relay.ts`（有意的分工，不是待办）
@@ -533,6 +533,10 @@ flowchart TD
 - [x] 预期与事实两半分持：预期落空 → `transportMismatch` → failover，并按 `provider-model` 记健康失败（`response.test.ts` 断言 `classifyHealthFailure({ statusCode: 200, transportMismatch: true }) === 'provider-model'`）
 - [x] 落库字段与轴同名、无投影：`request_logs.transport`（预期，客户端跳）、`request_attempts.upstreamTransport`（事实，TEXT 可空）
 - [x] `modifiers/` 有自己的单测：`response-modifiers.test.ts`
+- [x] 下游背压会被等待：`ResponseSink.write` 返回 `false` 时先等 `drain` 再算这一帧写完（`adapters/http-response-sink.test.ts`），客户端来不及收时不会把内存堆上去
+- [x] 不向上游协商压缩：`createUpstreamRequestHeaders` 剥掉 `accept-encoding`（`response/headers.test.ts`）。整条链路上没有任何解压——协议转换、正文改写、失败归因与日志读的都是原始字节，HTTP 保证 `identity` 总是可接受的，要了压缩等于让上面每一步都去解析读不懂的字节
+- [x] 上游中途断连会变成一帧终止错误：`transports/http.ts` 监听响应的 `close`，在 `readableEnded` 为假时发一帧 `error`，而不是让下游等一个永远不会来的结尾（`transports/http.test.ts`）
+- [x] 自定义鉴权头不吞掉协议固定头：`createProtocolAuthHeaders` 的自定义头分支保留 `preset.fixedHeaders`（例如 Anthropic 的 `anthropic-version`）（`protocols.test.ts`）
 
 ### 尚未实现的部分
 

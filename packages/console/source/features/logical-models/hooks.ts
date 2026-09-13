@@ -5,8 +5,12 @@ import { unwrap } from '@/api/unwrap'
 import type { LogicalModel } from '@common/schemas'
 
 export const logicalModelKeys = { all: ['logical-models'] as const }
+
+/** 数据未就绪时复用的空数组，避免 `?? []` 每次渲染都产生新引用。 */
+const EMPTY_LOGICAL_MODELS: LogicalModel[] = []
+
 const useLogicalModelsQuery = () => useQuery({ queryKey: logicalModelKeys.all, queryFn: () => unwrap(logicalModelApi.list()), refetchInterval: 30_000 })
-export function useLogicalModels() { return useLogicalModelsQuery().data ?? [] }
+export function useLogicalModels() { return useLogicalModelsQuery().data ?? EMPTY_LOGICAL_MODELS }
 export function useLogicalModelsLoading() { return useLogicalModelsQuery().isPending }
 export function useLogicalModelsError() { return useLogicalModelsQuery().error?.message ?? null }
 export function useLogicalModelsActions() {

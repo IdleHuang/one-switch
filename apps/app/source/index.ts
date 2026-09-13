@@ -45,6 +45,21 @@ let trayManager: TrayManager | null = null
 let autoLaunchManager: AutoLaunchManager | null = null
 let updaterManager: UpdaterManager | null = null
 let fatalErrorShown = false
+/** 本次运行的实例 token，由 `startServer` 返回，经 `runtime:get-config` 交给预加载脚本。 */
+let instanceToken: string | null = null
+
+/**
+ * 开机自启时隐藏启动（`auto-launch.ts` 里声明了 `openAsHidden`）。
+ *
+ * macOS 有 `app.wasOpenedAsHidden`；Windows 通过登录项参数 `--hidden` 表达，Linux 的登录项
+ * 由打包产物生成，同样按参数传。两者都没有时按正常启动——用户双击图标就是要看窗口。
+ */
+const startHidden = readWasOpenedAsHidden() || process.argv.includes('--hidden')
+
+/** `app.wasOpenedAsHidden` 只存在于 macOS，且不在当前 Electron 的类型定义里。 */
+function readWasOpenedAsHidden(): boolean {
+  return (app as unknown as { wasOpenedAsHidden?: boolean }).wasOpenedAsHidden === true
+}
 
 // Windows 任务栏图标依赖 AppUserModelID；必须在创建任何窗口前设置，
 // 否则系统会把进程归到默认 Electron 应用，导致显示默认图标。
@@ -88,8 +103,35 @@ function registerExternalLinkIpc(): void {
   })
 }
 
-registerUpdaterIpc()
-registerExternalLinkIpc()
+/**
+ * 渲染进程取运行时信息。
+ *
+ * 预加载脚本用 `sendSync` 读一次，所以这里必须用 `event.returnValue` 而不是 `ipcMain.handle`：
+ * 控制台的第一个请求就可能要带 token，异步到位意味着首屏会先吃到一串 403。
+ * handler 在模块顶层注册，早于任何窗口创建，同步调用不会死等。
+ */
+function registerRuntimeConfigIpc(): void {
+  ipcMain.on('runtime:get-config', event => {
+    event.returnValue = {
+      apiBase: runtimeProfile.managementApiUrl,
+      token: instanceToken,
+    }
+  })
+}
+
+// 这一层**不是**数据目录那把锁，而是操作系统级的「应用实例」：它把第二次启动变成一个
+// 「聚焦已有窗口」的事件（见 `second-instance` / `focusExistingInstance`），并且必须在
+// 任何窗口存在之前就判定。数据目录的互斥是 core 的事（`runtime/instance-lock.ts`），
+// 两者不重复也不替代：没有这一层，双击两次图标会先弹一个「启动失败」的报错框再退出。
+const isPrimaryInstance = app.requestSingleInstanceLock()
+
+if (isPrimaryInstance) {
+  registerUpdaterIpc()
+  registerExternalLinkIpc()
+  registerRuntimeConfigIpc()
+} else {
+  console.info('[one-switch] another instance already owns this profile; exiting')
+}
 
 function reportFatalError(error: unknown, title = nativeTranslator()('native.error.fatalTitle')): void {
   if (fatalErrorShown) return
@@ -117,8 +159,16 @@ process.on('uncaughtException', error => {
   reportFatalError(error)
 })
 
+/**
+ * 未处理的 Promise 拒绝不当作致命错误。
+ *
+ * 主进程里任何一个没接住的 `await` 都会走到这里。原来一律弹框退出——托盘常驻的应用
+ * 因为这个原因突然消失，用户看到的是「闪退」，而我们连是哪一处拒绝都不知道（对话框里
+ * 只有堆栈，日志也到不了）。现在只记日志：真正不可恢复的问题会在实际使用路径上暴露，
+ * 而不是靠一次偶发拒绝把整个进程带走。
+ */
 process.on('unhandledRejection', reason => {
-  reportFatalError(reason)
+  console.error('[one-switch] unhandled rejection', formatError(reason))
 })
 
 function formatUptime(): string {
@@ -271,6 +321,8 @@ function createWindow() {
     minHeight: 600,
     autoHideMenuBar: true,
     icon: resolveWindowIcon(),
+    // 开机自启时不闪窗口；窗口仍然创建（托盘要挂着它接 close 事件），等托盘点开再 show。
+    show: !startHidden,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -310,7 +362,25 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(async () => {
+/**
+ * 第二个实例启动时，把它叫到已有窗口前面来。
+ *
+ * 只在窗口已经存在时才有意义：第一个实例可能还在启动过程里，此时什么都不做——
+ * 用户看到的是第一个实例的启动过程，比弹一个「已经在运行」的报错框要好。
+ */
+function focusExistingInstance(): void {
+  if (!win) {
+    console.info('[one-switch] second instance launched while still starting up; ignoring')
+    return
+  }
+  if (win.isMinimized()) win.restore()
+  if (!win.isVisible()) win.show()
+  win.focus()
+}
+
+async function bootstrap(): Promise<void> {
+  await app.whenReady()
+
   // 在输出任何启动日志前安装拦截，确保横幅等信息也能进入运行日志页面。
   // installLogCapture 是幂等的，startServer 内部的重复调用会自动跳过。
   installLogCapture()
@@ -324,11 +394,12 @@ app.whenReady().then(async () => {
     serveWeb: false,
   })
   try {
-    await startServer({
+    const endpoints = await startServer({
       runtimeConfig,
       secretStore: new ElectronSecretStore(path.join(userDataDir, 'secrets.json')),
       systemProxyResolver: targetUrl => session.defaultSession.resolveProxy(targetUrl),
     })
+    instanceToken = endpoints.instanceToken
     console.info('[one-switch] server started successfully')
   } catch (error) {
     showStartupError(error)
@@ -385,16 +456,55 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
     else if (trayManager) void trayManager.showWindow()
   })
-})
+}
+
+/**
+ * 单实例判定放在最后：`bootstrap` 是函数声明会提升，但读起来顺序更清楚——
+ * 非主实例根本走不到启动流程。
+ */
+if (isPrimaryInstance) {
+  app.on('second-instance', focusExistingInstance)
+  void bootstrap()
+} else {
+  app.quit()
+}
 
 app.on('window-all-closed', () => {
   // 不退出应用，保持在托盘运行
   // if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
-  if (trayManager) {
-    trayManager.prepareForQuit()
+let quitting = false
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
+/**
+ * 退出清理。
+ *
+ * `before-quit` 不看 `await`，所以先拦下这次退出，清理完再 `app.quit()` 一次
+ * （`quitting` 保证第二次不会被再拦）。清理里最要紧的是 `stopServer()`：它释放实例锁、
+ * 关掉数据库连接；原来这里只是 `void stopServer()`，没人等它，进程经常在释放锁之前就没了。
+ */
+async function shutdown(): Promise<void> {
+  // 托盘先拆：它的状态轮询每 2 秒打一次管理 API，服务关掉之后它就只是一台报错机器。
+  trayManager?.destroy()
+  trayManager = null
+
+  try {
+    // 服务端本身带关闭握手，这里再兜一个上限，别让某个挂住的连接把退出拖住。
+    await Promise.race([stopServer(), delay(5_000)])
+  } catch (error) {
+    console.error('[one-switch] failed to stop the server during quit', formatError(error))
   }
-  void stopServer()
+}
+
+app.on('before-quit', event => {
+  // 无论是谁触发的退出，都要先让托盘别再拦窗口关闭。
+  trayManager?.prepareForQuit()
+  if (quitting || !isPrimaryInstance) return
+  event.preventDefault()
+  quitting = true
+  void shutdown().finally(() => app.quit())
 })
