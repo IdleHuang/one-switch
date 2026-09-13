@@ -5,8 +5,8 @@
  * 管理 API 全是 POST + JSON（见 core 的 `management/routes`），静态托管与 API 共用同一个端口。
  *
  * 失败**不抛异常**，而是分成三态返回：调用方必须能区分「连不上」（实例没在跑）与
- * 「连上了但被拒绝」（token 不对 / 服务端出错）——把两者压成一个异常，`stop` 就没法区分
- * 「该清理失效的运行时文件」和「该报错退出」。
+ * 「连上了但被拒绝」（服务端出错 / 对面不是我们的服务）——把两者压成一个异常，`stop`
+ * 就没法区分「该清理失效的运行时文件」和「该报错退出」。
  */
 
 import net from 'node:net'
@@ -23,22 +23,17 @@ export interface ManagementCallOptions {
   /** 以 `/api` 开头，例如 `/api/proxy/status`。 */
   path: string
   body?: unknown
-  /** 实例 token，放在 `x-one-switch-token` 头里（见 core 的 `runtime/runtime-identity.ts`）。 */
-  token?: string
   timeoutMilliseconds?: number
 }
 
 const DEFAULT_TIMEOUT_MILLISECONDS = 5_000
 
 export async function callManagementApi(options: ManagementCallOptions): Promise<ManagementCallResult> {
-  const headers: Record<string, string> = { 'content-type': 'application/json' }
-  if (options.token) headers['x-one-switch-token'] = options.token
-
   let response: Response
   try {
     response = await fetch(formatUrl(options.host, options.port) + options.path, {
       method: 'POST',
-      headers,
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(options.body ?? {}),
       // 管理服务只监听回环，但端口被防火墙/代理占着时连接会挂很久。超时按「连不上」处理：
       // `stop` 卡住不返回，比报一句「没实例响应」难用得多。

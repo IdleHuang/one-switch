@@ -19,17 +19,9 @@ const secretStore: SecretStore = {
 }
 
 let temporaryDirectory: string
-/**
- * 本次启动的实例 token。
- *
- * 管理 API 的**每个**请求都要带它（见 core 的 `runtime/runtime-identity.ts`），
- * 所以启动后必须把它接下来——每次 `start()` 都会换一个新的。
- */
-let instanceToken = ''
 
 async function startTestServer(options: StartServerOptions): Promise<void> {
-  const endpoints = await startServer(options)
-  instanceToken = endpoints.instanceToken
+  await startServer(options)
 }
 
 beforeEach(() => {
@@ -187,7 +179,6 @@ async function post(url: string, body: unknown = {}): Promise<unknown> {
     headers: {
       'Content-Type': 'application/json',
       Connection: 'close',
-      'x-one-switch-token': instanceToken,
     },
     body: JSON.stringify(body),
   })

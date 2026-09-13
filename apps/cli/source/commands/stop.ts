@@ -16,8 +16,6 @@ import type { CliArguments } from '../options'
 /** 等它退出。超过这个时间就报失败：不猜它「大概快停了」。 */
 const SHUTDOWN_TIMEOUT_MILLISECONDS = 10_000
 
-const HTTP_FORBIDDEN = 403
-
 export async function runStop(values: CliArguments): Promise<number> {
   const t = cliTranslator()
   const dataDir = resolveDataDirectory(values.dataDir)
@@ -52,7 +50,6 @@ export async function runStop(values: CliArguments): Promise<number> {
     host: state.managementHost,
     port: state.managementPort,
     path: '/api/runtime/shutdown',
-    token: state.shutdownToken,
   })
 
   // 不按响应判定成败：服务端收尾时会关掉监听，客户端可能在读完响应前就被断开，
@@ -65,9 +62,9 @@ export async function runStop(values: CliArguments): Promise<number> {
     return 0
   }
 
-  if (result.ok === false && result.reason === 'rejected' && result.status === HTTP_FORBIDDEN) {
-    // token 来自运行时文件，不匹配只可能是文件与运行中的实例不是同一份
-    // （换过数据目录、或文件被改过）。不清理文件：进程还活着，文件还是它的。
+  if (result.ok === false && result.reason === 'rejected') {
+    // 进程在、端口也在，但管理服务拒绝了这次请求：多半是数据目录里的这份快照与真正在跑的
+    // 那个实例对不上（换过数据目录，或端口被别人占了）。不清理文件：进程还活着，文件还是它的。
     console.error(t('native.cli.stop.rejected'))
     return 1
   }

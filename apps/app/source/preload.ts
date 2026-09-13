@@ -5,9 +5,9 @@
  *   1. **不暴露通用通道**。原来是 `sendMessage(channel, data)` / `onMessage(channel, cb)`
  *      一对万能桥——它把「渲染进程能干什么」交回给了渲染进程自己，contextIsolation 白开了。
  *      现在每个能力一个具名方法。
- *   2. **运行时信息由主进程给，不在渲染层重算**。管理 API 的基地址与实例 token 都属于
- *      「启动之后才知道」的东西（token 每次启动都换一个），所以用一次同步 IPC 取回来，
- *      并通过 `contextBridge` 注入 `window.__ONE_SWITCH__`——控制台在它的模块脚本里直接读。
+ *   2. **运行时信息由主进程给，不在渲染层重算**。管理 API 的基地址属于「启动之后才知道」
+ *      的东西（端口可以被用户改），所以用一次同步 IPC 取回来，并通过 `contextBridge`
+ *      注入 `window.__ONE_SWITCH__`——控制台在它的模块脚本里直接读。
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
@@ -68,15 +68,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 /**
  * 运行时信息。
  *
- * 同步取：控制台的第一个请求就可能需要 token，异步到位会让首屏的若干请求先拿一次 403。
+ * 同步取：渲染进程从 `file://` 加载，控制台的第一个请求之前就得知道管理服务在哪儿。
  * 主进程在 `whenReady` 之前就注册了这个 handler，所以同步调用不会死等。
- *
- * `token` 缺席时**不写这个字段**，而不是写 `null`：控制台据此判断「凭证还没到位」，
- * 发出去的请求会拿到服务端的 403，而不是在客户端编一个自己的错误码。
  */
-const runtime = ipcRenderer.sendSync('runtime:get-config') as { apiBase: string; token: string | null }
+const runtime = ipcRenderer.sendSync('runtime:get-config') as { apiBase: string }
 
 contextBridge.exposeInMainWorld('__ONE_SWITCH__', {
   apiBase: runtime.apiBase,
-  ...(runtime.token === null ? {} : { token: runtime.token }),
 })

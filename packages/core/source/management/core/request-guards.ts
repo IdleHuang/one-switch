@@ -1,23 +1,18 @@
 /**
- * 管理 API 的入口守卫：路径、方法、CORS 与**凭证**。
+ * 管理 API 的入口守卫：路径、方法与 CORS。
  *
- * 凭证是这里唯一的访问控制。管理 API 监听回环并不等于安全：本机浏览器里任意一个网页
- * 都能向 `127.0.0.1` 发请求，同源策略只挡「读响应」、不挡「发请求」，而这些端点里有
- * 「导出明文密钥」「读写请求正文」这种级别的东西。所以每个 `/api/*` 都必须带
- * `x-one-switch-token`（见 `../../runtime/runtime-identity.ts`），包括优雅退出端点——
- * 它以前是唯一被特判的那个，而那次特判之所以「能用」，靠的只是 CORS 头里恰好漏了
- * 这个自定义头。那种「看起来是刻意设计」的侥幸正是要拆掉的东西。
+ * 这里**不做身份校验**。管理 API 监听回环并不等于安全：本机浏览器里任意一个网页都能向
+ * `127.0.0.1` 发请求，同源策略只挡「读响应」、不挡「发请求」。要真正堵住这条口子得引入
+ * 凭证，那不在本版本的计划里（见 product/security-privacy.md）。当前只保留两件便宜的
+ * 事，且都不假装自己是访问控制：
  *
- * CORS 反过来收窄成白名单：只回显 `null`（渲染进程经 `file://` 加载时的 opaque origin）
- * 与 loopback 上的 origin（开发期的 Vite server）。凭证才是边界，CORS 只是让正常形态
- * 能用、顺手让「别的站点」连响应也读不到。
+ *   - 路由收口：只接 `/api/*` 的 `POST`，其余 404 / 405；
+ *   - CORS 白名单：只回显 `null`（渲染进程经 `file://` 加载时的 opaque origin）与
+ *     loopback 上的 origin（开发期的 Vite server），名单外的来源连响应都读不到。
  */
 
-import { getRuntimeIdentity, matchesRuntimeToken } from '../../runtime/runtime-identity'
 import { sendError } from './response'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-
-const TOKEN_HEADER = 'x-one-switch-token'
 
 export async function applyManagementRequestGuards(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const method = req.method
@@ -40,32 +35,6 @@ export async function applyManagementRequestGuards(req: IncomingMessage, res: Se
     return false
   }
 
-  return authorize(req, res, pathname)
-}
-
-/**
- * 校验实例 token。
- *
- * 身份还没建立就放行会退化成「没有鉴权」，所以这种情况**拒绝**并留下 error 级日志：
- * 那是服务生命周期里的编程错误（`ServerRuntime.start()` 一定先建身份再起监听），
- * 不该被当成「测试环境无所谓」悄悄吞掉。
- */
-function authorize(req: IncomingMessage, res: ServerResponse, pathname: string): boolean {
-  const identity = getRuntimeIdentity()
-  if (identity === null) {
-    console.error(`[management] rejected path=${pathname} reason=no-runtime-identity`)
-    sendError(res, 'INTERNAL_ERROR', 'Management API is not authenticated yet', 503)
-    return false
-  }
-
-  const header = req.headers[TOKEN_HEADER]
-  const provided = Array.isArray(header) ? header[0] ?? null : header ?? null
-  if (!matchesRuntimeToken(provided, identity.token)) {
-    console.warn(`[management] rejected path=${pathname} reason=invalid-token`)
-    sendError(res, 'FORBIDDEN', 'Invalid or missing instance token', 403)
-    return false
-  }
-
   return true
 }
 
@@ -76,8 +45,12 @@ function authorize(req: IncomingMessage, res: ServerResponse, pathname: string):
  * 只能这么表达自己），生产形态就靠它拿到读响应的许可。除此之外只放行 loopback——
  * 开发期控制台跑在 Vite server 上，是货真价实的跨源请求。
  *
- * 不认识来源时**不回任何 CORS 头**：浏览器会挡住响应。请求本身可以发出来，但带了
- * 错 token 也一样被 403，所以这里不是安全边界，没必要为它写复杂的拒绝逻辑。
+ * `Content-Type` 必须列进 `Access-Control-Allow-Headers`：`application/json` 不属于 CORS
+ * 的「简单值」，控制台每一条写请求都要先过预检，漏掉它预检永远过不去，浏览器连真实请求
+ * 都不发，直接报 `Request header field content-type is not allowed by
+ * Access-Control-Allow-Headers`。
+ *
+ * 不认识来源时**不回任何 CORS 头**：浏览器会挡住响应。记住了，这挡的是「读」不是「发」。
  */
 function setCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   const origin = req.headers.origin
@@ -85,7 +58,6 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
 
   res.setHeader('Access-Control-Allow-Origin', origin)
   res.setHeader('Vary', 'Origin')
-  // 刻意**不**列出 `x-one-switch-token`：凭证不该由 CORS 协商，浏览器别去问。
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
 }

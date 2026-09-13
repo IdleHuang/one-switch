@@ -5,8 +5,6 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createStaticWebHost, type StaticWebHost } from './static-web'
 
-const INSTANCE_TOKEN = 'test-instance-token'
-
 // 真起一个 HTTP 服务而不是构造 `ServerResponse` 替身：这条链路里真正容易错的
 // 地方是流式发送与 URL 归一化（`sendFile` 用 `createReadStream().pipe(res)`，
 // 替身得把可写流实现一遍才测得准）。端口用 0，让内核分配。
@@ -25,7 +23,7 @@ beforeEach(async () => {
   fs.mkdirSync(path.join(temporaryDirectory, 'docs'))
   fs.writeFileSync(path.join(temporaryDirectory, 'docs', 'index.html'), '<!doctype html><title>docs</title>')
 
-  host = createStaticWebHost(temporaryDirectory, { token: INSTANCE_TOKEN })
+  host = createStaticWebHost(temporaryDirectory)
   server = http.createServer(async (req, res) => {
     const handled = await host.handle(req, res)
     if (!handled) {
@@ -50,18 +48,9 @@ describe('createStaticWebHost', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8')
-    // 入口文件带着每次启动都变的 token，任何一层缓存都不能留下它。
-    expect(response.headers.get('cache-control')).toBe('no-store')
+    // 入口文件必须每次回源，否则升级后浏览器仍在跑旧版本。
+    expect(response.headers.get('cache-control')).toBe('no-cache')
     expect(await response.text()).toContain('console')
-  })
-
-  it('injects the instance token into the entry file', async () => {
-    // 托管在这里的控制台与 API 同源，但它仍然要带凭证；HTML 是唯一的送达方式。
-    const html = await (await fetch(`${baseUrl}/`)).text()
-
-    expect(html).toContain(`window.__ONE_SWITCH__={"token":"${INSTANCE_TOKEN}"}`)
-    // 注入必须排在 `<head>` 开头，晚于任何脚本就是一次 403。
-    expect(html.indexOf('__ONE_SWITCH__')).toBeLessThan(html.indexOf('console'))
   })
 
   it('falls back to the entry file for client-side routes', async () => {

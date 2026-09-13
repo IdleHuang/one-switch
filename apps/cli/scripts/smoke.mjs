@@ -133,15 +133,13 @@ function isPortOpen(port) {
 }
 
 /**
- * 管理 API 全部是 POST，`GET` 一律 405；而且每个 `/api/*` 都要求实例 token
- * （`x-one-switch-token`，见 core 的 `management/core/request-guards.ts`）。
- * token 从运行时文件里拿：这正是「宿主怎么得到身份」的真实路径，
- * 顺手把「运行时文件里确实写着一个能用的 token」这件事也验了。
+ * 管理 API 全部是 POST，`GET` 一律 405（见 core 的 `management/core/request-guards.ts`）。
+ * 本版本没有凭证，所以这里也不带任何身份头——测的就是「宿主与 CLI 之间只有这份快照」。
  */
-async function postJson(port, apiPath, token) {
+async function postJson(port, apiPath) {
   const response = await fetch(`http://127.0.0.1:${port}${apiPath}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-one-switch-token': token },
+    headers: { 'content-type': 'application/json' },
     body: '{}',
   })
   const body = await response.json().catch(() => null)
@@ -207,10 +205,7 @@ async function main() {
   log.info(`banner ok, pid ${main1.child.pid}`)
 
   log.step(2, TOTAL_STEPS, 'management API and console')
-  const instanceToken = readRuntimeFile(dataDir).shutdownToken
-  const unauthorized = await postJson(managementPort, '/api/proxy/status', 'not-the-token')
-  assert.equal(unauthorized.status, 403, 'the management API must refuse a wrong instance token')
-  const proxyStatus = await postJson(managementPort, '/api/proxy/status', instanceToken)
+  const proxyStatus = await postJson(managementPort, '/api/proxy/status')
   assert.equal(proxyStatus.status, 200, `POST /api/proxy/status → ${proxyStatus.status}`)
   assert.equal(proxyStatus.body?.success, true, 'the management API must answer with success: true')
   const consoleResponse = await fetch(`http://127.0.0.1:${managementPort}/`)
@@ -237,10 +232,10 @@ async function main() {
   const second = await runOnce(['start', '--no-web', '--data-dir', dataDir, '--proxy-port', String(spareProxyPort), '--management-port', String(spareManagementPort)])
   assertExitCode(second, 1)
   assert.equal(/\bCtrl\+C\b/.test(second.stdout), false, 'the refused instance must not print a banner')
-  // 关键：被拒的那次**不能**动到运行时文件，否则第一个实例就失去身份了。
+  // 关键：被拒的那次**不能**动到运行时文件，否则第一个实例就失去被 `stop` 找到的坐标了。
   assert.equal(readRuntimeFile(dataDir).pid, main1.child.pid, 'the runtime file must still belong to the first instance')
   assert.equal(main1.child.exitCode, null, 'the first instance must survive the refused start')
-  log.info('duplicate start refused and the running instance kept its identity')
+  log.info('duplicate start refused and the running instance kept its runtime file')
 
   log.step(5, TOTAL_STEPS, 'stop')
   const stopped = await runOnce(['stop', '--data-dir', dataDir])
@@ -273,7 +268,6 @@ async function main() {
         proxyHost: '127.0.0.1',
         proxyPort,
         webUrl: null,
-        shutdownToken: 'stale',
         startedAt: new Date(0).toISOString(),
       },
       null,
@@ -306,7 +300,7 @@ async function main() {
   )
   const noWebIndex = await fetch(`http://127.0.0.1:${managementPort}/`)
   assert.equal(noWebIndex.status, 404, '--no-web must not serve the console')
-  const stillAlive = await postJson(managementPort, '/api/proxy/status', readRuntimeFile(dataDir).shutdownToken)
+  const stillAlive = await postJson(managementPort, '/api/proxy/status')
   assert.equal(stillAlive.body?.success, true, '--no-web must still expose the management API')
   assertExitCode(await runOnce(['stop', '--data-dir', dataDir]), 0)
 

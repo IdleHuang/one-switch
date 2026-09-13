@@ -45,8 +45,6 @@ let trayManager: TrayManager | null = null
 let autoLaunchManager: AutoLaunchManager | null = null
 let updaterManager: UpdaterManager | null = null
 let fatalErrorShown = false
-/** 本次运行的实例 token，由 `startServer` 返回，经 `runtime:get-config` 交给预加载脚本。 */
-let instanceToken: string | null = null
 
 /**
  * 开机自启时隐藏启动（`auto-launch.ts` 里声明了 `openAsHidden`）。
@@ -107,14 +105,13 @@ function registerExternalLinkIpc(): void {
  * 渲染进程取运行时信息。
  *
  * 预加载脚本用 `sendSync` 读一次，所以这里必须用 `event.returnValue` 而不是 `ipcMain.handle`：
- * 控制台的第一个请求就可能要带 token，异步到位意味着首屏会先吃到一串 403。
+ * 渲染进程从 `file://` 加载，靠页面 URL 推不出管理服务在哪儿，得在第一个请求之前拿到基地址。
  * handler 在模块顶层注册，早于任何窗口创建，同步调用不会死等。
  */
 function registerRuntimeConfigIpc(): void {
   ipcMain.on('runtime:get-config', event => {
     event.returnValue = {
       apiBase: runtimeProfile.managementApiUrl,
-      token: instanceToken,
     }
   })
 }
@@ -394,12 +391,11 @@ async function bootstrap(): Promise<void> {
     serveWeb: false,
   })
   try {
-    const endpoints = await startServer({
+    await startServer({
       runtimeConfig,
       secretStore: new ElectronSecretStore(path.join(userDataDir, 'secrets.json')),
       systemProxyResolver: targetUrl => session.defaultSession.resolveProxy(targetUrl),
     })
-    instanceToken = endpoints.instanceToken
     console.info('[one-switch] server started successfully')
   } catch (error) {
     showStartupError(error)

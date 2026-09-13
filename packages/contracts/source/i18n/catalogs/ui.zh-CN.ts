@@ -1403,7 +1403,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'native.cli.stop.notRunning': 'One Switch 未在运行（{path} 下没有运行时文件）。',
   'native.cli.stop.stale': '没有找到运行中的实例，已清理失效的运行时文件 {path}。',
   'native.cli.stop.timeout': '已发出退出请求，但 {seconds}s 后 pid {pid} 仍在运行。',
-  'native.cli.stop.rejected': '运行中的实例拒绝了退出请求（token 不匹配）。',
+  'native.cli.stop.rejected': '运行中的实例拒绝了退出请求（该实例没有开启退出握手，或这个端口上其实是别的服务）。',
   'native.cli.stop.failed': '停止 One Switch 失败：{message}',
 
   'native.cli.status.title': 'One Switch 状态',

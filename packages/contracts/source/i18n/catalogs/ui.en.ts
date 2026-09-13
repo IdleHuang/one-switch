@@ -1411,7 +1411,7 @@ export const uiEn = {
   'native.cli.stop.notRunning': 'One Switch is not running (no runtime file in {path}).',
   'native.cli.stop.stale': 'No running instance found; removed the stale runtime file at {path}.',
   'native.cli.stop.timeout': 'Shutdown was requested, but pid {pid} is still alive after {seconds}s.',
-  'native.cli.stop.rejected': 'The running instance rejected the shutdown request (token mismatch).',
+  'native.cli.stop.rejected': 'The running instance rejected the shutdown request (it has no shutdown handshake, or another service owns that port).',
   'native.cli.stop.failed': 'Failed to stop One Switch: {message}',
 
   'native.cli.status.title': 'One Switch status',
