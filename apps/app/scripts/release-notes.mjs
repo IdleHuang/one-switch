@@ -21,6 +21,11 @@ import { log } from '../../../packages/toolkit/scripts/lib/log.mjs'
 //   node apps/app/scripts/release-notes.mjs --version 1.1.0-beta.1 --tag v1.1.0-beta.1 \
 //     --assets-dir artifacts --output "$RUNNER_TEMP/release-notes.md"
 //
+// 补写已经发出去的版本时没有本地产物目录，就吃 GitHub 的资产清单，并把端点指到那个标签：
+//   gh api repos/yinxulai/one-switch/releases/tags/v1.1.0-beta.1 \
+//     --jq '[.assets[] | {name, size}]' > assets.json
+//   pnpm release:notes --version 1.1.0-beta.1 --head v1.1.0-beta.1 --assets-json assets.json > notes.md
+//
 // 说明文字固定英文：提交主题按约定就是英文，硬凑中文只会得到「半句英文的说明」。
 // 需要给某一版加一段人话，发布后在 GitHub 上编辑该 Release 即可，不必回到仓库。
 
@@ -82,9 +87,9 @@ const git = (...args) =>
 // 变更范围
 // ---------------------------------------------------------------------------
 
-/** 能走到 HEAD 的发布标签。分支上的孤立标签不该进变更范围。 */
-const listReachableTags = () =>
-  git('tag', '--list', '--merged', 'HEAD', '--sort=-v:refname', 'v*')
+/** 能走到 `head` 的发布标签。分支上的孤立标签不该进变更范围。 */
+const listReachableTags = (head) =>
+  git('tag', '--list', '--merged', head, '--sort=-v:refname', 'v*')
     .split('\n')
     .map(line => line.trim())
     .filter(Boolean)
@@ -160,16 +165,16 @@ const compareVersions = (left, right) => {
 /**
  * 上一个发布标签，两级判定：
  *
- * ① 先取「走得到的标签里离 HEAD 最近的那个」——它表达的是「这一版是从哪儿长出来的」，
+ * ① 先取「走得到的标签里离终点最近的那个」——它表达的是「这一版是从哪儿长出来的」，
  *    跨分支回合并、补发旧线补丁时都对。
- * ② 祖先关系查不出来时（浅克隆，或标签指向的提交不在当前分支历史里），退回语义化版本：
+ * ② 祖先关系查不出来时（浅克隆，或标签指向的提交不在终点历史里），退回语义化版本：
  *    取比当前版本低的最大者。这里不能交给 git 的 `versionsort`，它默认把 `-rc.1`
  *    这类后缀排在同号正式版**之后**，`v1.0.0` 与 `v1.0.0-rc.8` 并存时会选反。
  */
-const resolvePreviousTag = (currentTag) => {
-  const distances = listReachableTags()
+const resolvePreviousTag = (currentTag, head) => {
+  const distances = listReachableTags(head)
     .filter(tag => tag !== currentTag)
-    .map(tag => ({ tag, distance: Number(git('rev-list', '--count', `${tag}..HEAD`)) }))
+    .map(tag => ({ tag, distance: Number(git('rev-list', '--count', `${tag}..${head}`)) }))
     .filter(candidate => candidate.distance > 0)
 
   distances.sort((left, right) => left.distance - right.distance)
@@ -196,12 +201,13 @@ const resolvePreviousTag = (currentTag) => {
 const recordSeparator = '\u001e'
 const fieldSeparator = '\u001f'
 
-const readCommits = (range) => {
+const readCommits = (range, head) => {
   const format = ['%s', '%b'].join(fieldSeparator) + recordSeparator
   const args = ['log', '--no-merges', `--format=${format}`]
   if (range) {
     args.push(range)
   }
+  args.push(head)
   return git(...args)
     .split(recordSeparator)
     .map(record => record.replace(/^\s*\n/, '').trimEnd())
@@ -246,10 +252,10 @@ const readBreakingBody = (body) => {
   return collected.filter(Boolean).join(' ').trim() || null
 }
 
-/** 标签是否在当前分支的历史里。不在的话，`标签..HEAD` 不是变更是「两棵子树求差」。 */
-const isAncestorOfHead = (tag) => {
+/** 标签是否在终点历史里。不在的话，`标签..终点` 不是变更是「两棵子树求差」。 */
+const isAncestorOfHead = (tag, head) => {
   try {
-    git('merge-base', '--is-ancestor', tag, 'HEAD')
+    git('merge-base', '--is-ancestor', tag, head)
     return true
   } catch {
     return false
@@ -261,12 +267,12 @@ const isAncestorOfHead = (tag) => {
  * 此时 `标签..HEAD` 会把两边不相干的三百多个提交全算进来，说明会直接失控。
  * 这时退成按时间划范围——上一个发布之后落进主干的提交，才是这一版真的变了的东西。
  */
-const resolveRange = (previousTag) => {
+const resolveRange = (previousTag, head) => {
   if (!previousTag) {
     return { range: null, description: 'the whole history' }
   }
-  if (isAncestorOfHead(previousTag)) {
-    return { range: `${previousTag}..HEAD`, description: previousTag }
+  if (isAncestorOfHead(previousTag, head)) {
+    return { range: `${previousTag}..${head}`, description: previousTag }
   }
 
   const since = git('log', '-1', '--format=%cI', previousTag).trim()
@@ -358,20 +364,55 @@ const listFiles = (directory) => {
 
 const formatSize = (bytes) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 
-const readAssets = (directory, template, version, repository, tag) => {
-  if (!fs.existsSync(directory)) {
+/**
+ * 产物清单。两种来源：
+ *
+ * - `--assets-dir`：发布链里用，读 CI 收集下来的真实文件，大小取文件字节数。
+ * - `--assets-json`：补写已发布版本的说明时用。安装包动辄几百 MB，为了拿文件名和大小
+ *   再下载一遍没意义，直接吃 `gh api` 的资产清单（见文件头用法）。接受裸数组，
+ *   也接受 `gh release view --json assets` 那种带 `assets` 字段的对象。
+ */
+const readAssetEntries = (options) => {
+  if (options['assets-dir']) {
+    const directory = options['assets-dir']
     // 宁可报错也不静默省略表格：少了下载表就是「发出去的说明缺了一块」，
     // 而失败会直接拦住发布。
-    fail(`Assets directory does not exist: ${directory}`)
+    if (!fs.existsSync(directory)) {
+      fail(`Assets directory does not exist: ${directory}`)
+    }
+    return listFiles(directory).map(file => ({
+      name: path.basename(file),
+      size: fs.statSync(file).size,
+    }))
   }
 
-  const files = listFiles(directory)
-  const names = new Set(files.map(file => path.basename(file)))
+  if (options['assets-json']) {
+    if (!fs.existsSync(options['assets-json'])) {
+      fail(`Assets list does not exist: ${options['assets-json']}`)
+    }
+    // 去掉可能的 BOM：Windows 上按文档里的重定向写法存盘时很容易带上，
+    // 而 JSON.parse 会因为它直接把整份清单判为非法。
+    const text = fs.readFileSync(options['assets-json'], 'utf8').replace(/^\uFEFF/, '')
+    const payload = JSON.parse(text)
+    const entries = Array.isArray(payload) ? payload : payload.assets
+    if (!Array.isArray(entries)) {
+      fail(`Cannot read assets from ${options['assets-json']}: expected an array, or an object with an "assets" array`)
+    }
+    return entries
+      .filter(entry => entry && typeof entry.name === 'string')
+      .map(entry => ({ name: entry.name, size: Number(entry.size) || 0 }))
+  }
+
+  return []
+}
+
+const buildAssetRows = (entries, template, version, repository, tag) => {
+  const names = new Set(entries.map(entry => entry.name))
   const pattern = buildArtifactPattern(template, version)
 
   const rows = []
-  for (const file of files) {
-    const name = path.basename(file)
+  for (const entry of entries) {
+    const { name } = entry
     const extension = path.extname(name).toLowerCase()
     if (!installerExtensions.includes(extension)) {
       continue
@@ -388,7 +429,7 @@ const readAssets = (directory, template, version, repository, tag) => {
       arch,
       label: archLabels[platform]?.[arch] ?? (arch ? arch.toUpperCase() : null),
       name,
-      size: formatSize(fs.statSync(file).size),
+      size: formatSize(entry.size),
       downloadUrl,
       checksumUrl: names.has(`${name}.sha256`)
         ? `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(name)}.sha256`
@@ -487,14 +528,22 @@ log.title(`Release notes for ${tag}`)
 const builderConfig = (await import(pathToFileURL(path.join(repositoryRoot, 'apps/app/electron-builder.config.cjs')).href)).default
 const repository = options.repository ?? `${builderConfig.publish.owner}/${builderConfig.publish.repo}`
 
-// 允许显式指定起点：重发旧版本、或从分支回合并时，自动挑出来的「上一个标签」可能不是想要的那个。
-const previousTag = options.previous === undefined ? resolvePreviousTag(tag) : options.previous
-const { range, description: rangeDescription } = resolveRange(previousTag)
+// `--head` 默认 HEAD；补写已经发出去的版本时要指到那个标签，否则之后合进来的提交
+// 会跟着算进那一版的说明里。
+const head = options.head ?? 'HEAD'
 
-const { breaking, buckets } = classify(readCommits(range))
-const assets = options['assets-dir']
-  ? readAssets(options['assets-dir'], builderConfig.artifactName, version, repository, tag)
-  : []
+// 允许显式指定起点：重发旧版本、或从分支回合并时，自动挑出来的「上一个标签」可能不是想要的那个。
+const previousTag = options.previous === undefined ? resolvePreviousTag(tag, head) : options.previous
+const { range, description: rangeDescription } = resolveRange(previousTag, head)
+
+const { breaking, buckets } = classify(readCommits(range, head))
+const assets = buildAssetRows(
+  readAssetEntries(options),
+  builderConfig.artifactName,
+  version,
+  repository,
+  tag,
+)
 
 const notes = renderNotes({ breaking, buckets, assets, repository, tag, previousTag })
 
