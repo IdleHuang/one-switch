@@ -252,8 +252,9 @@ describe('图谱校验（回归）', () => {
   it('默认策略图由基础节点组合而成，同样必须通过 schema 校验', () => {
     const graph = createDefaultPolicyGraph(presetLogicalModels)
     expect(WorkflowGraphSchema.safeParse(graph).error?.issues).toBeUndefined()
-    // 规则完全由既有基础节点表达，没有任何专用节点类型。
-    expect(new Set(graph.nodes.map(node => node.kind))).toEqual(new Set(['input', 'protocol-discovery', 'condition', 'model-select', 'output']))
+    // 规则完全由既有基础节点表达，没有任何专用节点类型；
+    // 多出来的 `note` 是画布便签，不参与执行（引擎遇到它直接跳过）。
+    expect(new Set(graph.nodes.map(node => node.kind))).toEqual(new Set(['input', 'protocol-discovery', 'condition', 'model-select', 'output', 'note']))
     // 请求模型是协议层的事实：入口节点不解析请求体，所以链路里必须有一道协议发现，
     // 而且四条协议分支（含 `unknown`）都要进同一个条件 —— 认不出协议也要按同一套策略兜底。
     const protocol = graph.nodes.find(node => node.kind === 'protocol-discovery')

@@ -8,11 +8,21 @@ import {
   Repeat2,
   Sparkles,
   SquareCode,
+  StickyNote,
   Waypoints,
 } from 'lucide-react'
 
 import type { NodeRunStatus } from './node-data'
-import type { AppendableKind, IterationCollectMode, WorkflowNodeKind, WorkflowNodeModel } from '@common/router/types'
+import {
+  NOTE_DEFAULT_HEIGHT,
+  NOTE_DEFAULT_WIDTH,
+  type AppendableKind,
+  type IterationCollectMode,
+  type NoteNode,
+  type NoteNodeSize,
+  type WorkflowNodeKind,
+  type WorkflowNodeModel,
+} from '@common/router/types'
 import type { AppTranslator } from '@/i18n/provider'
 import type { UiCatalogKey } from '@common/i18n/catalogs'
 
@@ -27,7 +37,12 @@ export type CanvasNodeType =
   | 'iteration'
   | 'script'
   | 'prompt'
+  | 'note'
 
+/**
+ * 用户可以往图上新增的节点类型。
+ * 备注排最后：它是画布上的旁注，不属于路由语义，列表里也不应该抢在真节点前面。
+ */
 export const APPENDABLE_KINDS: AppendableKind[] = [
   'control-input',
   'protocol-discovery',
@@ -36,6 +51,7 @@ export const APPENDABLE_KINDS: AppendableKind[] = [
   'iteration',
   'script',
   'prompt',
+  'note',
 ]
 
 /** 画布默认列顺序：用于旧数据的自动布局。 */
@@ -49,6 +65,8 @@ export const NODE_KIND_ORDER: WorkflowNodeKind[] = [
   'prompt',
   'model-select',
   'output',
+  // 备注单独占一列：旧数据做列式布局时它不会挤在别的节点上。
+  'note',
 ]
 
 export type NodeKindIcon = ComponentType<{ className?: string }>
@@ -111,6 +129,14 @@ export const NODE_KIND_META: Record<WorkflowNodeKind, NodeKindMeta> = {
     hintKey: 'router.node.prompt.hint',
     icon: Sparkles,
     tone: 'bg-util-colors-pink-pink-500',
+  },
+  note: {
+    labelKey: 'router.node.note.label',
+    hintKey: 'router.node.note.hint',
+    icon: StickyNote,
+    // 便签用暖色：它和脚本节点的黄色调最接近，但走的是 amber 而不是 util-colors-yellow，
+    // 保证“便签”和“脚本分支”在画布上不会认错。
+    tone: 'bg-amber-500',
   },
   output: {
     labelKey: 'router.node.output.label',
@@ -182,6 +208,10 @@ export function nodeSummary(t: AppTranslator, model: WorkflowNodeModel): string 
     const logicalModelId = model.logicalModelId.trim()
     return logicalModelId ? t('router.summary.logicalModel', { id: logicalModelId }) : t('router.summary.logicalModelEmpty')
   }
+  if (model.kind === 'note') {
+    const text = model.text.trim()
+    return text ? t('router.summary.noteChars', { count: model.text.length }) : t('router.summary.noteEmpty')
+  }
   return t(NODE_KIND_META.output.hintKey)
 }
 
@@ -195,12 +225,23 @@ export function nodePanelHint(t: AppTranslator, model: WorkflowNodeModel): strin
   if (model.kind === 'iteration') return t('router.panelHint.iteration')
   if (model.kind === 'script') return t('router.panelHint.script')
   if (model.kind === 'prompt') return t('router.panelHint.prompt')
+  if (model.kind === 'note') return t('router.panelHint.note')
   return t('router.panelHint.fallback')
 }
 
 /** 输入 / 输出节点为固定节点：名称与描述不可修改，也不可删除。 */
 export function isProtectedNode(model: WorkflowNodeModel): boolean {
   return model.kind === 'input' || model.kind === 'output'
+}
+
+/**
+ * 便签的实际尺寸。
+ *
+ * `size` 是可选的（旧数据与手写图都可能没有），缺省时统一落回 `NOTE_DEFAULT_*`：
+ * 画布、缩放手柄、面板「恢复默认尺寸」三处都走这里，不各写一份默认值。
+ */
+export function resolveNoteNodeSize(model: NoteNode): NoteNodeSize {
+  return model.size ?? { width: NOTE_DEFAULT_WIDTH, height: NOTE_DEFAULT_HEIGHT }
 }
 
 /**

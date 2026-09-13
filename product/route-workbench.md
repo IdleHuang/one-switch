@@ -76,7 +76,7 @@ packages/console/source/pages/router/
 │   ├── edge-linear-gradient.tsx
 │   ├── block-icon.tsx / workflow-button.tsx
 │   └── policy-menu.tsx / version-menu.tsx
-├── nodes/                        # 九种节点，清单见 route-design.md §4
+├── nodes/                        # 十种节点，清单见 route-design.md §4
 └── panel/                        # 与节点一一对应的配置面板
 
 packages/contracts/source/router/       # 图数据与执行，console 与 core 共用
@@ -92,7 +92,7 @@ packages/contracts/source/router/       # 图数据与执行，console 与 core 
   - 提供图标、标题行、描述、状态表现与 body 插槽；
   - 负责挂载公共端口与公共操作栏。
 - `node-sections.tsx`
-  - 提供节点标题 / 描述 / body 三个公共分区，保证九种节点外观同构。
+  - 提供节点标题 / 描述 / body 三个公共分区，保证十种节点外观同构。
 - `condition-node.tsx`
   - 只负责 IF / ELIF / ELSE 的分支布局与摘要内容；
   - 不接管条件编辑。
@@ -103,6 +103,9 @@ packages/contracts/source/router/       # 图数据与执行，console 与 core 
 - `node-handle.tsx` / `node-selector.tsx`
   - 端口负责连线与「在此插入节点」入口；
   - 选择器只列可追加的节点类型。
+- `note-node.tsx`
+  - 备注便签：正文按 Markdown 只读渲染，是唯一一个带右下角缩放手柄的节点；
+  - 尺寸写进 `model.size`，由页面放到 React Flow 的节点样式上（语义见 route-design.md §4.7）。
 - `workflow-edge.tsx`
   - 自定义边的曲线、hover、状态与中间入口。
 
@@ -124,7 +127,7 @@ Dify 采用修改版 Apache-2.0（附带多租户与前端 LOGO / 版权保留�
 | UI 基础组件 | `@langgenius/dify-ui/*` | `components/ui/*`（shadcn 风格） | 建立映射；缺失组件写最小实现，不新增依赖 |
 | 样式体系 | Tailwind + workflow 语义变量 | Tailwind v4 + 主题变量 | 变量名按 One Switch 主题重映射，保留层级关系 |
 | 状态管理 | zustand 全量 workflow store | 页面 state + 图模型 | 用 props / 局部 state 注入，不引入外部 store |
-| 节点类型 | `BlockEnum` | `WorkflowNodeKind` 九种 | 只保留映射到本项目的分支 |
+| 节点类型 | `BlockEnum` | `WorkflowNodeKind` 十种 | 只保留映射到本项目的分支 |
 | 文案 | `react-i18next` + `t()` | 组件内中文常量 | 去掉 `t()` |
 | 工具库 | `es-toolkit`、`ahooks`、`jotai` | 现有依赖 | 用原生实现或现有依赖替代 |
 
@@ -132,7 +135,7 @@ Dify 采用修改版 Apache-2.0（附带多租户与前端 LOGO / 版权保留�
 
 ### 4.1 节点外壳与状态
 
-- 所有节点共用一个外壳：`node-registry.ts` 里九种 key 全部指向 `WorkflowNode`，内部按 `model.kind` 渲染各自 body。
+- 所有节点共用一个外壳：`node-registry.ts` 里十种 key 全部指向 `WorkflowNode`，内部按 `model.kind` 渲染各自 body。
 - 外壳负责图标 + 标题行、描述、状态表现、body 插槽、公共端口与操作栏。
 - 选中 / 运行中 / 成功 / 失败只改变边框与色条，不改变节点的尺寸与布局。
 - 节点本身是只读视图：编辑一律在右侧面板完成，节点上不放表单控件。
@@ -166,6 +169,13 @@ Dify 采用修改版 Apache-2.0（附带多租户与前端 LOGO / 版权保留�
 - hover 时出现可插入的中间入口；边中间插入与端口插入走同一条加节点逻辑。
 - 拖拽中的连接线使用独立组件，与已连成的边在视觉上区分。
 - 边的选中态与节点选中态互不干扰，事件传播彼此隔离。
+
+### 4.6 备注便签
+
+- 便签是唯一「尺寸不等于内容」的节点：卡片右下角有一个缩放手柄（选中或 hover 时出现），拖它改尺寸。
+- 拖拽位移按当前缩放换算成画布单位（除以 `flow.getZoom()`），结果夹在最小 / 最大尺寸之间并取整，避免缩放后半像素把文字拖糊。
+- 尺寸存进节点的 `size` 随图保存；右侧面板只报当前尺寸并提供「恢复默认尺寸」，不在面板里做第二套缩放交互。
+- 便签没有端口，因此不参与连线与插入交互；正文很长时滚轮滚的是正文（`nowheel`）而不是缩放画布。
 
 ## 5. 设计约束
 

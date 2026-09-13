@@ -34,6 +34,18 @@ export const TRANSPORT_LABEL_KEY: Record<string, UiCatalogKey> = {
   websocket: 'requestLogs.transport.websocket',
 }
 
+/**
+ * 协议在列表里的短名。
+ *
+ * 列表一行要放下 11 列，`OpenAI Completions` 这种全名会把逻辑模型名挤成省略号；
+ * 短名只保留区分三个取值所需的那一段：`Responses` 只存在于 OpenAI 系，不必再重复品牌名。
+ */
+export const PROTOCOL_SHORT_LABEL: Record<string, string> = {
+  'openai-completions': 'OpenAI',
+  'openai-responses': 'Responses',
+  'anthropic-messages': 'Anthropic',
+}
+
 export function formatTransport(t: AppTranslator, transport: string | null | undefined): string {
   if (transport == null) return t('common.state.unknown')
   const key = TRANSPORT_LABEL_KEY[transport]

@@ -9,7 +9,7 @@ import {
 } from '@dnd-kit/core'
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { ListTree, GripVertical, RefreshCw, Target } from 'lucide-react'
+import { GripVertical, ListTree, Pencil, RefreshCw, Target, Trash2 } from 'lucide-react'
 import { useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -49,6 +49,10 @@ interface LogicalModelCardProps {
   onDragEnd: (event: DragEndEvent) => void
   onAddModel?: () => void
   onRemoveModel?: (model: ProviderModelRoute) => void
+  /** 改名称与说明（卡片头上的编辑入口）。 */
+  onEdit?: () => void
+  /** 删除整个逻辑模型（软删除；内建默认不提供，它是请求的兜底落点）。 */
+  onDelete?: () => void
   dragHandleProps?: Record<string, unknown>
   dragging?: boolean
 }
@@ -73,6 +77,8 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
     onDragEnd,
     onAddModel,
     onRemoveModel,
+    onEdit,
+    onDelete,
     dragHandleProps,
     dragging,
   } = props
@@ -90,8 +96,8 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
   }))
   const coolingCount = rows.filter(row => row.cooling).length
 
-  // 内建默认逻辑模型的说明来自服务端种子，用户没有编辑入口，所以它等价于系统文案。
-  // 值恰好等于种子常量时换成目录里的本地化文案；用户自己写过的说明原样显示。
+  // 内建默认逻辑模型的说明来自服务端种子。
+  // 值恰好等于种子常量时换成目录里的本地化文案；一旦用户改过，就照原样显示用户写的说明。
   const description = builtIn && logicalModelDescription === BUILT_IN_DEFAULT_LOGICAL_MODEL_DESCRIPTION
     ? t('logicalModels.card.builtInDescription')
     : logicalModelDescription
@@ -135,10 +141,31 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
         </div>
       </div>
       {/* 说明与标题同一起点：手柄撑开多宽（28px）这里就补多少内边距，过渡与手柄同速，
-          于是手柄收起时两行都贴左、浮入时两行一起右移。 */}
-      <CardDescription className="w-full truncate transition-[padding] group-hover/header:pl-7" title={description || undefined}>
-        {description || '—'}
-      </CardDescription>
+          于是手柄收起时两行都贴左、浮入时两行一起右移。
+          这一行只有 16px 高，而遮罩要装下 28px 的按钮：上下各补 6px 内边距、再用同量的负外边距抵消，
+          多出来的高度只属于遮罩，占位的布局高度不变。 */}
+      <div className="relative -my-1.5 w-full py-1.5">
+        <CardDescription className="w-full truncate transition-[padding] group-hover/header:pl-7" title={description || undefined}>
+          {description || '—'}
+        </CardDescription>
+        {/* 编辑与删除落在说明右侧的一条模糊遮罩上（同供应商模型行的做法）：静止时不占位置，
+            被盖住的只是说明的尾巴，在模糊里淡出，而不是滑出一块带边框的按钮区。 */}
+        {(onEdit || onDelete) && (
+          <div
+            className={cn(
+              'pointer-events-none absolute inset-y-0 right-0 flex items-center gap-1 bg-linear-to-l from-components-panel-bg-blur from-55% to-transparent pl-8 opacity-0 backdrop-blur-[5px] transition-opacity',
+              'group-hover/header:pointer-events-auto group-hover/header:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+            )}
+          >
+            {onEdit && (
+              <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={t('logicalModels.card.editAria', { name: logicalModelName })} title={t('logicalModels.card.editTitle')}><Pencil size={16} /></Button>
+            )}
+            {onDelete && (
+              <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={t('logicalModels.card.deleteAria', { name: logicalModelName })} title={t('logicalModels.card.deleteTitle')}><Trash2 size={16} /></Button>
+            )}
+          </div>
+        )}
+      </div>
     </CardHeader>
   )
 

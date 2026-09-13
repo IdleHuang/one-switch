@@ -32,11 +32,19 @@ export const WorkflowNode = memo(function WorkflowNode(props: RouteNodeProps) {
   const canDelete = !protectedNode
   // 上游的 getNodeStatusBorders：被选中时不再叠加运行状态边框，避免双重描边。
   const statusBorder = isSelected ? undefined : runStatusBorderClassName[data.runStatus]
+  /**
+   * 备注是画布上的便签，与普通节点有三处不同：
+   * 一是尺寸由 `model.size` 决定（页面把它写在 React Flow 节点外层包装的 style 上），
+   * 所以这里要 `h-full w-full` 跟满卡片，而不是让内容撑出一个固定宽度；
+   * 二是它不接也不发连线；三是它不写说明行 —— 便签正文自己就是说明。
+   */
+  const isNote = model.kind === 'note'
 
   return (
     <div
       className={cn(
         'relative flex rounded-2xl border',
+        isNote && 'h-full w-full',
         isSelected ? 'border-components-option-card-option-selected-border' : 'border-transparent',
         !model.enabled && 'opacity-70',
       )}
@@ -52,9 +60,15 @@ export const WorkflowNode = memo(function WorkflowNode(props: RouteNodeProps) {
           }
         }}
         className={cn(
-          'group/node relative w-60 rounded-[15px] border border-transparent bg-workflow-block-bg pb-1 transition-colors outline-none',
-          // 上游的 `!data._runningStatus && 'hover:shadow-lg'`：运行中不再悬浮提亮，避免和状态边框打架。
-          !data.runStatus && 'hover:bg-workflow-block-bg-hover',
+          'group/node relative rounded-[15px] border transition-colors outline-none',
+          isNote
+            // 便签用琥珀色：与脚本节点的黄色同系但不同档，一眼能分出「这是旁注」与「这是真节点」。
+            ? 'flex h-full w-full flex-col border-amber-300/70 bg-amber-50/80 hover:bg-amber-50 dark:border-amber-400/25 dark:bg-amber-400/10 dark:hover:bg-amber-400/15'
+            : cn(
+              'w-60 border-transparent bg-workflow-block-bg pb-1',
+              // 上游的 `!data._runningStatus && 'hover:shadow-lg'`：运行中不再悬浮提亮，避免和状态边框打架。
+              !data.runStatus && 'hover:bg-workflow-block-bg-hover',
+            ),
           statusBorder,
         )}
       >
@@ -66,7 +80,8 @@ export const WorkflowNode = memo(function WorkflowNode(props: RouteNodeProps) {
           onDelete={() => data.onDeleteNode(id)}
         />
 
-        {model.kind !== 'input' && (
+        {/* 输入与备注不接上游连线：输入是起点，备注不参与路由。 */}
+        {model.kind !== 'input' && !isNote && (
           <NodeHandle
             nodeId={id}
             data={data}
@@ -91,7 +106,7 @@ export const WorkflowNode = memo(function WorkflowNode(props: RouteNodeProps) {
 
         <Body {...props} />
 
-        <NodeDescription model={model} />
+        {!isNote && <NodeDescription model={model} />}
       </div>
     </div>
   )

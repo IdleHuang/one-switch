@@ -18,6 +18,7 @@ const workflowNodeTypes = {
   iteration: WorkflowNode,
   script: WorkflowNode,
   prompt: WorkflowNode,
+  note: WorkflowNode,
 }
 
 /**

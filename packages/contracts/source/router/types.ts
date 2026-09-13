@@ -10,6 +10,7 @@ export type WorkflowNodeKind =
   | 'iteration'
   | 'script'
   | 'prompt'
+  | 'note'
   | 'output'
 
 export type WorkflowProtocol = Protocol | 'unknown'
@@ -42,7 +43,14 @@ export const ALL_WORKFLOW_PROTOCOLS: WorkflowProtocol[] = [
  */
 export type AppendableKind = Extract<
   WorkflowNodeKind,
-  'control-input' | 'protocol-discovery' | 'condition' | 'model-select' | 'iteration' | 'script' | 'prompt'
+  | 'control-input'
+  | 'protocol-discovery'
+  | 'condition'
+  | 'model-select'
+  | 'iteration'
+  | 'script'
+  | 'prompt'
+  | 'note'
 >
 
 /**
@@ -363,6 +371,44 @@ export interface OutputNode extends WorkflowNodeBase {
   summaryLevel: 'brief' | 'detailed'
 }
 
+/**
+ * 备注节点的画布尺寸（逻辑像素）。
+ * 便签是纯画布产物，尺寸参与图快照，因此三处（默认值、面板重置、画布拖拽下限）
+ * 共用这一组常量，避免各写一份后互相打架。
+ */
+export const NOTE_DEFAULT_WIDTH = 280
+
+export const NOTE_DEFAULT_HEIGHT = 180
+
+export const NOTE_MIN_WIDTH = 180
+
+export const NOTE_MIN_HEIGHT = 120
+
+/** 便签拖拽上限。便签是旁注而不是第二块画布，超过一屏就没有「一眼看全」的意义了。 */
+export const NOTE_MAX_WIDTH = 900
+
+export const NOTE_MAX_HEIGHT = 900
+
+/** 备注节点尺寸。 */
+export interface NoteNodeSize {
+  width: number
+  height: number
+}
+
+/**
+ * 备注节点：只在画布上留一段说明文字，**不参与引擎执行**。
+ *
+ * 它没有端口、不产生字段、不会被遍历到：引擎遇到它直接沿 `out` 边跳过，
+ * 因此可以放心把「这张图怎么用」写在图旁边，而不用担心改变路由行为。
+ */
+export interface NoteNode extends WorkflowNodeBase {
+  kind: 'note'
+  /** 便签正文，Markdown 渲染 */
+  text: string
+  /** 便签尺寸；缺省时按 `NOTE_DEFAULT_*` 展示 */
+  size?: NoteNodeSize
+}
+
 export type WorkflowNodeModel =
   | InputNode
   | ControlInputNode
@@ -372,6 +418,7 @@ export type WorkflowNodeModel =
   | IterationNode
   | ScriptNode
   | PromptNode
+  | NoteNode
   | OutputNode
 
 /**

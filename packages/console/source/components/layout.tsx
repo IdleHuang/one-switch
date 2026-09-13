@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
-import { DotPattern } from '@/components/ui/dot-pattern'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/i18n/provider'
 
@@ -40,7 +39,6 @@ export function AppLayout(props: AppLayoutProps) {
         {sidebar}
       </aside>
       <main className="relative isolate min-w-0 overflow-auto overscroll-contain">
-        <DotPattern />
         <div className="relative z-10 mx-auto min-h-full w-full max-w-7xl px-6 py-5">{children}</div>
       </main>
     </div>
