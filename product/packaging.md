@@ -340,7 +340,7 @@ CLI 的 native 层需要一套独立文案（启动横幅、端口占用、数�
 - `dev` 标记为 `cache: false` + `persistent: true`：turbo 并行拉起而不等待依赖，跨进程顺序由宿主自己的编排脚本负责（`apps/app/scripts/dev.mjs`）。
 - turbo 要求根 `package.json` 声明 `packageManager`，缺失会直接拒绝运行。
 
-版本号的注入点在拆分后每个宿主一处：`console` 在 `packages/console/vite.config.ts`（`__APP_VERSION__`）、`cli` 在 `apps/cli/vite.config.ts`（`__CLI_VERSION__`），两者都取**仓库根** `package.json` 的版本；`vitest.config.ts` 必须把两份 `define` 都同步（历史教训：两处不同步会让任何间接 import 的测试炸掉）。`apps/app/scripts/version.mjs` 是唯一的版本写入者，它的 `workspaceDirectories` 必须包含每一个要看到该版本的 manifest。
+版本号的注入点在拆分后每个宿主一处：`console` 在 `packages/console/vite.config.ts`（`__APP_VERSION__`）、`cli` 在 `apps/cli/vite.config.ts`（`__CLI_VERSION__`），两者都取**仓库根** `package.json` 的版本；`vitest.config.ts` 必须把两份 `define` 都同步（历史教训：两处不同步会让任何间接 import 的测试炸掉）。`apps/app/scripts/version.mjs` 是唯一的版本入口，而版本号只写在仓库根的 manifest 里：`pnpm version:set <version>` 从 `pnpm-workspace.yaml` 现算 workspace 包目录、把根版本**强制覆盖**到每一份 manifest（加包不必改脚本），`pnpm version:check` 只读校验它们全都与根一致，挂在 `pnpm lint` 里。之所以要专门盯它，是因为这条链路上有一份**不是代码**的清单——`release.yml` 的 `Commit version` 步骤得把改过的 manifest `git add` 进去，而它曾把 `apps/*` 写死成 `apps/app`：`1.1.0-beta.3` 发出去之后，仓库里的 `apps/cli/package.json` 还停在 `1.1.0-beta.2`。**产物是对的**（CI 里文件确实改了，只是那份改动没被提交），错的是仓库自己，所以 `pnpm typecheck` / `lint` / `test` 一路全绿也看不出来，只有发布之后回头读一遍仓库才会撞见。那条 `git add` 现在与脚本用同一对 glob，`--check` 则负责让「漏提交」在 CI 上直接变红。
 
 测试保持单一 workspace 配置（根 `vitest.config.ts` + `packages/console/scripts/vitest.setup.ts`，经 `packages/toolkit/scripts/test.mjs` 以 Electron 的 Node 执行，以匹配 `node:sqlite` 的 ABI），可按包过滤。两个静态守卫都必须保持通过：`packages/core/scripts/check-proxy-layers.mjs`（指向 `packages/core/source/proxy`）与 `packages/toolkit/scripts/check-package-boundaries.mjs`（已只登记 `packages/*` / `apps/*` 布局）。
 
@@ -558,8 +558,9 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 | 代理稳健性 | 观察者逐个 try/catch（一个观察者抛异常不再带走整次转发）；下游背压时等 `drain` 再算写完；剥离 `accept-encoding`（链路上没有任何解压，协商压缩只会让正文读不了）；自定义鉴权头保留协议固定头 |
 | 请求头透传 | `createUpstreamRequestHeaders` 改成**默认转发**：客户端带了什么就转发什么（连名字的大小写都不动），只排除四类有理由的头——与位置绑定的 `host`/`content-length`、逐跳头与 `connection` 点名的头、客户端鉴权头、`accept-encoding`。协议固定头拆成 `replace` / `fill` 两半（`resolveProtocolAuthHeaders`），`anthropic-version` 这类只在客户端没带时补上，不再盖掉客户端的值（见 [proxy-engine.md](./proxy-engine.md) §5「已钉在测试上的不变式」） |
 | 控制台 | 拆开撞车的 `['provider-models']` 查询键、补上拖拽监听器卸载清理、重写规则页的加载失败与开关回滚、出站代理探测加客户端超时、`?? []`/`?? {}` 换成稳定空值、切换筛选时收起展开行 |
+| 发布版本清单 | 版本号收敛成单一来源：`version.mjs` 从 `pnpm-workspace.yaml` 现算包目录、把根 manifest 的版本强制覆盖到每一份 manifest，新增 `--check` 并挂进 `pnpm lint`；`release.yml` 的 `git add` 改成与脚本同一对 glob（见 §5.8） |
 
-验收（实测）：`pnpm typecheck` / `pnpm lint`（代理层 48 文件、数据库边界 146 文件、包边界 270 文件）/ `pnpm test`（116 文件 / 1235 测试）/ `pnpm build:cli` / `pnpm smoke:cli`（9/9）全绿。收尾时删掉了 4 条用例（管理接口的两条限长、`clearStaleInstanceLock` 的两条），另补 1 条「声明 64 MiB 也照样解析」把「不设限」钉住，故从 1234 降到 1231；随后做请求头透传收口时又补 5 条（`response/headers.test.ts` 的「未知自定义头原样转发」与「协议固定头只补缺」、`protocols.test.ts` 的 3 条 `replace`/`fill` 拆分），删掉 1 条（`requestHttpBuffered` 的响应体上限），故为 1235。
+验收（实测）：`pnpm typecheck` / `pnpm lint`（代理层 48 文件、数据库边界 146 文件、包边界 270 文件）/ `pnpm test`（116 文件 / 1235 测试）/ `pnpm build:cli` / `pnpm smoke:cli`（9/9）全绿。收尾时删掉了 4 条用例（管理接口的两条限长、`clearStaleInstanceLock` 的两条），另补 1 条「声明 64 MiB 也照样解析」把「不设限」钉住，故从 1234 降到 1231；随后做请求头透传收口时又补 5 条（`response/headers.test.ts` 的「未知自定义头原样转发」与「协议固定头只补缺」、`protocols.test.ts` 的 3 条 `replace`/`fill` 拆分），删掉 1 条（`requestHttpBuffered` 的响应体上限），故为 1235。`1.1.0-beta.3` 发布之后复核仓库时又发现 `apps/cli/package.json` 根本没进过版本提交（成因与修法见 §5.8），一并补上；这条修法不新增用例，测试数不变，仍是 116 文件 / 1235 测试。
 
 冒烟脚本在这一轮之前已经**悄悄失效**，而它那几天没跑：`/api/*` 加实例 Token 校验之后，脚本没带头，卡在第 2 步的 `403` 上。它停在那里，就没人发现 `status` 用的是同一个姿势探活——`status --json` 从此只可能报 `unresponsive`，因为它的探活请求也不带 Token，`403` 被读成「进程在、服务不答应」。两处都在这一轮修掉：脚本从运行时文件带上 Token，并新增两条断言（错 Token 必须 `403`、崩溃残留的 `instance.lock` 会被下一次 `start` 接管）；`status` 从运行时文件带上 Token。教训是：**一个停住的冒烟脚本比没有更危险**，它会让后续每一轮都默认「那一层已经验过了」。
 

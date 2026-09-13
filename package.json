@@ -27,7 +27,8 @@
     "test:server": "node packages/toolkit/scripts/test.mjs",
     "test:coverage": "node packages/toolkit/scripts/test.mjs --coverage",
     "typecheck": "node packages/toolkit/scripts/typecheck.mjs",
-    "version:set": "node apps/app/scripts/version.mjs"
+    "version:set": "node apps/app/scripts/version.mjs",
+    "version:check": "node apps/app/scripts/version.mjs --check"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
