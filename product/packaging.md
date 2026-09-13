@@ -556,9 +556,10 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 | 宿主收尾 | 桌面形态补上 `app.requestSingleInstanceLock()`、异步 `before-quit`（5 s 兜底）、隐藏启动与不再致命的 `unhandledRejection` |
 | 代理归因 | 失败归类拆出「供应商级 / 模型级 / 不记」三档；流被中途截断、以及**响应形态与请求协议不符**（双向判定）都归到模型级，耗尽时把最后一次上游响应摘要写进错误 |
 | 代理稳健性 | 观察者逐个 try/catch（一个观察者抛异常不再带走整次转发）；下游背压时等 `drain` 再算写完；剥离 `accept-encoding`（链路上没有任何解压，协商压缩只会让正文读不了）；自定义鉴权头保留协议固定头 |
+| 请求头透传 | `createUpstreamRequestHeaders` 改成**默认转发**：客户端带了什么就转发什么（连名字的大小写都不动），只排除四类有理由的头——与位置绑定的 `host`/`content-length`、逐跳头与 `connection` 点名的头、客户端鉴权头、`accept-encoding`。协议固定头拆成 `replace` / `fill` 两半（`resolveProtocolAuthHeaders`），`anthropic-version` 这类只在客户端没带时补上，不再盖掉客户端的值（见 [proxy-engine.md](./proxy-engine.md) §5「已钉在测试上的不变式」） |
 | 控制台 | 拆开撞车的 `['provider-models']` 查询键、补上拖拽监听器卸载清理、重写规则页的加载失败与开关回滚、出站代理探测加客户端超时、`?? []`/`?? {}` 换成稳定空值、切换筛选时收起展开行 |
 
-验收（实测）：`pnpm typecheck` / `pnpm lint`（代理层 48 文件、数据库边界 146 文件、包边界 270 文件）/ `pnpm test`（116 文件 / 1231 测试）/ `pnpm build:cli` / `pnpm smoke:cli`（9/9）全绿。收尾时删掉了 4 条用例（管理接口的两条限长、`clearStaleInstanceLock` 的两条），另补 1 条「声明 64 MiB 也照样解析」把「不设限」钉住，故从 1234 降到 1231。
+验收（实测）：`pnpm typecheck` / `pnpm lint`（代理层 48 文件、数据库边界 146 文件、包边界 270 文件）/ `pnpm test`（116 文件 / 1235 测试）/ `pnpm build:cli` / `pnpm smoke:cli`（9/9）全绿。收尾时删掉了 4 条用例（管理接口的两条限长、`clearStaleInstanceLock` 的两条），另补 1 条「声明 64 MiB 也照样解析」把「不设限」钉住，故从 1234 降到 1231；随后做请求头透传收口时又补 5 条（`response/headers.test.ts` 的「未知自定义头原样转发」与「协议固定头只补缺」、`protocols.test.ts` 的 3 条 `replace`/`fill` 拆分），删掉 1 条（`requestHttpBuffered` 的响应体上限），故为 1235。
 
 冒烟脚本在这一轮之前已经**悄悄失效**，而它那几天没跑：`/api/*` 加实例 Token 校验之后，脚本没带头，卡在第 2 步的 `403` 上。它停在那里，就没人发现 `status` 用的是同一个姿势探活——`status --json` 从此只可能报 `unresponsive`，因为它的探活请求也不带 Token，`403` 被读成「进程在、服务不答应」。两处都在这一轮修掉：脚本从运行时文件带上 Token，并新增两条断言（错 Token 必须 `403`、崩溃残留的 `instance.lock` 会被下一次 `start` 接管）；`status` 从运行时文件带上 Token。教训是：**一个停住的冒烟脚本比没有更危险**，它会让后续每一轮都默认「那一层已经验过了」。
 

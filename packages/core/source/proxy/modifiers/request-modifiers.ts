@@ -1,4 +1,5 @@
 import type { Modifier, ModifierContext } from '@server/proxy/contracts'
+import type { ProtocolAuthHeaders } from '@common/protocols'
 import type { RequestRewriteRule } from '@common/schemas'
 import type { ProtocolAdapter } from '@server/proxy/protocols/shared/types'
 import type { RequestContext } from '@server/proxy/request/request-context'
@@ -20,8 +21,11 @@ export interface RequestModifierOptions {
   requestContext: RequestContext
   /** 上游真实模型名；模型改写用的就是它。 */
   providerModelName: string
-  /** 已经解析好的上游认证头（凭据只在修改器里出现一次）。 */
-  authHeaders: Record<string, string>
+  /**
+   * 已经解析好的上游认证头，拆成「替换」与「补齐」两半（凭据只在修改器里出现一次）。
+   * 拆开是必要的：`replace` 覆盖客户端带来的同名头，`fill` 只在客户端没带时补上。
+   */
+  auth: ProtocolAuthHeaders
   rules: readonly RequestRewriteRule[]
   onRewriteEvaluated(result: RewriteEvaluation): void
 }
@@ -30,7 +34,7 @@ export interface RequestModifierOptions {
  * 请求侧修改器：拼出一条真正能发往上游的请求。
  *
  * 顺序固定为「头 → 正文 → 规则」：
- * 1. 头：丢掉客户端的认证与逐跳头，换上上游认证；正文长度在传输层还会再校正一次。
+ * 1. 头：客户端带了什么就转发什么，只替掉鉴权、逐跳头与与位置相关的头，再补上协议固定头。
  * 2. 正文：模型改写 + 请求默认值 + 协议转换，都在适配器里一次做完。
  * 3. 规则：用户配置在最后介入，改的是「已经属于上游协议」的报文。
  *
@@ -56,7 +60,7 @@ function createUpstreamHeadersModifier(options: RequestModifierOptions): Modifie
     applyBuffered(context: ModifierContext, payload) {
       return {
         body: payload.body,
-        headers: createUpstreamRequestHeaders(context.exchange.headers, options.authHeaders, payload.body.length),
+        headers: createUpstreamRequestHeaders(context.exchange.headers, options.auth, payload.body.length),
       }
     },
   }

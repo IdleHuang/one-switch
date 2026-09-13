@@ -37,15 +37,44 @@ export const PROTOCOL_AUTH_PRESETS: Readonly<Record<Protocol, ProtocolAuthPreset
 }
 
 /**
- * 构造指定协议的认证头。
+ * 协议的认证头，拆成两半存放。
  *
- * 固定头**永远**附加：它们描述的是协议的形态而不是密钥的落点（Anthropic 的
- * `anthropic-version` 缺了就是 400，跟密钥放在哪个头里毫无关系）。
+ * 拆开是因为这两半对「客户端已经带了同名头」的态度**正好相反**，合成一个对象就表达不出来：
+ *
+ * - `replace`：密钥的落点。它归供应商配置所有，客户端带来的同名头必须丢掉——客户端那份是
+ *   它对**另一家**发的密钥，转发出去既不生效，还把客户端的凭据交给了别人。
+ * - `fill`：协议形态要求的头（Anthropic 的 `anthropic-version` 缺了就是 400）。它描述的是
+ *   「这个协议长什么样」而不是密钥落在哪，客户端已经带了就尊重客户端的值：它比我们更清楚
+ *   自己在说哪个版本，我们只在缺了的时候补一个兜底值。
+ *
+ * 拆开还让代理那侧的头处理能一句话说清：除鉴权、逐跳头、与位置相关的头之外，客户端带了什么
+ * 就转发什么（见 `packages/core/source/proxy/response/headers.ts` 的 `createUpstreamRequestHeaders`）。
+ */
+export interface ProtocolAuthHeaders {
+  /** 由供应商凭据覆盖的头：客户端带来的同名头会被丢弃。 */
+  readonly replace: Readonly<Record<string, string>>
+  /** 只在客户端没带这个头时补上的头。 */
+  readonly fill: Readonly<Record<string, string>>
+}
+
+export function resolveProtocolAuthHeaders(protocol: Protocol, apiKey: string | null, customAuthHeader: string | null): ProtocolAuthHeaders {
+  const preset = PROTOCOL_AUTH_PRESETS[protocol]
+  if (apiKey !== null && customAuthHeader !== null && customAuthHeader !== '') return { replace: { [customAuthHeader]: apiKey }, fill: preset.fixedHeaders }
+  if (apiKey === null || preset.headerName === null) return { replace: {}, fill: preset.fixedHeaders }
+  return { replace: { [preset.headerName]: `${preset.valuePrefix}${apiKey}` }, fill: preset.fixedHeaders }
+}
+
+/**
+ * 构造指定协议的认证头（`replace` 与 `fill` 合并成一份）。
+ *
+ * 供「没有客户端请求要保留」的调用方使用——例如管理端拉取模型列表时自己拼一个请求。
+ * 转发客户端请求的那条路必须用 {@link resolveProtocolAuthHeaders} 拿到两半，
+ * 否则协议固定头会把客户端自己的值盖掉。
+ *
+ * 固定头**永远**附加：它们描述的是协议的形态而不是密钥的落点，跟密钥放在哪个头里毫无关系。
  * 自定义认证头只改变「密钥由谁承载」，不改变「这个协议需要哪些头」。
  */
 export function createProtocolAuthHeaders(protocol: Protocol, apiKey: string | null, customAuthHeader: string | null): Record<string, string> {
-  const preset = PROTOCOL_AUTH_PRESETS[protocol]
-  if (apiKey !== null && customAuthHeader !== null && customAuthHeader !== '') return { ...preset.fixedHeaders, [customAuthHeader]: apiKey }
-  if (apiKey === null || preset.headerName === null) return { ...preset.fixedHeaders }
-  return { ...preset.fixedHeaders, [preset.headerName]: `${preset.valuePrefix}${apiKey}` }
+  const { replace, fill } = resolveProtocolAuthHeaders(protocol, apiKey, customAuthHeader)
+  return { ...fill, ...replace }
 }
