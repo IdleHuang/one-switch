@@ -21,7 +21,8 @@ import { LogicalModelSummary } from './components/logical-model-summary'
 import { SortableLogicalModel } from './components/sortable-logical-model'
 import { AddProviderModelDialog } from './components/add-provider-model-dialog'
 import { CreateLogicalModelDialog } from './components/create-logical-model-dialog'
-import { schedulingPolicyApi } from '@/api/models'
+import { EditLogicalModelDialog } from './components/edit-logical-model-dialog'
+import { logicalModelApi, schedulingPolicyApi } from '@/api/models'
 import { unwrap } from '@/api/unwrap'
 import { isBuiltInDefaultLogicalModel, type LogicalModel, type ProviderModelRoute } from '@common/schemas'
 
@@ -29,15 +30,19 @@ interface LogicalModelColumnProps {
   logicalModel: LogicalModel
   dragHandleProps?: Record<string, unknown>
   dragging?: boolean
+  /** 改名/改说明或删除之后刷新逻辑模型列表（列表变了，卡片才会跟着走）。 */
+  onChanged: () => void
 }
 
 function LogicalModelColumn(props: LogicalModelColumnProps) {
-  const { logicalModel, dragHandleProps, dragging } = props
+  const { logicalModel, dragHandleProps, dragging, onChanged } = props
   const service = useLogicalModelControlService(logicalModel.id)
   const confirm = useConfirm()
   const toast = useToast()
   const t = useTranslation()
   const [addModelOpen, setAddModelOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const builtIn = isBuiltInDefaultLogicalModel(logicalModel)
   const removeModel = async (model: ProviderModelRoute) => {
     const confirmed = await confirm({
       title: t('logicalModels.remove.title'),
@@ -53,12 +58,29 @@ function LogicalModelColumn(props: LogicalModelColumnProps) {
       toast.error(error instanceof Error ? error.message : t('logicalModels.remove.failed'))
     }
   }
+  // 删除是软删除（服务端只打时间戳），所以界面这一侧只需要把列表刷掉：卡片不在列表里就不再出现。
+  const deleteLogicalModel = async () => {
+    const confirmed = await confirm({
+      title: t('logicalModels.delete.title'),
+      description: t('logicalModels.delete.description', { name: logicalModel.name }),
+      confirmLabel: t('logicalModels.delete.confirm'),
+      variant: 'destructive',
+    })
+    if (!confirmed) return
+    try {
+      await unwrap(logicalModelApi.remove(logicalModel.id))
+      toast.success(t('logicalModels.delete.deleted'))
+      onChanged()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    }
+  }
   return (
     <>
       <LogicalModelCard
         logicalModelName={logicalModel.name}
         logicalModelDescription={logicalModel.description}
-        builtIn={isBuiltInDefaultLogicalModel(logicalModel)}
+        builtIn={builtIn}
         models={service.models}
         providers={service.providers}
         health={service.health}
@@ -74,10 +96,20 @@ function LogicalModelColumn(props: LogicalModelColumnProps) {
         onDragEnd={service.handleDragEnd}
         onAddModel={() => setAddModelOpen(true)}
         onRemoveModel={model => void removeModel(model)}
+        onEdit={() => setEditOpen(true)}
+        // 内建默认不给删除入口：它是未命中任何逻辑模型时的落点，删掉就没有兜底了。
+        onDelete={builtIn ? undefined : () => void deleteLogicalModel()}
         dragHandleProps={dragHandleProps}
         dragging={dragging}
       />
       <AddProviderModelDialog open={addModelOpen} logicalModelId={logicalModel.id} onOpenChange={setAddModelOpen} onAdded={() => void service.reload()} />
+      <EditLogicalModelDialog
+        logicalModel={logicalModel}
+        builtIn={builtIn}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSaved={onChanged}
+      />
     </>
   )
 }
@@ -180,6 +212,7 @@ export function LogicalModelsPage() {
                             logicalModel={model}
                             dragHandleProps={handleProps}
                             dragging={dragging}
+                            onChanged={refreshLogicalModels}
                           />
                         )}
                       </SortableLogicalModel>

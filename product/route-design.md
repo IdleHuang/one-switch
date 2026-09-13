@@ -167,7 +167,7 @@ Input ─▶ 协议发现 ─▶ Condition（request.body.model in logicalModels
 
 一版都没保存过时，画布打开的也是这条内建默认策略本身：`/router/graph` 返回的就是「当前生效的图」（服务端现场生成，不是空值），因此菜单直接显示「逻辑模型命中」，用户上手第一眼看到的规则与代理此刻执行的规则是同一条。此时它还不算「已保存版本」——版本号是 `UNSAVED_ROUTER_GRAPH_VERSION`（0）而不是真实版本号，「保存」按钮因此保持可用，点一下才把它固化成 v1。
 
-预设策略放在 `@common/router/presets.ts` 的 `ROUTER_POLICY_PRESETS` 中，第一个即默认策略。四个预设都只由基础节点拼成（没有专用节点），UI 侧由 `components/policy-menu.tsx` 呈现：
+预设策略放在 `@common/router/presets.ts` 的 `ROUTER_POLICY_PRESETS` 中，第一个即默认策略。四个预设都只由基础节点拼成（没有专用节点；每张图另带一张 `note` 便签写用法，便签不参与执行，见 §4.7），UI 侧由 `components/policy-menu.tsx` 呈现：
 
 | 预设 id | 名称 | 拼法 |
 | --- | --- | --- |
@@ -317,9 +317,9 @@ Input ─▶ 协议发现 ─▶ Condition（request.body.model in logicalModels
 
 ## 4. 节点目录
 
-路由工作台只保留“路由决策”相关节点；修改请求内容的逻辑属于独立的重写层（见 [request-rewrite-rules.md](./request-rewrite-rules.md)）与协议转换层，不进入路由图执行路径。
+路由工作台只保留“路由决策”相关节点；修改请求内容的逻辑属于独立的重写层（见 [request-rewrite-rules.md](./request-rewrite-rules.md)）与协议转换层，不进入路由图执行路径。唯一的非执行节点是 `note`：它是画布上的说明便签，写给人看不参与执行（§4.7）。
 
-节点类型清单以 `packages/contracts/source/router/types.ts` 的 `WorkflowNodeKind` 为准，共 9 种：
+节点类型清单以 `packages/contracts/source/router/types.ts` 的 `WorkflowNodeKind` 为准，共 10 种：
 
 | kind | 面板名称 | 一句话定位 | 详述位置 |
 | --- | --- | --- | --- |
@@ -332,6 +332,7 @@ Input ─▶ 协议发现 ─▶ Condition（request.body.model in logicalModels
 | `control-input` | 控制输入 | 注入开关 / 下拉控制值，不改图即可调参 | `ControlInputNode`（`packages/contracts/source/router/types.ts`） |
 | `protocol-discovery` | 协议发现 | 识别请求协议，按协议端口分流，并把该协议下的请求体形状声明给下游（运行时报出协议、形态与按声明读到的请求模型） | `ProtocolDiscoveryNode`（同上） |
 | `iteration` | 遍历迭代 | 遍历数组 / 对象，逐项跑循环体 | [workflow-engine.md](./workflow-engine.md) |
+| `note` | 备注 | 画布上的说明便签：不参与执行，只为看图的人服务 | §4.7 |
 
 ### 4.1 Input
 
@@ -509,10 +510,33 @@ Input ─▶ 协议发现 ─▶ Condition（request.body.model in logicalModels
 
 ---
 
+### 4.7 备注节点（Note）
+
+核心作用：
+- 在画布上直接写说明：这块图为什么这么拼、口径是什么、上线前要确认什么；
+- 内建策略的四张预设图都带一张便签，把「这张图怎么用」写在图旁边（§2.7）。
+
+输入 / 输出端口：无。
+
+说明：
+- **不参与执行**：引擎遇到便签直接沿 `out` 边走过去（没有端口的情况下它本来也接不进链路，但有人手工把连线改到它身上时也得能过去，否则整张图会空转到步骤预算耗尽）；它不产生字段、不产生 trace、不影响判定结果；
+- **不影响「只由基础节点拼成」这条性质**：便签不改变路由语义，预设图加不加它跑出来的结果一样；
+- 正文按 **Markdown** 渲染，标题、列表、代码块、链接、强调都支持，因此可以写得比一句话长；
+- 便签尺寸由使用者拖拽决定，上下限为 `NOTE_MIN_WIDTH` / `NOTE_MIN_HEIGHT` 与 `NOTE_MAX_WIDTH` / `NOTE_MAX_HEIGHT`（`packages/contracts/source/router/types.ts`），缺省按 `NOTE_DEFAULT_*` 展示；尺寸与正文都是图内容，随图保存、参与版本比对。
+
+配置体验：
+- 便签卡片上只读展示渲染后的正文（正文长时可单独滚动，不影响画布缩放），编辑在右侧面板完成；
+- 面板里只有两项：正文（多行输入）与当前尺寸（可一键恢复默认尺寸）；
+- 画布上拖右下角手柄改尺寸，选中或 hover 时手柄才出现；它是唯一带缩放手柄的节点；
+- 正文为空时卡片上留一条虚线占位提示；
+- 节点选择器最后一项是备注——它不属于路由语义，不抢真节点前面。
+
+---
+
 ## 5. 结论
 
 - 路由编排回答的是「这次请求去哪个逻辑模型」，不负责改写请求内容；改写属于重写层（[request-rewrite-rules.md](./request-rewrite-rules.md)）与协议转换层（[protocol-conversion.md](./protocol-conversion.md)），不进入路由图；
-- 判定靠 `condition` + 路径取值，落点靠 `model-select`，需要算力时用 `script` / `prompt`，需要遍历时用 `iteration` —— 引擎不内置任何专用语义；
+- 判定靠 `condition` + 路径取值，落点靠 `model-select`，需要算力时用 `script` / `prompt`，需要遍历时用 `iteration` —— 引擎不内置任何专用语义（`note` 只是画布旁注，不参与执行）；
 - 「模型直达」也只是基础节点的一种拼法（§2.7），逻辑模型增减时规则自动生效；
 - 图就是策略本体：代理执行的就是画布上保存的那张图（§2.10），不存在第二套写死的规则。
 

@@ -72,17 +72,21 @@ import {
 } from './graph-ops'
 import {
   isProtectedNode,
+  resolveNoteNodeSize,
   toCanvasNodeType,
 } from './node-meta'
 import type { NodeInsertRequest, NodeRunStatus, RouteFlowNode } from './node-data'
 import { edgeTypes, nodeTypes } from './node-registry'
-import type { AppendableKind, NodePosition, WorkflowGraph, WorkflowNodeModel, WorkflowRunResult } from '@common/router/types'
+import type { AppendableKind, NodePosition, NoteNodeSize, WorkflowGraph, WorkflowNodeModel, WorkflowRunResult } from '@common/router/types'
 
 /** 这些元素自身消费删除键，画布的键盘删除需要跳过。 */
 const EDITABLE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
 
 /** 画布内容没有来源版本（内建默认策略、套用预设）时，保存弹窗的输入初值。 */
 const EMPTY_VERSION_DRAFT: RouterGraphVersionDraft = { name: '', description: '' }
+
+/** 内建默认策略的 id：一版都没保存过时，代理跑的就是它，画布铺的也是这张图。 */
+const DEFAULT_POLICY_PRESET_ID = ROUTER_POLICY_PRESETS.find(preset => preset.isDefault)?.id
 
 /** 单条节点输出的值转成一行文本：字符串直出，数组用逗号连接，其余走 JSON。 */
 function formatNodeOutputValue(value: unknown): string {
@@ -172,6 +176,19 @@ function WorkflowStudioCanvas() {
   const [versionDraftDefaults, setVersionDraftDefaults] = useState<RouterGraphVersionDraft>(EMPTY_VERSION_DRAFT)
 
   /**
+   * 预设自带的名字与说明，作为保存弹窗的初值。
+   *
+   * 预设不是从任何一版改来的，沿用上一版的注记只会误导；但「名字留空」同样不好用：
+   * 套用「UA 分流」改完直接保存时，本来就白拿一个说得清的名字与说明。
+   */
+  const presetDraftDefaults = useCallback((presetId: string | undefined): RouterGraphVersionDraft => {
+    const textKeys = presetId ? policyPresetTextKeys(presetId) : undefined
+    return textKeys
+      ? { name: t(textKeys.name), description: t(textKeys.description) }
+      : EMPTY_VERSION_DRAFT
+  }, [t])
+
+  /**
    * 首屏从服务端拉一次「当前生效的图」与版本列表。
    *
    * 图只有服务端一份：画布打开时看到的，就是代理此刻正在执行的那张；
@@ -193,9 +210,14 @@ function WorkflowStudioCanvas() {
         setActiveGraph(hasSavedVersion(snapshot) ? canvasGraph : null)
         const loadedVersions = toRouterGraphVersions(summaries)
         setVersions(loadedVersions)
-        // 画布铺的就是这一版（一版都没保存过时列表为空、初值也是空串）。
         const baseline = loadedVersions[0]
-        setVersionDraftDefaults({ name: baseline?.name ?? '', description: baseline?.description ?? '' })
+        // 画布铺的就是最新保存的那一版；一版都没保存过时铺的是内建默认策略，
+        // 初值就跟着这张默认策略走 —— 于是打开应用直接保存，拿到的是有名字的「逻辑模型命中」这一版。
+        setVersionDraftDefaults(
+          hasSavedVersion(snapshot) && baseline
+            ? { name: baseline.name, description: baseline.description }
+            : presetDraftDefaults(DEFAULT_POLICY_PRESET_ID),
+        )
       } catch (error) {
         if (cancelled) return
         toast.error(error instanceof Error ? error.message : t('router.error.loadGraph'))
@@ -206,7 +228,7 @@ function WorkflowStudioCanvas() {
     return () => {
       cancelled = true
     }
-  }, [toast, t])
+  }, [presetDraftDefaults, toast, t])
 
   /**
    * 测试输入框的行数随内容增长（上限 28 行），剩下的交给抽屉整体滚动。
@@ -398,7 +420,33 @@ function WorkflowStudioCanvas() {
 
   useEffect(() => () => {
     if (dragRafRef.current !== null) cancelAnimationFrame(dragRafRef.current)
+    if (resizeRafRef.current !== null) cancelAnimationFrame(resizeRafRef.current)
   }, [])
+
+  // ---- 便签尺寸（同样 rAF 节流） ------------------------------------------
+
+  const resizeRafRef = useRef<number | null>(null)
+  const pendingResizeRef = useRef<{ id: string; size: NoteNodeSize } | null>(null)
+
+  const flushResize = useCallback(() => {
+    resizeRafRef.current = null
+    const pending = pendingResizeRef.current
+    if (!pending) return
+    pendingResizeRef.current = null
+    updateNode(pending.id, node => node.kind === 'note' ? { ...node, size: pending.size } : node)
+  }, [updateNode])
+
+  /**
+   * 便签拖右下角改尺寸。
+   *
+   * 与拖动位置同源：拖拽期间指针事件比渲染快，每一下都 `setGraph` 会把整张图重排一遍，
+   * 所以还是每帧只写一次。这里不做 `stop` 版的收尾写入 —— 尺寸是绝对值，最后一帧就是终值。
+   */
+  const handleResizeNode = useCallback((nodeId: string, size: NoteNodeSize) => {
+    pendingResizeRef.current = { id: nodeId, size }
+    if (resizeRafRef.current !== null) return
+    resizeRafRef.current = requestAnimationFrame(flushResize)
+  }, [flushResize])
 
   // ---- React Flow 数据 ----------------------------------------------------
 
@@ -440,6 +488,11 @@ function WorkflowStudioCanvas() {
       // 之后才拿到真实尺寸。不把它算进来的话，缓存会一直拿首次那个 `measured: undefined` 的对象，
       // 后续 `adoptUserNodes` 重建内部节点时尺寸就被抹平（拖动时报 error015、fitView 拿到 0 尺寸）。
       const measured = flow.getInternalNode(model.id)?.measured
+      // 便签是唯一一个尺寸不等于内容的节点：它的大小由 `model.size` 说了算，
+      // 所以要把尺寸同时写成 `measured` 与节点样式（`getNodeInlineStyleDimensions` 只认 style / width，不认 measured）。
+      // 其余节点不写 style，宽度交给卡片自己（`w-60`）。
+      const noteSize = model.kind === 'note' ? resolveNoteNodeSize(model) : null
+      const noteDimensions = noteSize ? { width: noteSize.width, height: noteSize.height } : undefined
       const flags = `${model.id === selectedNodeId}|${draggable}|${runStatus}|${sourcePorts.join(',')}|${targetConnected}|${measured?.width ?? 0}x${measured?.height ?? 0}`
 
       const cached = previous.get(model.id)
@@ -457,7 +510,8 @@ function WorkflowStudioCanvas() {
         // 尺寸带回来，尺寸会被重置成 undefined：`calculateNodePosition` 会打印 error015
         // （“trying to drag a node that is not initialized”），框选 / fitView 等几何计算
         // 也会拿到 0 尺寸。
-        measured,
+        measured: noteDimensions ?? measured,
+        style: noteDimensions,
         draggable,
         data: {
           model,
@@ -468,6 +522,7 @@ function WorkflowStudioCanvas() {
           canInsert: true,
           onOpen: handleOpenNode,
           onUpdateNode: updateNode,
+          onResizeNode: handleResizeNode,
           onRequestInsert: handleRequestInsert,
           onDeleteNode: handleDeleteNode,
           onDuplicateNode: handleDuplicateNode,
@@ -489,6 +544,7 @@ function WorkflowStudioCanvas() {
     handleDuplicateNode,
     handleOpenNode,
     handleRequestInsert,
+    handleResizeNode,
     runStatusByNode,
     selectedNodeId,
     updateNode,
@@ -607,17 +663,18 @@ function WorkflowStudioCanvas() {
 
   /**
    * 套用内置策略：整张画布换成预设内容。
-   * 预设里没有用户的改动，所以不需要额外确认，但会清掉选中态、上次运行结果，
-   * 以及保存弹窗的初值 —— 预设不是从任何一版改来的，沿用上一版的名字只会误导。
+   * 预设里没有用户的改动，所以不需要额外确认，但会清掉选中态与上次运行结果；
+   * 保存弹窗的初值换成这张预设自己的名字与说明：用户改完直接存，就能得到
+   * 「逻辑模型命中」这样的注记，而不是一个没有名字的版本。
    */
   const applyPolicy = useCallback((preset: RouterPolicyPreset) => {
     setGraph(preset.createGraph(runtimeLogicalModels))
     setSelectedNodeId(null)
     setRunResult(null)
-    setVersionDraftDefaults(EMPTY_VERSION_DRAFT)
+    setVersionDraftDefaults(presetDraftDefaults(preset.id))
     const textKeys = policyPresetTextKeys(preset.id)
     toast.success(t('router.toast.policyApplied', { name: textKeys ? t(textKeys.name) : preset.id }))
-  }, [runtimeLogicalModels, toast, t])
+  }, [presetDraftDefaults, runtimeLogicalModels, toast, t])
 
   /** 当前画布与哪个预设一致（不一致时为 null）。 */
   const activePolicyId = useMemo(

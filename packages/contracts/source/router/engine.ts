@@ -1137,6 +1137,14 @@ export async function runWorkflow(graph: WorkflowGraph, inputPayload: unknown, o
         stopReason = 'output'
         return undefined
       }
+
+      // 备注节点不参与执行：它只是画布上的说明。
+      // 它没有端口，正常情况下根本不会被接进链路；但只要有人手工把连线改到它身上，
+      // 这里也得直接走过去 —— 否则循环里没有分支消耗 `currentId`，整张图会一路空转到步骤预算耗尽。
+      if (current.kind === 'note') {
+        currentId = edgeTarget(edges, current.id, 'out')
+        continue
+      }
     }
     return currentId
   }

@@ -35,10 +35,11 @@ const nodeKinds: Record<WorkflowNodeKind, true> = {
   iteration: true,
   script: true,
   prompt: true,
+  note: true,
   output: true,
 }
 
-const appendableKinds: AppendableKind[] = ['control-input', 'protocol-discovery', 'condition', 'model-select', 'iteration', 'script', 'prompt']
+const appendableKinds: AppendableKind[] = ['control-input', 'protocol-discovery', 'condition', 'model-select', 'iteration', 'script', 'prompt', 'note']
 
 function nodeOfKind(kind: WorkflowNodeKind) {
   if (kind === 'input') return createInputNode({ x: 0, y: 0 })

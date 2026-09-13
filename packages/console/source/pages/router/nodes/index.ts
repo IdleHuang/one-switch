@@ -7,6 +7,7 @@ import { ControlInputNodeView } from './control-input-node'
 import { InputNodeView } from './input-node'
 import { IterationNodeView } from './iteration-node'
 import { ModelSelectNodeView } from './model-select-node'
+import { NoteNodeView } from './note-node'
 import { OutputNodeView } from './output-node'
 import { PromptNodeView } from './prompt-node'
 import { ProtocolDiscoveryNodeView } from './protocol-discovery-node'
@@ -26,5 +27,6 @@ export const NODE_COMPONENT_MAP: Record<WorkflowNodeKind, ComponentType<RouteNod
   iteration: IterationNodeView,
   script: ScriptNodeView,
   prompt: PromptNodeView,
+  note: NoteNodeView,
   output: OutputNodeView,
 }

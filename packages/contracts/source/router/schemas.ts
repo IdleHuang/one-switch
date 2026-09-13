@@ -1,7 +1,14 @@
 import { z } from 'zod'
 
 import { TransportKindSchema } from '@common/schemas'
-import { PROMPT_TIMEOUT_DEFAULT, PROMPT_TIMEOUT_LIMIT, SCRIPT_TIMEOUT_DEFAULT, SCRIPT_TIMEOUT_LIMIT } from './types'
+import {
+  NOTE_DEFAULT_HEIGHT,
+  NOTE_DEFAULT_WIDTH,
+  PROMPT_TIMEOUT_DEFAULT,
+  PROMPT_TIMEOUT_LIMIT,
+  SCRIPT_TIMEOUT_DEFAULT,
+  SCRIPT_TIMEOUT_LIMIT,
+} from './types'
 
 const LogicalModelContextSchema = z.object({
   id: z.string().min(1),
@@ -23,7 +30,18 @@ const NodePositionSchema = z.object({
 
 const WorkflowNodeBaseSchema = z.object({
   id: z.string(),
-  kind: z.enum(['input', 'control-input', 'protocol-discovery', 'condition', 'model-select', 'iteration', 'script', 'prompt', 'output']),
+  kind: z.enum([
+    'input',
+    'control-input',
+    'protocol-discovery',
+    'condition',
+    'model-select',
+    'iteration',
+    'script',
+    'prompt',
+    'note',
+    'output',
+  ]),
   name: z.string(),
   enabled: z.boolean(),
   description: z.string(),
@@ -134,6 +152,19 @@ const PromptNodeSchema = WorkflowNodeBaseSchema.extend({
   timeoutMilliseconds: z.number().int().positive().max(PROMPT_TIMEOUT_LIMIT).default(PROMPT_TIMEOUT_DEFAULT),
 })
 
+const NoteNodeSizeSchema = z.object({
+  width: z.number().positive(),
+  height: z.number().positive(),
+})
+
+const NoteNodeSchema = WorkflowNodeBaseSchema.extend({
+  kind: z.literal('note'),
+  // 允许空正文：刚拖出来、还没写字的便签是合法的编辑中间态。
+  text: z.string().default(''),
+  // 省略时按 `NOTE_DEFAULT_*` 展示；带上就让「同一张图在不同屏幕上尺寸一致」。
+  size: NoteNodeSizeSchema.default({ width: NOTE_DEFAULT_WIDTH, height: NOTE_DEFAULT_HEIGHT }),
+})
+
 export const WorkflowNodeModelSchema = z.discriminatedUnion('kind', [
   InputNodeSchema,
   ControlInputNodeSchema,
@@ -143,6 +174,7 @@ export const WorkflowNodeModelSchema = z.discriminatedUnion('kind', [
   IterationNodeSchema,
   ScriptNodeSchema,
   PromptNodeSchema,
+  NoteNodeSchema,
   OutputNodeSchema,
 ])
 

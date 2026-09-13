@@ -3,6 +3,8 @@ import { isBuiltInDefaultLogicalModel } from '@common/schemas'
 import {
   ALL_WORKFLOW_PROTOCOLS,
   DEFAULT_OPERATOR_SET,
+  NOTE_DEFAULT_HEIGHT,
+  NOTE_DEFAULT_WIDTH,
   PROMPT_TIMEOUT_DEFAULT,
   SCRIPT_TIMEOUT_DEFAULT,
   type AppendableKind,
@@ -12,6 +14,7 @@ import {
   type ControlInputItem,
   type ControlInputKind,
   type NodePosition,
+  type NoteNode,
   type RuntimeLogicalModel,
   type SchemaValueType,
   type WorkflowEdge,
@@ -207,6 +210,10 @@ export function createNodeByKind(kind: AppendableKind, position: NodePosition): 
     }
   }
 
+  if (kind === 'note') {
+    return createNoteNode(position)
+  }
+
   return {
     id,
     kind: 'model-select',
@@ -248,6 +255,87 @@ export function withFixedNodeCopy(nodes: WorkflowNodeModel[]): WorkflowNodeModel
  * 策略预设
  * ------------------------------------------------------------------------- */
 
+/**
+ * 预设自带的用法备注：位置与尺寸固定，四张图上的便签长得一样。
+ *
+ * 落点放在输入节点的**左上方**（而不是右下方）是算过的：画布首屏会 `fitView` 整张图，
+ * 而这几张预设的包围盒都是「宽」撑住缩放比例的，往上方扩展不会改变首屏缩放，
+ * 往右 / 往下加才会把小图硬生生缩一半。
+ */
+function createPresetNoteNode(name: string, text: string): NoteNode {
+  return {
+    ...createNoteNode({ x: 80, y: -240 }),
+    // id 必须固定：预设图的「同一张图」判定是逐字节比 JSON（`isSameGraph`），
+    // 用随机 id 的话每次生成都不一样，「当前套的是哪个预设」永远匹配不上。
+    id: 'note-usage',
+    name,
+    text,
+    size: { width: 440, height: 220 },
+  }
+}
+
+/** 默认策略的用法说明（落在预设图上，属于用户数据，不参与界面本地化）。 */
+const DEFAULT_POLICY_NOTE = `## 默认策略：请求模型直连
+
+请求里写的模型名**命中逻辑模型**就直连它，否则落到默认逻辑模型。
+
+**链路**
+1. 输入请求
+2. 协议发现：先认出协议，再按协议解析请求体（模型名写在哪，由协议决定）
+3. 条件：请求模型是否在逻辑模型列表里
+4. 命中 → 直连请求模型；未命中 → 默认逻辑模型
+
+**常见改法**
+- 给某个客户端单独分流：在协议发现后面接一个条件节点
+- 想固定落点：把「直连请求模型」的来源改成「固定」`
+
+/** UA 分流预设的用法说明。 */
+const USER_AGENT_NOTE = `## UA 分流：按客户端来源分流
+
+逐个看请求头，头值里出现客户端标识就落到对应逻辑模型；整轮都认不出来就回落默认。
+
+**链路**
+1. 遍历迭代：遍历请求头的每一个头值
+2. 条件：头值包含 Cursor / claude-cli
+3. 命中 → 对应落点；整轮都未命中 → 兜底逻辑模型
+
+**三条咬合的约定**
+- 循环体末尾把落点写进 route.modelIds，迭代节点读同一个字段判定「本轮命中」
+- 迭代节点的「汇总结果写回路径」留空：整轮未命中时不能用空数组盖掉循环体写下的值
+- 兜底放在下游一个「变量取值」的落点节点里，它同时覆盖命中沿用与未命中兜底`
+
+/** LLM 复杂度预设的用法说明。 */
+const LLM_COMPLEXITY_NOTE = `## LLM 复杂度分流
+
+先让逻辑模型读一遍请求，判定 simple / complex，再按结论落到不同逻辑模型。
+
+**链路**
+1. LLM 节点：把请求体整体交给判定模型，回复写进 route.complexity
+2. 条件：route.complexity 匹配正则 [Cc]omplex
+3. 复杂 → 复杂落点；其余 → 简单落点
+
+**注意**
+- 用正则而不是等于：LLM 回复里的多余空白、首字母大小写都能容忍
+- 想更确定：把提示词改成「只回答 JSON」，再用脚本节点解析它
+- 判定默认借用默认逻辑模型，换成专门的小模型更省
+- 这条策略没接协议发现节点：它读的是请求体整体，不需要知道体里的字段名`
+
+/** 脚本分流预设的用法说明。 */
+const SCRIPT_ROUTING_NOTE = `## JS 脚本分流
+
+用一段沙箱脚本把请求规模算成分档，再按分档落到不同逻辑模型。
+
+**链路**
+1. 协议发现：声明消息列表 / 工具列表在请求体里的位置
+2. JS 脚本：按消息数、上下文字数、工具数打分，返回 simple 或 complex
+3. 条件：route.complexity 等于 complex
+4. 复杂 → 复杂落点；其余 → 简单落点
+
+**注意**
+- 脚本先看 route.protocol，再决定消息列表读 messages 还是 input
+- console.log 会进测试运行的「控制台」，打分过程可以直接核对
+- 阈值（6 条消息 / 8000 字 / 带工具）按自己的业务调`
+
 /** 固定入口节点（input / output）的名称与描述不可修改。 */
 export function createInputNode(position: NodePosition): WorkflowNodeModel {
   return {
@@ -271,6 +359,34 @@ export function createOutputNode(position: NodePosition): WorkflowNodeModel {
     position,
     includeTrace: true,
     summaryLevel: 'detailed',
+  }
+}
+
+/**
+ * 从选择器新拖出来的便签先给一段自述，用户直接覆盖着写就行。
+ *
+ * 内容是**用户数据**（会随图落进数据库），所以不参与界面本地化，
+ * 和预设里的节点名 / 描述是同一条规则。
+ */
+export const NOTE_NODE_DEFAULT_TEXT = `## 备注
+
+在这里写这张图的说明，支持 Markdown。
+
+- 备注**不参与执行**：引擎遇到它会直接跳过，不影响路由结果
+- 拖右下角可以改尺寸，标题就是上面这行名字
+- 写清楚：这张图什么时候用、落点为什么这么选`
+
+/** 备注（便签）节点：只写在画布上，不参与引擎执行。 */
+export function createNoteNode(position: NodePosition, text: string = NOTE_NODE_DEFAULT_TEXT): NoteNode {
+  return {
+    id: createId('note'),
+    kind: 'note',
+    name: '备注',
+    enabled: true,
+    description: '画布上的说明便签：写给人看，不参与路由执行。',
+    position,
+    text,
+    size: { width: NOTE_DEFAULT_WIDTH, height: NOTE_DEFAULT_HEIGHT },
   }
 }
 
@@ -357,6 +473,7 @@ export function createDefaultPolicyGraph(models: RuntimeLogicalModel[]): Workflo
   return {
     version: 1,
     nodes: [
+      createPresetNoteNode('默认策略怎么用', DEFAULT_POLICY_NOTE),
       createInputNode({ x: 80, y: 220 }),
       {
         id: 'protocol',
@@ -537,6 +654,7 @@ export function createUserAgentGraph(models: RuntimeLogicalModel[]): WorkflowGra
   }
 
   const nodes: WorkflowNodeModel[] = [
+    createPresetNoteNode('UA 分流怎么用', USER_AGENT_NOTE),
     createInputNode({ x: 80, y: 340 }),
     {
       id: 'iteration',
@@ -655,6 +773,7 @@ export function createLlmComplexityGraph(models: RuntimeLogicalModel[]): Workflo
   }
 
   const nodes: WorkflowNodeModel[] = [
+    createPresetNoteNode('LLM 复杂度分流怎么用', LLM_COMPLEXITY_NOTE),
     createInputNode({ x: 80, y: 300 }),
     {
       id: 'complexity-prompt',
@@ -759,6 +878,7 @@ export function createScriptRoutingGraph(models: RuntimeLogicalModel[]): Workflo
   }
 
   const nodes: WorkflowNodeModel[] = [
+    createPresetNoteNode('脚本分流怎么用', SCRIPT_ROUTING_NOTE),
     createInputNode({ x: 80, y: 300 }),
     {
       id: 'protocol',

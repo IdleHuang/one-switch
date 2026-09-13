@@ -141,6 +141,8 @@ export function WorkflowNodePanel(props: WorkflowNodePanelProps) {
 
   const Body = PANEL_COMPONENT_MAP[model.kind]
   const protectedNode = isProtectedNode(model)
+  // 便签不参与执行，也不在画布上展示说明行，所以这两块对它都不成立。
+  const noteNode = model.kind === 'note'
   const update: NodePanelUpdate = updater => updateNode(model.id, updater)
   const t = useTranslation()
 
@@ -184,10 +186,12 @@ export function WorkflowNodePanel(props: WorkflowNodePanelProps) {
               />
             )}
 
-          <Switch
-            checked={model.enabled}
-            onCheckedChange={checked => updateNode(model.id, current => ({ ...current, enabled: checked }))}
-          />
+          {!noteNode && (
+            <Switch
+              checked={model.enabled}
+              onCheckedChange={checked => updateNode(model.id, current => ({ ...current, enabled: checked }))}
+            />
+          )}
 
           <button
             type="button"
@@ -199,18 +203,20 @@ export function WorkflowNodePanel(props: WorkflowNodePanelProps) {
           </button>
         </div>
 
-        <div className="shrink-0 px-3 py-1">
-          {protectedNode
-            ? <div className="system-xs-regular text-text-tertiary">{model.description}</div>
-            : (
-              <Textarea
-                value={model.description}
-                onChange={event => updateNode(model.id, current => ({ ...current, description: event.target.value }))}
-                placeholder={t('router.nodePanel.descriptionPlaceholder')}
-                className="min-h-14 text-xs"
-              />
-            )}
-        </div>
+        {!noteNode && (
+          <div className="shrink-0 px-3 py-1">
+            {protectedNode
+              ? <div className="system-xs-regular text-text-tertiary">{model.description}</div>
+              : (
+                <Textarea
+                  value={model.description}
+                  onChange={event => updateNode(model.id, current => ({ ...current, description: event.target.value }))}
+                  placeholder={t('router.nodePanel.descriptionPlaceholder')}
+                  className="min-h-14 text-xs"
+                />
+              )}
+          </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2 pb-3">
           <div className="grid gap-3">

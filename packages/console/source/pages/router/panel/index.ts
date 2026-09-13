@@ -7,6 +7,7 @@ import { ControlInputPanel } from './control-input-panel'
 import { InputPanel } from './input-panel'
 import { IterationPanel } from './iteration-panel'
 import { ModelSelectPanel } from './model-select-panel'
+import { NotePanel } from './note-panel'
 import { OutputPanel } from './output-panel'
 import { PromptPanel } from './prompt-panel'
 import { ProtocolDiscoveryPanel } from './protocol-discovery-panel'
@@ -25,5 +26,6 @@ export const PANEL_COMPONENT_MAP: Record<WorkflowNodeKind, ComponentType<NodePan
   iteration: IterationPanel,
   script: ScriptPanel,
   prompt: PromptPanel,
+  note: NotePanel,
   output: OutputPanel,
 }

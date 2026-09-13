@@ -1,6 +1,6 @@
 import type { Node, NodeProps } from '@xyflow/react'
 
-import type { AppendableKind, RuntimeLogicalModel, SchemaFieldDescriptor, WorkflowNodeModel } from '@common/router/types'
+import type { AppendableKind, NoteNodeSize, RuntimeLogicalModel, SchemaFieldDescriptor, WorkflowNodeModel } from '@common/router/types'
 import type { CanvasNodeType } from './node-meta'
 
 /** 单次测试运行后，节点在画布上的状态标记。 */
@@ -40,6 +40,8 @@ export interface RouteNodeData extends Record<string, unknown> {
   canInsert: boolean
   onOpen: (nodeId: string) => void
   onUpdateNode: (nodeId: string, updater: (node: WorkflowNodeModel) => WorkflowNodeModel) => void
+  /** 便签拖右下角改尺寸时写回图数据（调用方负责节流） */
+  onResizeNode: (nodeId: string, size: NoteNodeSize) => void
   onRequestInsert: (request: NodeInsertRequest) => void
   onDeleteNode: (nodeId: string) => void
   onDuplicateNode: (nodeId: string) => void

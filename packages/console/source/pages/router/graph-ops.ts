@@ -25,6 +25,7 @@ export function primarySourcePort(node: WorkflowNodeModel): string | null {
       return node.cases[0]?.id ?? 'else'
     case 'protocol-discovery':
       return 'unknown'
+    case 'note':
     case 'output':
       return null
   }
@@ -64,6 +65,10 @@ export function resolveInsertAnchor(graph: WorkflowGraph, request: NodeInsertReq
 
 /** 在端口后面插入节点：原连线被替换为 A → 新节点 →（原来的下游）。 */
 export function insertNode(graph: WorkflowGraph, anchor: InsertAnchor, newNode: WorkflowNodeModel): WorkflowGraph {
+  // 备注节点没有任何端口，接上连线只会得到一根插不到东西的线：
+  // 「插在边上」对它而言就等于「放在那个位置」，直接并列放上去。
+  if (newNode.kind === 'note') return appendNode(graph, newNode)
+
   const replaced = graph.edges.filter(
     edge => portKey(edge.sourceNodeId, String(edge.sourcePort)) !== portKey(anchor.sourceNodeId, anchor.sourcePort),
   )

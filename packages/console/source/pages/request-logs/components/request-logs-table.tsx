@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useLocale, useTranslation } from '@/i18n/provider'
 import { cn } from '@/lib/utils'
-import { formatDuration, formatNumber, formatTime, formatTPS, formatTTFT } from '../lib/format'
+import { PROTOCOL_SHORT_LABEL, formatNumber, formatTime, formatTPS, formatTTFT, formatTransport } from '../lib/format'
 import { RequestLogDetailRow, RequestStatusBadge } from './request-log-detail-row'
 
 interface CachedTokensCellProps {
@@ -39,11 +39,14 @@ interface RequestLogsTableProps {
   onRetry: () => void
 }
 
-function formatModelSummary(log: RequestLogEntry) {
-  const successfulAttempt = log.attempts.find(attempt => attempt.status === 'success')
-  const primaryAttempt = successfulAttempt ?? log.attempts[log.attempts.length - 1]
-  if (!primaryAttempt) return { label: '—', extraCount: 0 }
-  return { label: `${primaryAttempt.providerName}/${primaryAttempt.providerModelName}`, extraCount: Math.max(log.attempts.length - 1, 0) }
+/**
+ * 多试了几次才拿到结果。
+ *
+ * 列表里只说「多试了几次」，不说是换到了哪一家：具体每一次是怎么失败的、落在哪个模型上，
+ * 是展开区该讲的事，塞进这一列只会把逻辑模型名挤成省略号。
+ */
+function failoverCount(log: RequestLogEntry): number {
+  return Math.max(log.attempts.length - 1, 0)
 }
 
 export function CachedTokensCell(props: CachedTokensCellProps) {
@@ -70,7 +73,9 @@ function RequestLogsTableHeader() {
         <th className={cn(tableHeaderCellClass, 'w-8 py-1.5')} />
         <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.status')}</th>
         <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.time')}</th>
-        <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.providerModel')}</th>
+        <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.logicalModel')}</th>
+        <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.protocol')}</th>
+        <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.transport')}</th>
         <th className={cn(tableHeaderCellClass, 'py-1.5 text-center')}>
           <ArrowUpFromLine size={11} className="mr-0.5 inline" />
           {t('requestLogs.table.input')}
@@ -91,7 +96,6 @@ function RequestLogsTableHeader() {
           <Zap size={11} className="mr-0.5 inline" />
           TPS
         </th>
-        <th className={cn(tableHeaderCellClass, 'py-1.5 text-right')}>{t('requestLogs.table.duration')}</th>
       </tr>
     </thead>
   )
@@ -114,6 +118,12 @@ function RequestLogsLoadingRows() {
           <td className="px-2.5 py-2.5">
             <Skeleton className="h-3 w-28" />
           </td>
+          <td className="px-2.5 py-2.5">
+            <Skeleton className="h-3 w-16" />
+          </td>
+          <td className="px-2.5 py-2.5">
+            <Skeleton className="h-3 w-14" />
+          </td>
           {Array.from({ length: 5 }).map((__, cell) => (
             <td key={cell} className="px-2.5 py-2.5">
               <Skeleton
@@ -125,9 +135,6 @@ function RequestLogsLoadingRows() {
               />
             </td>
           ))}
-          <td className="px-2.5 py-2.5">
-            <Skeleton className="ml-auto h-3 w-12" />
-          </td>
         </tr>
       ))}
     </>
@@ -136,7 +143,9 @@ function RequestLogsLoadingRows() {
 
 function RequestLogTableRow(props: RequestLogTableRowProps) {
   const locale = useLocale()
+  const t = useTranslation()
   const successfulAttempt = props.log.attempts.find(attempt => attempt.status === 'success')
+  const failovers = failoverCount(props.log)
   const tps = formatTPS(
     props.log.outputTokens,
     successfulAttempt?.durationMilliseconds ?? props.log.totalDurationMilliseconds,
@@ -161,19 +170,25 @@ function RequestLogTableRow(props: RequestLogTableRowProps) {
           {formatTime(locale, props.log.createdTime)}
         </td>
         <td className={cn(tableCellClass, 'max-w-40')}>
-          {(() => {
-            const { label, extraCount } = formatModelSummary(props.log)
-            return (
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 truncate system-xs-medium text-text-primary">{label}</span>
-                {extraCount > 0 && (
-                  <span className="shrink-0 rounded-md bg-components-input-bg-normal px-1.5 py-0.5 font-mono system-2xs-medium text-text-tertiary">
-                    +{extraCount}
-                  </span>
-                )}
-              </div>
-            )
-          })()}
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate system-xs-medium text-text-primary">{props.modelName}</span>
+            {failovers > 0 && (
+              <span
+                className="shrink-0 rounded-md bg-components-input-bg-normal px-1.5 py-0.5 font-mono system-2xs-medium text-text-tertiary"
+                title={t('requestLogs.route.totalAttempts', { count: props.log.attempts.length })}
+              >
+                +{failovers}
+              </span>
+            )}
+          </div>
+        </td>
+        <td className={cn(tableCellClass, 'whitespace-nowrap')}>
+          {props.log.clientProtocol === null
+            ? <span className="text-text-quaternary">—</span>
+            : <span className="text-text-tertiary">{PROTOCOL_SHORT_LABEL[props.log.clientProtocol] ?? props.log.clientProtocol}</span>}
+        </td>
+        <td className={cn(tableCellClass, 'whitespace-nowrap text-text-tertiary')}>
+          {formatTransport(t, props.log.transport)}
         </td>
         <td className={cn(tableCellClass, 'text-center font-mono')}>
           <span className={cn(props.log.inputTokens != null && 'text-text-primary')}>
@@ -196,9 +211,6 @@ function RequestLogTableRow(props: RequestLogTableRowProps) {
         <td className={cn(tableCellClass, 'text-center font-mono')}>
           <span className={cn(tps !== '—' && 'text-foreground')}>{tps}</span>
         </td>
-        <td className={cn(tableCellClass, 'text-right font-mono')}>
-          {formatDuration(props.log.totalDurationMilliseconds)}
-        </td>
       </tr>
       {props.expanded && (
         <RequestLogDetailRow
@@ -220,7 +232,7 @@ export function RequestLogsTable(props: RequestLogsTableProps) {
     body = <RequestLogsLoadingRows />
   } else if (props.error !== null && props.logs.length === 0) {
     body = (
-      <TableStateRow colSpan={10} icon={AlertTriangle} tone="destructive" title={t('requestLogs.table.error.title')} description={props.error} action={
+      <TableStateRow colSpan={11} icon={AlertTriangle} tone="destructive" title={t('requestLogs.table.error.title')} description={props.error} action={
         <Button variant="outline" className="mt-1" onClick={props.onRetry}>
           <RefreshCw size={14} />
           {t('common.action.retry')}
@@ -229,8 +241,8 @@ export function RequestLogsTable(props: RequestLogsTableProps) {
     )
   } else if (props.logs.length === 0) {
     body = props.filtered
-      ? <TableStateRow colSpan={10} icon={SearchX} title={t('requestLogs.table.empty.title')} description={t('requestLogs.table.empty.description')} />
-      : <TableStateRow colSpan={10} icon={SearchX} title={t('requestLogs.table.emptyAll.title')} description={t('requestLogs.table.emptyAll.description')} />
+      ? <TableStateRow colSpan={11} icon={SearchX} title={t('requestLogs.table.empty.title')} description={t('requestLogs.table.empty.description')} />
+      : <TableStateRow colSpan={11} icon={SearchX} title={t('requestLogs.table.emptyAll.title')} description={t('requestLogs.table.emptyAll.description')} />
   } else {
     body = props.logs.map(log => (
       <RequestLogTableRow

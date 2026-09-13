@@ -535,7 +535,7 @@ export function RequestLogDetailRow(props: RequestLogDetailRowProps) {
 
   return (
     <tr className="bg-inset">
-      <td colSpan={10} className="border-b border-border/40 p-0">
+      <td colSpan={11} className="border-b border-border/40 p-0">
         <div className="bg-card px-5 py-4">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-border/50 pb-3">
             <div className="min-w-0">
