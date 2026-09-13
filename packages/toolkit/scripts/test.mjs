@@ -14,7 +14,7 @@ const main = async () => {
     // 跟应用一致，系统 Node 上跑会直接报模块不可用。
     await run(
       'pnpm',
-      ['exec', 'electron', 'node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.config.ts', ...args],
+      ['exec', 'electron', 'node_modules/vitest/vitest.mjs', 'run', '--config', 'packages/toolkit/vitest.config.ts', ...args],
       {
         cwd: repositoryRoot,
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },

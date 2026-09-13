@@ -65,9 +65,8 @@ one-switch/
 ├── package.json                         # 工作区根：脚本入口 + 全部运行期依赖
 ├── pnpm-workspace.yaml
 ├── turbo.json                           # 任务编排与依赖顺序（build / typecheck / lint / test / dev）
-├── tsconfig.json / tsconfig.base.json / tsconfig.check.json
-├── vitest.config.ts                     # 单一测试配置，按包过滤
-├── eslint.config.js                     # 分层守卫与包边界守卫经 packages/toolkit 挂在 pnpm lint 上
+├── tsconfig.json / tsconfig.base.json   # 共享编译选项：各包 extends 前者，后者供构建期使用
+├── eslint.config.js                     # 分层守卫与包边界守卫经 packages/toolkit 挂在 pnpm lint 上（vitest 与 tsc 的配置住在 packages/toolkit）
 ├── product/                             # 产品规格文档
 ├── packages/                            # 工作区内部包：可被第三方消费的库 + 开发工具
 │   ├── contracts/                       # 共享契约：Zod schema、协议表、i18n 目录、宿主接口
@@ -107,8 +106,10 @@ one-switch/
 │   │       ├── providers/               # 供应商定义（provider.json + 图标）
 │   │       └── services/                # 通用 use-async
 │   │
-│   └── toolkit/                         # 跨包开发脚本：任务编排、包边界守卫、脚本运行库
-│       └── scripts/                     # lint / test / typecheck / 包边界守卫 / lib
+│   └── toolkit/                         # 跨包开发脚本：任务编排、版本写入与校验、包边界守卫、脚本运行库
+│       ├── tsconfig.check.json          # 覆盖全部包的一份类型检查程序（由 scripts/typecheck.mjs 调用）
+│       ├── vitest.config.ts             # 单一测试配置，按包过滤（由 scripts/test.mjs 调用）
+│       └── scripts/                     # lint / test / typecheck / version / 包边界守卫 / lib
 │
 ├── apps/                                # 宿主壳，不作为库发布
 │   └── app/                             # Electron 主进程、预加载与命令入口
@@ -117,7 +118,7 @@ one-switch/
 │       ├── vite.shared.ts               # 两份配置共用的入口、别名与 Node 外部化
 │       ├── electron-builder.config.cjs  # 打包配置
 │       ├── build/                       # 应用图标与托盘图标
-│       ├── scripts/                     # build.mjs、dev.mjs、version.mjs、macos-adhoc-sign.cjs
+│       ├── scripts/                     # build.mjs、dev.mjs、macos-adhoc-sign.cjs
 │       ├── dist/command/                # 构建产物：index.js（主进程）+ preload.js
 │       └── source/
 │           ├── index.ts                 # Electron 应用编排
