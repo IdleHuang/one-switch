@@ -61,9 +61,8 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      # 版本号必须同时写进六个 manifest：渲染层的 `__APP_VERSION__` 读仓库根，
-      # `app.getVersion()` 与 electron-builder 的产物名读 `apps/app`，数据文件名又按
-      # 应用版本命名。只改根 manifest 会让产物名与数据文件名悄悄对不上。
+      # 版本号只写在仓库根的 manifest 里：脚本从 `pnpm-workspace.yaml` 现算 workspace 包目录，
+      # 把根版本强制覆盖到每一份 manifest（加包不用改这里，也不用改下面的 `git add`）。
       - name: Update package versions
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -82,7 +81,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json pnpm-lock.yaml packages/*/package.json apps/app/package.json
+          # 这两对 glob 必须和 `version.mjs` 覆盖的是同一批包（`pnpm-workspace.yaml` 的
+          # `packages/*` 与 `apps/*`）。这里曾把后者写死成 `apps/app`，于是 `apps/cli` 一路没被提交：
+          # `1.1.0-beta.3` 发出去之后，仓库里它还是 `1.1.0-beta.2`——产物是对的、本地全绿，看不出来。
+          # `pnpm lint` 里的 `version.mjs --check` 是兜底：漏提交一份，CI 就红。
+          git add package.json pnpm-lock.yaml apps/*/package.json packages/*/package.json
           if ! git diff --cached --quiet; then
             git commit -m "chore(release): $VERSION"
             git push origin HEAD:${{ github.ref_name }}
