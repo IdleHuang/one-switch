@@ -1,197 +1,199 @@
 # One Switch
 
-**把你手上所有的大模型渠道，合成一个本地地址。当前渠道挂了，自动换下一个。**
+**Put every LLM channel you own behind one local address. When one goes down, the next one takes over.**
 
-One Switch 在本机跑一个代理服务。你把能用的渠道都配进来（不同供应商、不同账号、不同模型），排好优先级，然后让所有 AI 客户端统一指向一个本地地址。剩下的事它自己做：识别协议、按顺序挑渠道、把请求送出去、失败就换下一个，并把真实发生的一切记录清楚。
+English | [简体中文](./README.zh-CN.md)
 
-于是客户端只会看到成功的那一次。
+One Switch runs a proxy on your machine. You register all the channels you have — different providers, different accounts, different models — put them in the order you want them tried, and point every AI client at a single local address. From then on it does the work: identify the protocol, pick a channel, send the request, move on when a channel fails, and record exactly what happened.
+
+Your client only ever sees the attempt that succeeded.
 
 ---
 
-## 为什么值得装
+## Why it's worth installing
 
-- **配一次，到处能用。** 所有客户端只填一个本地地址。以后换供应商、换账号、换模型，都只改 One Switch，不用再去翻每个工具的设置。
-- **渠道会挂，你的活不会停。** 网络抖动、连接超时、限流、额度耗尽、鉴权失效、上游 5xx，都会自动尝试下一个渠道。已经开始的流式输出不会被中途拼接成两份，宁可报失败也不给你混杂的回答。
-- **每个请求都查得到真相。** 这次请求实际走了哪个供应商、哪个模型、第几次尝试才成功、耗时多少、首字多快、每秒多少 Token、缓存命中了多少 —— 全都落库可查。
-- **不同供应商的小脾气，不用写代码。** 需要补一个 `User-Agent`、删掉一个 Header、把某个字段固定成 `0.7`？用请求重写规则配出来就行，编辑器里还能直接对着用例验证。
-- **你的东西只在你的机器上。** 默认只监听 `127.0.0.1`，密钥交给系统加密存储，没有账号体系、没有云同步、没有中转服务器。请求只会发往你自己配置的上游地址。
-- **中英文界面**，亮色 / 暗色 / 跟随系统随便切，常驻系统托盘，支持开机自启和自动更新。
+- **Configure once, use it everywhere.** Every client points at one local address. Swapping providers, accounts or models later means editing One Switch, not hunting through each tool's settings.
+- **Channels break; your work doesn't.** Network hiccups, connection timeouts, rate limits, exhausted quota, rejected keys and upstream 5xx all push the request to the next channel automatically. A response that has already started streaming is never spliced together from a second one — you get a failure instead of a Frankenstein answer.
+- **Every request tells you the truth.** Which provider and model actually served it, which attempt succeeded, how long it took, how fast the first token arrived, tokens per second, how much of the prompt was cached — all of it stored and queryable.
+- **Provider quirks without writing code.** Need to add a `User-Agent`, drop a header, or pin a field to `0.7`? Request rewrite rules do it, and the editor validates the change against a test case on the spot.
+- **Your data stays on your machine.** Local listener on `127.0.0.1`, keys in the OS-encrypted store, no account, no cloud sync, no relay server. Requests only go to the upstreams you configured.
+- **English and Chinese UI**, light / dark / follow-system themes, lives in the system tray, auto-launch at login, built-in updater.
 
-## 界面预览
+## Screenshots
 
-渠道队列：拖拽排优先级，每个模型旁边是它最近的真实表现。
+Logical models: drag to set priority, and every model carries its own recent track record.
 
-![逻辑模型：渠道队列与实时指标](./snapshot/01-logical-models.png)
+![Logical models: channel queue with live metrics](./snapshot/en/01-logical-models.png)
 
-路由工作台：用节点图说明「什么样的请求，落到哪个渠道组」，每次保存留一个版本，随时回滚。
+Smart Routing: a node graph for "which requests land in which channel group", saved as versions you can roll back.
 
-![智能路由：节点图与请求命中判定](./snapshot/02-router.png)
+![Smart Routing: node graph and request matching](./snapshot/en/02-smart-routing.png)
 
-请求日志：每次请求一行，展开就是完整的执行详情和原始用量。
+Request Logs: one row per request, expandable into the full execution detail and raw usage.
 
-![请求日志：尝试级别详情与 Usage](./snapshot/03-request-logs.png)
+![Request Logs: per-attempt detail and usage](./snapshot/en/03-request-logs.png)
 
-统计分析：成功率、延迟、TTFT、TPS、缓存命中、模型排行、失败原因。
+Analytics: success rate, latency, TTFT, TPS, cache hits, model ranking, failure reasons.
 
-![统计分析：指标卡、用量分布与模型排行](./snapshot/04-overview.png)
+![Analytics: metric cards, usage distribution and model ranking](./snapshot/en/04-analytics.png)
 
-请求重写：统计卡、规则列表，以及「新建规则」里的模板菜单。
+Request Rewrite: stat cards, the rule list, and the templates behind **New rule**.
 
-![请求重写：规则列表与模板菜单](./snapshot/05-request-rewrite-rules.png)
+![Request Rewrite: rule list and template menu](./snapshot/en/05-request-rewrite.png)
 
-## 三步上手
+## Up and running in three steps
 
-### 1. 添加渠道
+### 1. Add a channel
 
-打开 **模型管理** → 新增供应商，填名称、API Key、超时时间，以及这家供应商各协议的默认接口地址。
+Open **Model Management** → **New provider**. Fill in the name, API key, timeout, and the default endpoint for each protocol this provider speaks.
 
-再在供应商下面添加真实模型 ID（例如 `gpt-4.1-mini`、`deepseek-reasoner`、`claude-sonnet-4`），并勾选它支持哪些协议。一个模型即使同时支持多个协议，在队列里也只占一行。
+Then add the real model IDs under that provider (`gpt-4.1-mini`, `deepseek-reasoner`, `claude-sonnet-4`, …) and tick the protocols each one supports. A model that speaks several protocols still occupies a single row in the queue.
 
-### 2. 排优先级
+### 2. Order the queue
 
-进入 **逻辑模型**，把刚加的模型拖成你想要的顺序，启停不想参与路由的项。
+Go to **Logical Models** and drag the models you just added into the order you want them tried. Switch off whatever should sit out.
 
-顺手能做的事：
+Things worth doing while you're here:
 
-- 每个模型旁边都能看到它最近一次成功的时间、连续失败次数，以及 TPS 和 TTFT，用来决定谁该排在前面。
-- 逻辑模型卡片可以切到 **手动指定**，把请求钉死在某一个上游模型上（该行标出「当前指定」，其余显示「待命」）。
-- 想知道渠道到底通不通：逻辑模型卡片上有 **运行探测**（可按协议筛选，跑完给一份连通性报告）；**模型管理** 右上角的 **连接测试** 能一次勾选多个渠道和协议并发验证。两者都会向每个目标发一次最小的真实请求，可能产生少量费用，也会记进请求日志。
+- Every row shows when that model last succeeded, how many consecutive failures it has, plus its TPS and TTFT — enough to decide who deserves to go first.
+- Each logical model card has a **Failover** / **Manual** switch. In Manual mode the request is pinned to one upstream model: that row is marked as selected and the rest go on standby.
+- To find out whether a channel actually works, use **Model Management** → **Connection test**, tick several channels and protocols and verify them concurrently. Each target receives one minimal real request, which may cost a little and will show up in the request logs.
 
-### 3. 改客户端地址
+### 3. Repoint your client
 
-控制台的 **接入配置** 页面就是一条三步引导：确认服务在跑 → 选客户端类型、复制它该填的地址 → 补上客户端还需要的字段。地址按当前监听端口实时拼出来，点一下就复制。
+**Access Config** is a three-step guide: confirm the service is running, pick your client type, copy the address it asks for. Addresses are built from the current listener, and every one of them has a copy button.
 
-| 你的客户端 | Base URL 填 |
+| Your client | Base URL |
 | --- | --- |
-| OpenAI 兼容（Chat Completions / Responses） | `http://127.0.0.1:9300/v1` |
-| Anthropic Messages | `http://127.0.0.1:9300` |
+| OpenAI compatible (Chat Completions / Responses) | `http://127.0.0.1:9300/v1` |
+| Anthropic | `http://127.0.0.1:9300` |
 
-> ⚠️ 这里最容易踩的坑：Anthropic 客户端自己会拼 `/v1/messages`，所以 Base URL **只要到端口为止**。如果多写了 `/v1`，最终请求会变成 `/v1/v1/messages`，代理认不出这条路径，只能给你 404。
+> ⚠️ The trap everyone falls into: Anthropic clients append `/v1/messages` themselves, so the Base URL **stops at the port**. Add `/v1` and the request becomes `/v1/v1/messages`, which the proxy does not recognise — you get a 404.
 
-模型名随便填 —— `default` 或任何非空名字都行，One Switch 会在转发时替换成当前选中渠道的真实模型 ID。要求填 API Key 的客户端，填个任意占位值即可，真实密钥由 One Switch 按供应商注入。
+The model name is up to you: `default`, or any non-empty name. One Switch swaps it for the real model ID of whichever channel it selects. If your client insists on an API key, any placeholder will do — the real keys are injected per provider.
 
-验证一下服务是通的：
+Check that the service is alive:
 
 ```bash
 curl http://127.0.0.1:9300/v1/models
 ```
 
-监听地址和端口可以在 **设置 → 网络 → 监听服务** 里改，保存后代理就换到新端口了。
+The listener host and port live in **Settings → Network → Local Listener**; save and the proxy moves to the new port.
 
-## 故障转移规则
+## Failover rules
 
-| 上游发生了什么 | One Switch 怎么做 |
+| What happens upstream | What One Switch does |
 | --- | --- |
-| 网络错误、连接超时、流式空闲超时 | 换下一个渠道 |
-| `401`、`403` | 换下一个渠道，并累计该供应商的失败状态 |
-| `408`、`429` | 换下一个渠道 |
-| `5xx` | 换下一个渠道 |
-| 其他 `4xx`（比如参数写错） | 直接返回给你，不切换 —— 换渠道也救不了 |
-| 已经开始把响应传给你之后断开 | 终止这次请求，不拼接另一个渠道的输出 |
+| Network error, connection timeout, streaming idle timeout | Try the next channel |
+| `401`, `403` | Try the next channel, and count the failure against that provider |
+| `408`, `429` | Try the next channel |
+| `5xx` | Try the next channel |
+| Any other `4xx` (a malformed request, say) | Returned to you as-is — another channel would not fix it |
+| Breaks off after the response has started streaming to you | Aborts the request rather than splicing in another channel's output |
 
-默认是连续失败 3 次进入冷却、首轮冷却 30 秒（每次失败递增，最长 5 分钟）、流式响应 30 秒没有新数据算超时。这三个数字都在 **设置 → 可靠性 → 故障转移** 里调。
+The defaults are 3 consecutive failures before a provider enters cooldown, a 30-second initial cooldown that grows with each failure up to 5 minutes, and a 30-second streaming idle timeout. All three live in **Settings → Reliability → Failover**.
 
-## 支持哪些协议
+## Supported protocols
 
-| 协议 | 本地路径 | 典型上游 |
+| Protocol | Local path | Typical upstreams |
 | --- | --- | --- |
-| OpenAI Chat Completions | `/v1/chat/completions` | OpenAI、DeepSeek、火山方舟、OpenRouter、Ollama 等一切 OpenAI 兼容服务 |
-| OpenAI Responses | `/v1/responses` | 支持 Responses API 的服务 |
-| Anthropic Messages | `/v1/messages` | Claude 及兼容服务 |
+| OpenAI Chat Completions | `/v1/chat/completions` | OpenAI, DeepSeek, Volcengine Ark, OpenRouter, Ollama — anything OpenAI compatible |
+| OpenAI Responses | `/v1/responses` | Services that implement the Responses API |
+| Anthropic Messages | `/v1/messages` | Claude and compatible services |
 
-上面这些路径带不带 `/v1` 前缀都能识别。`GET /v1/models` 由 One Switch 本地提供，返回统一的模型名，不会转发给上游。
+These paths are recognised with or without the `/v1` prefix. `GET /v1/models` is served locally and returns your model names; it is never forwarded upstream.
 
-**关于协议转换**：默认不做任何转换，请求原样透传 —— 这是最安全也最快的做法。如果你确实需要让 Claude 的客户端去打一个只支持 OpenAI 格式的渠道，可以在端点绑定上单独开启转换。转换是尽力而为的兼容层，部分参数可能丢失，一次故障转移只会尝试原生匹配或你已经明确开启转换的渠道。
+**About protocol conversion:** nothing is converted by default — requests pass through untouched, which is both the safest and the fastest behaviour. If you genuinely need a Claude client to talk to an OpenAI-only channel, turn conversion on for that endpoint binding. Conversion is a best-effort compatibility layer and some parameters may be lost; a single failover will only ever consider channels that match natively or that you have explicitly enabled conversion for.
 
-## 智能路由（路由工作台）
+## Smart Routing
 
-装好就是默认首页。它回答一个问题：**什么样的请求，该落到哪个渠道组。**
+This is the landing page after install, and it answers one question: **which requests belong to which channel group.**
 
-- 内置四个现成策略，点一下就能套用到画布上：**逻辑模型命中**（命中就直连，没命中回落默认）、**UA 区分来源**（认得出 Cursor / Claude CLI 就分流，认不出的回落默认）、**LLM 分析请求复杂度**（让模型自己判断难易，复杂走高性能落点、其余走快而便宜的）、**JS 脚本处理请求**（沙箱脚本按请求规模打分分档）。
-- 也可以自己拖节点搭：输入 → 协议发现 → 条件判断 → 逻辑模型选择 → 输出，每个节点只做一件事。
-- 点 **测试运行**，把一段真实请求体丢进去，看它走到哪个分支、每个节点输出了什么 —— 这一步不转发给上游。
-- 每次保存都会留下一个版本，选错了随时回滚。
+- Four ready-made policies you can drop straight onto the canvas: **Logical model hit** (use the requested model when it names a logical model, otherwise fall back to the default), **Route by user agent** (recognise Cursor or Claude CLI and split accordingly, everything else falls back), **LLM request complexity** (let a model judge difficulty and send the hard ones to the strong channel, the rest to the fast cheap one), and **JS script request handling** (a sandboxed script scores the request and buckets it).
+- Or build your own from nodes: input → protocol discovery → conditions → logical model selection → output. Each node does exactly one thing.
+- **Test run** takes a real request body and shows which branch it takes and what each node produced. Nothing is forwarded upstream.
+- Every save leaves a version behind, so a bad policy is one rollback away.
 
-内置的 `default` 是兜底渠道组：没有被任何路由命中的请求，最后都落到它这里。
+The built-in `default` logical model is the safety net: anything no policy matches ends up there.
 
-## 请求重写
+## Request Rewrite
 
-在 **请求重写** 页面维护规则，用于抹平供应商之间的轻量差异：
+Maintain rules on the **Request Rewrite** page to smooth over small differences between providers:
 
-- 匹配条件只有两个：客户端协议、上游协议。留空表示都适用；不需要先想清楚一张协议矩阵。
-- 动作分请求 / 响应两个阶段：Header 可以设置、追加、移除；JSON Body 可以按 `$.path` 设值、删除、字符串替换（支持正则）。
-- 规则可以设为全局（对所有渠道生效），也可以绑到具体模型上并调整执行顺序。
-- 编辑器里自带测试用例，改完动作立刻能看到效果，不用发真实请求。
+- Two match conditions only: client protocol and upstream protocol. Leave them empty to apply everywhere — no protocol matrix to work out first.
+- Actions run in the request or response stage. Headers can be set, appended or removed; JSON bodies can have values set, paths deleted, or strings replaced by literal or regular expression via `$.path`.
+- A rule can be global (applies to every channel) or bound to specific models with an explicit execution order.
+- The editor carries a test case, so you see the effect of a change immediately without sending a real request.
 
-内置三个模板，覆盖最常见的那几件事：**修改 User-Agent**（默认值就是 `OneSwitch/<版本号>`）、**移除请求头**、**设置请求字段**。
+Three templates ship with it: **Override User-Agent** (defaults to `OneSwitch/<version>`), **Drop a request header**, and **Set a request field**.
 
-新建的规则是启用的，不想用就在列表里停用它。所有改动都是结构化的增删改写，不执行任何脚本；响应阶段的动作只处理完整的非流式 JSON，流式响应的正文不会被改写。
+New rules are enabled; disable one from the list if you change your mind. Every change is a structured add/delete/replace and nothing ever executes a script. Response-stage actions only touch complete non-streaming JSON — the body of a streaming response is never rewritten.
 
-## 数据与隐私
+## Data and privacy
 
-- 代理默认监听 `127.0.0.1`，不会主动暴露到局域网。
-- API Key 用系统加密存储保存在本地。导出供应商配置时有一个 **包含明文 API Key** 的开关（默认勾选）—— 带上密钥的导出文件等同于可用凭据，请只在设备之间私传，不要传到公开渠道。
+- The proxy listens on `127.0.0.1` by default and does not expose itself to the local network.
+- API keys are kept in the OS-encrypted store. Exporting providers has an **include plaintext API keys** switch that is on by default — an export carrying keys is a working credential, so pass it between your own devices and nowhere else.
 
-配置、日志和请求元数据都存在本机应用数据目录：
+Configuration, logs and request metadata live in the per-user application data directory:
 
-| 平台 | 路径 |
+| Platform | Path |
 | --- | --- |
 | macOS | `~/Library/Application Support/One Switch/` |
 | Windows | `%APPDATA%\One Switch\` |
 | Linux | `~/.config/One Switch/` |
 
-还有几件事值得你知道：
+A few more things worth knowing:
 
-- **正文捕获默认开启**，本机会保存完整的请求、响应和流式内容（包括协议转换前后的内容）。其中 Header 会自动脱敏（`authorization`、`x-api-key`、`cookie` 等），正文不会 —— 所以它能让你排查任何一次请求，也意味着日志里可能有敏感内容。正文默认只保留 7 天（请求记录本身默认永久保留），不想要的话可以在 **设置 → 数据 → 请求日志** 里关掉采集、调整保留天数，或立刻清理历史。
-- 为了完整支持超长上下文，代理和正文记录都不限制单次正文大小，会在内存里完整读一遍请求体 —— 极大正文会明显吃内存和磁盘，这是当前版本有意为之的取舍。
-- One Switch 没有云同步、账号体系或远程中转，请求只会发往你配置的上游地址。
+- **Body capture is on by default.** The full request, response and streamed content are stored locally, including both sides of any protocol conversion. Headers are redacted automatically (`authorization`, `x-api-key`, `cookie` and friends); bodies are not — which is exactly why it can debug any request, and why the logs may contain sensitive content. Bodies are kept for 7 days by default while the request records themselves are kept forever. Turn capture off, change the retention windows, or clear history from **Settings → Data → Request Logs**.
+- To support very long contexts properly, neither the proxy nor body capture caps request size; the body is read into memory in full. Enormous bodies will cost real memory and disk. That is a deliberate trade-off in this version.
+- There is no cloud sync, no account and no remote relay. Requests only go to the upstreams you configured.
 
-## 安装
+## Install
 
-到 [GitHub Releases](https://github.com/yinxulai/one-switch/releases) 下载对应平台的安装包：
+Download the installer for your platform from [GitHub Releases](https://github.com/yinxulai/one-switch/releases):
 
-- **macOS**：`.dmg`，Apple Silicon 与 Intel 各一个（另有 `.zip`，自动更新用它）
-- **Windows**：`.exe` 安装程序，x64 与 ARM64 各一个
-- **Linux**：`.AppImage`，x64 与 ARM64 各一个
+- **macOS**: `.dmg`, one for Apple Silicon and one for Intel (plus a `.zip`, which the updater uses)
+- **Windows**: `.exe` installer, x64 and ARM64
+- **Linux**: `.AppImage`, x64 and ARM64
 
-macOS 构建目前是 ad-hoc 签名且未公证。如果系统拦下了首次打开，去「系统设置 → 隐私与安全性」里确认放行，或者在 Finder 里右键应用选「打开」。
+macOS builds are ad-hoc signed and not notarized. If the system blocks the first launch, allow it under System Settings → Privacy & Security, or right-click the app in Finder and choose Open.
 
-## 现在还不支持
+## Not supported yet
 
-先把边界说清楚，省得你白折腾：
+Better to be clear about the edges than let you find them the hard way:
 
-- 不接管系统全局代理 —— 需要在每个 AI 工具里单独改 Base URL。
-- 不支持 Gemini 的 `/v1beta/models/*`。
-- 不提供团队协作、多用户权限、云同步或远程访问。
-- 单次请求的故障转移只会在「协议一致」或「你已明确开启转换」的渠道里挑，不做跨协议的猜测。
+- No system-wide proxy — you change the Base URL in each AI tool yourself.
+- No Gemini `/v1beta/models/*` endpoints.
+- No team collaboration, multi-user permissions, cloud sync or remote access.
+- A single request's failover only picks among channels that match the protocol natively or where you explicitly enabled conversion. It never guesses across protocols.
 
-## 本地开发
+## Local development
 
-需要 Node.js 22+ 和 pnpm 11：
+Node.js 22+ and pnpm 11 are required:
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-常用命令：
+Useful commands:
 
 ```bash
-pnpm dev             # 开发会话：控制台 dev server + Electron
-pnpm dev:preview     # 只起控制台，在浏览器里看界面
-pnpm typecheck       # TypeScript 类型检查
-pnpm lint            # ESLint + 分层守卫 + 包边界守卫
-pnpm test            # 全部测试
-pnpm build           # 编译各包产物（不打包安装包）
-pnpm release:mac     # 构建 macOS arm64 / x64 安装包
-pnpm release:win     # 构建 Windows arm64 / x64 安装包
-pnpm release:linux   # 构建 Linux arm64 / x64 安装包
+pnpm dev             # dev session: console dev server + Electron
+pnpm dev:preview     # console only, for looking at the UI in a browser
+pnpm typecheck       # TypeScript
+pnpm lint            # ESLint plus the layering and package-boundary guards
+pnpm test            # the whole test suite
+pnpm build           # compile every package (no installers)
+pnpm release:mac     # build macOS arm64 / x64 installers
+pnpm release:win     # build Windows arm64 / x64 installers
+pnpm release:linux   # build Linux arm64 / x64 installers
 ```
 
-仓库是 pnpm workspace：`packages/{contracts,core,console}` 是可被单独消费的库包，`packages/toolkit` 收纳跨包开发脚本，`apps/app` 是桌面宿主，任务编排交给 Turborepo。技术栈是 Electron + React + TypeScript + Vite + Drizzle ORM + SQLite。
+The repository is a pnpm workspace: `packages/{contracts,core,console}` are libraries that can be consumed on their own, `packages/toolkit` holds the cross-package development scripts, `apps/app` is the desktop host, and Turborepo runs the tasks. The stack is Electron + React + TypeScript + Vite + Drizzle ORM + SQLite.
 
-设计目标、行为契约和验收标准的唯一权威在 [`product/`](./product/README.md)，构建与打包细节见 [packaging.md](./product/packaging.md)。
+Design goals, behaviour contracts and acceptance criteria have a single authority in [`product/`](./product/README.md); build and packaging details live in [packaging.md](./product/packaging.md).
 
-## 反馈
+## Feedback
 
-有问题或想法欢迎开 [Issue](https://github.com/yinxulai/one-switch/issues)。附上版本号、操作系统、请求协议和脱敏后的运行日志会好定位很多 —— 但请**不要**贴 API Key、完整提示词或其他敏感内容。
+Issues and ideas are welcome in [Issues](https://github.com/yinxulai/one-switch/issues). The version number, operating system, protocol and a redacted runtime log go a long way — but please **do not** paste API keys, full prompts or other sensitive content.
