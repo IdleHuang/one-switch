@@ -5,37 +5,49 @@ import { run } from '../../toolkit/scripts/lib/run.mjs'
 
 const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-const usage = `
-Usage: pnpm db <command>
+// 两个库各有一套迁移目录与 drizzle 配置：`drizzle/<role>/` + `drizzle.config.<role>.ts`。
+const roles = ['config', 'data']
 
-Commands:
-  generate   Generate a new migration from schema changes
-  migrate    Apply pending migrations
-  studio     Open Drizzle Studio
+const usage = `
+Usage: pnpm db generate [role]
+
+  Without a role, both databases are generated.
+
+Roles:
+  config   Configuration database — user-authored, not regenerable
+  data     Observability database — disposable
+
+Migrations are not applied from here: the runtime applies them on startup with
+the drizzle-orm migrator, see packages/core/source/database/index.ts.
 `
 
 const main = async () => {
-  const [command, ...extraArguments] = process.argv.slice(2)
+  const [command, requestedRole, ...extraArguments] = process.argv.slice(2)
 
-  const commands = {
-    generate: ['drizzle-kit', 'generate'],
-    migrate: ['drizzle-kit', 'migrate'],
-    studio: ['drizzle-kit', 'studio'],
-  }
-
-  if (!commands[command]) {
-    log.error(`Unknown command "${command}"`)
+  if (command !== 'generate') {
+    log.error(command ? `Unknown command "${command}"` : 'Missing command')
     console.log(usage)
     process.exit(1)
   }
 
-  log.title(`DB — ${command}`)
+  if (requestedRole !== undefined && !roles.includes(requestedRole)) {
+    log.error(`Unknown role "${requestedRole}"`)
+    console.log(usage)
+    process.exit(1)
+  }
+
+  const targets = requestedRole ? [requestedRole] : roles
+
   try {
-    // 必须在包目录里跑：drizzle-kit 找的是相对 cwd 的 `drizzle.config.ts`。
-    await run('pnpm', ['exec', ...commands[command], ...extraArguments], { cwd: packageDirectory })
-    log.success(`Done: ${command}`)
-  } catch (error) {
-    log.error(`DB command failed: ${command}`)
+    for (const role of targets) {
+      log.title(`DB — generate (${role})`)
+      // 必须在包目录里跑：配置里的 `out` 与 `schema` 都是相对 cwd 的路径。
+      const drizzleArguments = ['exec', 'drizzle-kit', 'generate', `--config=./drizzle.config.${role}.ts`, ...extraArguments]
+      await run('pnpm', drizzleArguments, { cwd: packageDirectory })
+    }
+    log.success(`Done: generate (${targets.join(', ')})`)
+  } catch {
+    log.error('DB command failed: generate')
     process.exit(1)
   }
 }

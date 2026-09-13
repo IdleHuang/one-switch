@@ -4,10 +4,12 @@ import packageJson from './package.json' with { type: 'json' }
 
 // 与 `vite.config.ts` 的 `define` 保持一致：测试同样走 Vite 的转换管线，
 // 少了这一行，任何间接 import 到 `rule-presets.ts` 的用例都会因 `__APP_VERSION__` 未定义而炸。
+// `__CLI_VERSION__` 同理：注入点就是这里与 `apps/cli/vite.config.ts`，声明见
+// `apps/cli/source/vite-env.d.ts`。
 const appVersion = packageJson.version
 
 export default defineConfig({
-  define: { __APP_VERSION__: JSON.stringify(appVersion) },
+  define: { __APP_VERSION__: JSON.stringify(appVersion), __CLI_VERSION__: JSON.stringify(appVersion) },
   resolve: {
     alias: {
       '@common': fileURLToPath(new URL('./packages/contracts/source', import.meta.url)),
@@ -23,6 +25,7 @@ export default defineConfig({
     // 会被静默跳过，套件仍显示全绿。
     include: [
       'apps/app/source/**/*.test.{ts,tsx}',
+      'apps/cli/source/**/*.test.{ts,tsx}',
       'packages/core/source/**/*.test.{ts,tsx}',
       'packages/contracts/source/**/*.test.{ts,tsx}',
       'packages/console/source/**/*.test.{ts,tsx}',
@@ -33,6 +36,7 @@ export default defineConfig({
       reportsDirectory: './coverage',
       include: [
         'apps/app/source/updater.ts',
+        'apps/cli/source/**/*.ts',
         'packages/core/source/**/*.ts',
         'packages/contracts/source/**/*.ts',
       ],

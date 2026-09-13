@@ -2,7 +2,8 @@
 
 > 本文是新大版本的目标数据库结构。
 >
-> **发布策略：不兼容旧版本数据库。** 新版本使用全新的数据库初始化结构，不读取、不迁移、不修补旧版本数据库。
+> **发布策略：换代只换文件名。** 每个库的文件名里带自己的 schema 版本号；结构发生不兼容变化时把那个数字加一，应用下次启动就在一个全新的空文件上初始化，旧文件既不读取、不迁移、不检测。
+> 数据库由**两个**文件组成：用户写的配置和系统写的观测数据各自独立（理由见 §2.1）。
 
 ## 1. 设计目标
 
@@ -16,13 +17,14 @@ One Switch 的配置内容会持续增加，尤其是供应商、模型端点、
 6. **请求/响应正文与日志索引分离，正文按需记录并完整保留。**
 7. **历史日志不依赖可变配置，不为日志快照增加外键。**
 8. **配置文档使用 `schemaVersion`，配置结构变化通过文档升级解决。**
-9. **数据库结构以 Drizzle schema 为唯一代码定义，由生成的 migration 在应用启动时执行；v0.3 不提供旧数据库兼容迁移。**
+9. **数据库结构以 Drizzle schema 为唯一代码定义，由生成的 migration 在应用启动时执行；不提供兼容迁移。**
 10. **所有时间戳字段均为 Unix 毫秒（`Date.now()`），不使用秒。**
 11. **表名统一为 `settings`，不再引入 `app_config` 作为数据库表名。**
 12. **领域前缀按对象边界使用：`provider*` 是配置身份，`client*` 是客户端一侧，`upstream*` 是实际远端 hop。**
 13. **请求级协议是 `clientProtocol`；每次 attempt 保存自己的 `upstreamProtocol`。**
 14. **一张表 = 一个视角。列名不带视角前缀——视角由表名唯一确定。**
 15. **事实永远写入，载荷才受开关控制。** `captureRequestContent` 只决定是否保存正文；是否发生协议转换、命中的改写规则 id、尝试耗时、TTFT、上游跳形态都是**事实**，无论开关如何都必须落库。
+16. **用户写的和系统写的分两个文件。** 配置是用户资产（删了就没了），观测数据是系统副产品（删了就重新长出来）；两者的生命周期、备份价值、损坏后果、写放大容忍度都不同，所以它们不共用一个数据库文件。两个文件之间**不建外键**，跨文件一致性靠「配置是事实来源 + 观测侧惰性创建 + 启动时清理孤儿行」维持（见 §2.1）。
 
 ### 1.1 术语边界
 
@@ -39,28 +41,62 @@ One Switch 的配置内容会持续增加，尤其是供应商、模型端点、
 
 ## 2. 数据库总览
 
-v0.3 包含以下 22 张核心表。
+数据目录里有两个同代的文件，共 22 张核心表：
 
-数据库启动时通过 Drizzle runtime migrator 应用 `drizzle/` 下的生成 migration，并由 `__drizzle_migrations` 记录已执行版本。`logical_models.default` 是应用 seed，不属于 schema migration。preview 阶段 `drizzle/` 只保留一个由 schema 直接生成的首发基线，因此兼容性判定不需要维护任何「历史表名」清单：`__drizzle_migrations` 里出现基线之外的 migration，或者库里有表却没有任何 migration 记录，就直接拒绝启动，要求用户重新初始化数据库。
+| 文件 | 角色 | 表数 | 谁写 | 丢了会怎样 |
+| --- | --- | --- | --- | --- |
+| `one-switch-config-<v>.db` | 配置库 | 12 | 用户 | 供应商、模型、路由、改写规则全没了——**不可再生** |
+| `one-switch-data-<v>.db` | 数据库 | 10 | 系统 | 历史请求、日志与健康状态归零，代理照常工作——**可丢弃** |
 
-数据文件名为 `one-switch-v<主版本号>.db`（例如 `one-switch-v1.db`），主版本号取自应用版本号（`packages/contracts/source/database-file.ts` 是这条规则的唯一实现）。这意味着发布一个不兼容的大版本时，应用会在全新的文件上初始化，旧文件既不读取也不删除——所谓「不兼容旧版本」因此不需要任何检测代码，只是换了一个文件名。
+文件名里的 `<v>` 是**该库自己的 schema 版本号**，不是应用版本号；两个数字各自独立地写在 `packages/contracts/source/database-file.ts`（`DATABASE_SCHEMA_VERSIONS`），该文件是这条规则的唯一实现。库结构发生不兼容变化时，只把对应角色那个数字加一：应用下次启动在全新的空文件上初始化，旧文件既不读取也不删除——换代因此不需要任何检测代码，也不需要任何迁移，只是换了一个文件名。库版本与应用版本解耦，是因为二者变化频率根本不同：一个补丁版本也会发应用版本号，但不该让用户的配置换个文件住。
+
+两个文件各有一条 Drizzle migration 链，分别落在 `packages/core/drizzle/config/` 与 `packages/core/drizzle/data/`（drizzle-kit 一份配置只能喂一条链，所以是两份 `drizzle.config.<role>.ts`）。两条链各自只有一个由 schema 直接生成的首发基线，启动时由 Drizzle runtime migrator 应用，由各自的 `__drizzle_migrations` 记录已执行版本。`logical_models.default` 是应用 seed，不属于 schema migration。
+
+两条链互相独立：一个库的演进不会牵扯另一个库，也不存在同时改两个库的事务。
+
+### 2.1 为什么是两个文件
+
+**一、可丢弃的和不可丢弃的不该共享损坏面。** 用户会定期清一次历史请求，没人想为了清日志而碰到配置；反过来，配置库若被工具链或磁盘错误弄坏，也不该把几个月的历史统计一起带走。
+
+**二、备份语义完全不同。** 想备份的其实是配置（几百 KB，改一次就该存一次）；观测数据每天都在长，正文开启后能长到几百 MB，它进备份只是把备份变成负担。两个文件后，「备份 `one-switch-config-*.db`」是一条可以放心写进文档的建议。
+
+**三、写放大与 PRAGMA 档位不同。** 配置库每次写入都很重要，用 `WAL + synchronous = FULL`；观测库每次写都很小但很频繁，用 `WAL + synchronous = NORMAL`、`cache_size = -64000`、`temp_store = MEMORY`，并开启 `auto_vacuum = INCREMENTAL` 让保留策略删掉的页能被逐步回收。合成一个库时只能取两者之间更保守的那个值。
+
+**四、边界可以被静态断言。** 哪些表属于哪个库写成了显式清单，`packages/core/scripts/check-database-boundaries.mjs` 在 `pnpm lint` 里断言「每个 store 只碰自己那个库、两个 schema 文件不互相引用、表不重复出现在两个库里」。合库时这类越界只能靠评审发现，拆库后它变成一条会失败的检查。
+
+代价是**跨库外键不可能**（SQLite 的外键只能在同一个文件内生效，事务也不能跨 ATTACH 的文件）。所以：
+
+- `provider_health` / `provider_model_health` 不再引用 `providers` / `provider_models`，改为**惰性创建**——第一次成功或失败时才插入那一行，健康行不早于它所描述的对象存在；
+- 不在健康行里冗余任何要被用来路由的配置字段（名称、协议、端点都是配置库的东西，运行时直接读配置库），因此健康行只有「id + 计数 + 时间戳」，孤儿行没有信息价值；
+- 启动时 `packages/core/source/database/index.ts` 里的 `pruneOrphanHealthRows` 删掉在配置库里找不到对应行的健康行。这是整个代码库里**唯一**同时持有两个句柄的地方，它只做这一件事。
+
+### 2.2 表清单
+
+**配置库 `one-switch-config-<v>.db`（12 张，全部是配置实体，用户资产）**：
 
 | 表 | 用途 | 数据性质 |
 | --- | --- | --- |
 | `settings` | 全局应用配置 | 命名空间 KV 配置 |
 | `providers` | 供应商稳定身份与生命周期 | 配置实体 |
-| `provider_health` | Provider 聚合运行时健康状态 | 高频运行状态 |
-| `provider_model_health` | ProviderModel 运行时健康状态 | 高频运行状态 |
 | `provider_models` | Provider 上的真实模型与路由配置 | 配置实体 |
 | `provider_settings` | Provider 级命名空间 KV 设置 | 配置实体 |
 | `provider_endpoints` | Provider 按协议的默认端点 | 配置实体 |
 | `provider_model_endpoints` | ProviderModel 到 Provider 端点的绑定 | 配置实体 |
 | `protocol_converters` | ProviderModel 端点允许的客户端协议转换器 | 配置实体 |
 | `logical_models` | 对外暴露的逻辑模型 | 配置实体 |
+| `scheduling_policies` | 逻辑模型的调度策略 | 配置实体 |
 | `request_rewrite_rules` | 可复用的请求/响应改写规则 | 配置实体 |
 | `provider_model_request_rewrite_rules` | ProviderModel 与改写规则的启用关系 | 配置实体 |
 | `workflows` | 工作流定义 | 配置实体 |
-| `scheduling_policies` | 逻辑模型的调度策略 | 配置实体 |
+
+这个库里的外键全部指向自己。
+
+**数据库 `one-switch-data-<v>.db`（10 张，全是系统写的观测数据）**：
+
+| 表 | 用途 | 数据性质 |
+| --- | --- | --- |
+| `provider_health` | Provider 聚合运行时健康状态 | 高频运行状态 |
+| `provider_model_health` | ProviderModel 运行时健康状态 | 高频运行状态 |
 | `request_logs` | 每次代理请求的汇总日志 | 历史观测数据 |
 | `request_attributes` | 请求客户端/网络属性 | 历史观测数据 |
 | `request_usages` | 请求级用量数值明细 | 历史观测数据 |
@@ -70,15 +106,19 @@ v0.3 包含以下 22 张核心表。
 | `attempt_contents` | 上游视角的请求与响应正文 | 可选历史观测数据 |
 | `runtime_logs` | 应用运行时日志 | 可选历史观测数据 |
 
-关系概览：
+`request_logs` 一侧的跨表外键都在库内（`request_attributes` / `request_usages` / `request_attempts` / `request_contents` 引用 `request_logs`，`attempt_*` 引用 `request_attempts`）；两张健康表**没有任何外键**。
+
+健康状态被归到观测侧而不是配置侧，唯一的判据是**谁写它**：`recordHealthSuccess` 在每一次成功请求上都会跑，它是运行过程的副产品；用户从不在界面上「配置」健康值，删掉它代理也照常工作，只是需要重新热身。配置侧的表反过来全都由用户触发写入。
+
+关系概览（实线＝同库外键，虚线＝跨库逻辑关联，没有外键约束）：
 
 ```mermaid
 erDiagram
   providers ||--o{ provider_settings : configures
   providers ||--o{ provider_endpoints : defaults
   providers ||--o{ provider_models : contains
-  providers ||--|| provider_health : aggregates
-  provider_models ||--|| provider_model_health : has
+  providers ||..|| provider_health : aggregates
+  provider_models ||..|| provider_model_health : has
   logical_models ||--o{ scheduling_policies : orders
   provider_models ||--o{ scheduling_policies : participates
   provider_models ||--o{ provider_model_endpoints : exposes
@@ -563,6 +603,8 @@ CREATE INDEX idx_protocol_converters_deleted_time
 
 Provider 聚合健康状态和 ProviderModel 独立健康状态都是运行时状态，必须与静态配置分离。ProviderModel 健康状态用于精确跳过单个故障模型；Provider 健康状态用于表示整个 Provider 的聚合可用性。
 
+这两张表在**数据库**（`one-switch-data-<v>.db`）里，`providerId` / `providerModelId` 只是文本标识，**没有外键**——外键只能在同一个 SQLite 文件内生效，而它们引用的是配置库里的行（见 §2.1）。
+
 ```sql
 CREATE TABLE provider_health (
   providerId TEXT PRIMARY KEY,
@@ -570,9 +612,7 @@ CREATE TABLE provider_health (
   cooldownUntilTime INTEGER,
   lastSuccessTime INTEGER,
   lastFailureTime INTEGER,
-  updatedTime INTEGER NOT NULL,
-
-  FOREIGN KEY (providerId) REFERENCES providers(id)
+  updatedTime INTEGER NOT NULL
 );
 
 CREATE TABLE provider_model_health (
@@ -581,9 +621,7 @@ CREATE TABLE provider_model_health (
   cooldownUntilTime INTEGER,
   lastSuccessTime INTEGER,
   lastFailureTime INTEGER,
-  updatedTime INTEGER NOT NULL,
-
-  FOREIGN KEY (providerModelId) REFERENCES provider_models(id)
+  updatedTime INTEGER NOT NULL
 );
 ```
 
@@ -591,7 +629,15 @@ CREATE TABLE provider_model_health (
 
 路由规则：候选 ProviderModel 必须同时满足 Provider 和 ProviderModel 未禁用、未软删除，且各自的 `cooldownUntilTime` 为空或已到期。Provider 级认证或网络故障更新 `provider_health`，单模型错误更新 `provider_model_health`；请求成功时更新两层的最近成功时间并按各自聚合范围重置失败计数。
 
-生命周期约定：**创建 Provider 时在同一事务中插入 `provider_health` 初始行，创建 ProviderModel 时在同一事务中插入 `provider_model_health` 初始行**。删除 Provider 或 ProviderModel 时按第 8 节规则处理。路由层可以假定：存在配置实体即存在对应的 health 行，无需处理缺失分支。
+生命周期约定：**健康行惰性创建——第一次成功或失败时才插入那一行**。由此得到的语义是：
+
+- 「没有这一行」＝ 这个 Provider / ProviderModel 还没有过任何一次成功或失败，等价于 `consecutiveFailures = 0` 且无冷却，也就是「健康」；
+- 写入侧一律 upsert（`INSERT ... ON CONFLICT (id) DO UPDATE`），不需要先探测行是否存在；
+- 读取侧把「无行」当作默认健康值返回，因此健康状态类型里的计数与时间字段都可缺省；
+- **创建 Provider / ProviderModel 时不碰观测库**——那是配置写入路径，不该依赖另一个文件是否可写，也不该在一个不可能跨文件生效的事务里假装原子；
+- 删除 Provider / ProviderModel 时同样不清理健康行（删除路径也不碰观测库），残留的孤儿行由启动时的 `pruneOrphanHealthRows` 统一删除（见 §6）。
+
+路由层可以假定：读不到健康行就是健康。
 
 ### 3.9 `request_logs`
 
@@ -639,7 +685,7 @@ CREATE INDEX idx_request_logs_client_protocol
 | `request_usages` | 请求级 | 每个请求、每种用量类型一行 | `(requestId, type)` |
 | `attempt_usages` | 尝试级 | 每次尝试、每种用量类型一行 | `(attemptId, type)` |
 
-`request_usages` 是独立的关系表，而不是另一个数据库。每个数值用量保存为一行，便于按 `type`、时间和请求关联进行范围筛选、分组和汇总。
+`request_usages` 是关系表，而不是塞进 `request_logs` 的一个 JSON 列。每个数值用量保存为一行，便于按 `type`、时间和请求关联进行范围筛选、分组和汇总。
 
 ```sql
 CREATE TABLE request_usages (
@@ -1128,29 +1174,23 @@ Token、缓存 Token 和其他协议用量 -> `request_usages` / `attempt_usages
 
 ## 6. 数据库初始化策略
 
-由于本版本不考虑兼容旧版本，数据库初始化流程保持简单：
+`initDatabases(dataDir)` 一次建两个库，下面这套流程对每个角色各跑一遍：
 
-1. 创建独立的数据目录；
-2. 打开 `one-switch-v<主版本号>.db`（主版本号来自应用版本号，同名文件存在就直接复用）；
-3. 启用 SQLite 外键；
-4. 切换 WAL 模式；
-5. 确认这个库是本版本创建的（`__drizzle_migrations` 与首发基线一致），否则报错退出，不做任何改动；
-6. 创建当前版本全部表和索引；
-7. 按默认值批量插入 `settings` 配置项（使用 `INSERT OR IGNORE`，仅插入不存在的 key，永不覆盖已有值，保证幂等）；
-8. 插入默认逻辑模型；
-9. 初始化 Provider 健康状态。
+1. 创建数据目录（`<用户主目录>/.one-switch`，开发档是 `<用户主目录>/.one-switch-development`，见 [packaging.md](./packaging.md) §5.5）；
+2. 打开 `one-switch-config-<v>.db` 与 `one-switch-data-<v>.db`（版本号取自 `DATABASE_SCHEMA_VERSIONS`，同名文件存在就直接复用）；
+3. 按角色设置 PRAGMA：两个库都开 `foreign_keys = ON` 并切 WAL；配置库 `synchronous = FULL`，数据库 `synchronous = NORMAL` + `cache_size = -64000` + `temp_store = MEMORY` + `auto_vacuum = INCREMENTAL`（`auto_vacuum` 必须在建表之前设定才生效）；
+4. 应用该角色的 migration 链，创建全部表和索引；
+5. 配置库专有：按默认值批量插入 `settings` 配置项（使用 `INSERT OR IGNORE`，仅插入不存在的 key，永不覆盖已有值，保证幂等）、插入默认逻辑模型；
+6. 数据库专有：执行一次 `PRAGMA optimize`，让规划器拿到统计信息；
+7. 两个角色都完成之后：`pruneOrphanHealthRows(config, data)` 删掉配置库里已经不存在的健康行。
 
-`packages/core/source/database/index.ts` 不再包含以下逻辑：
+**没有一步是「创建 Provider 时初始化健康状态」**：健康行惰性创建（见 §3.8），所以配置写入路径永远不会碰观测库。
 
-- 旧表检测（第 5 步只判断「这个库是不是本版本建的」，不认任何具体表名，也不修补任何结构）；
-- 旧字段迁移；
-- `ensureColumn`；
-- `dropColumn`；
-- 旧 Provider 宽表转换；
-- 旧 Settings 表转换；
-- 运行时兼容修补。
+`packages/core/source/database/index.ts` 负责把两个库的边界钉死：
 
-旧版数据库由用户自行备份或删除。文件名带主版本号使得正常情况下应用根本不会碰到旧库（旧库在别的文件名下），第 5 步退化成第二道防线，只防「文件被改名、拷错或来自别的分支」这类拿错库的情况。当数据目录里存在其他版本的数据文件时，启动日志会提示这两个文件名，由用户自行备份或删除。
+- 句柄只能从 `getConfigDb()` / `getDataDb()` 取，初始化完成前取句柄直接抛错（`'Config database not initialized'` / `'Data database not initialized'`），不提供任何「默认库」；
+- `pruneOrphanHealthRows` 是整个代码库**唯一**同时持有两个句柄的函数，它只做第 7 步这一件事；
+- 每个 store 只 import 自己那个 schema 文件（由 `check-database-boundaries.mjs` 在 `pnpm lint` 中断言）。
 
 ## 7. Store 层边界
 
@@ -1178,6 +1218,17 @@ Store 层应分为两部分：
 
 业务层不应直接调用 `JSON.stringify`、`JSON.parse` 或 `json_extract` 读取配置内容。
 
+### 分库归属
+
+Store 层同时是**分库边界**：一个 store 只属于一个库，只从 `getConfigDb()` / `getDataDb()` 取句柄，只 import 自己那个 schema 文件。
+
+| 库 | Store |
+| --- | --- |
+| 配置 | `settings-store.ts`、`provider-store.ts`、`model-store.ts`、`logical-model-store.ts`、`workflow-store.ts`、`request-rewrite-rule-store.ts` |
+| 观测 | `health-store.ts`、`request-log-store.ts`、`analytics-store.ts`、`runtime-log-store.ts` |
+
+**不许为了「读起来方便」合并出一个跨库 store**：需要同时看配置和观测的用例（比如供应商详情页）由调用方分别取，或者先把一个库的结果算成一个小集合，再拿去过滤另一个库。这个约束由 `packages/core/scripts/check-database-boundaries.mjs` 断言——它是最容易被一次「顺手重构」破坏、又最难在运行时发现的边界（跨库 join 不报错，只会静默退化成两次全表扫）。
+
 ## 8. 删除与历史数据规则
 
 初始化时必须幂等创建唯一启用的 `logical_models.default` 及其 `scheduling_policies` 默认行；v0.3 MVP 不提供其他逻辑模型的创建、删除和独立策略配置。
@@ -1204,12 +1255,12 @@ Store 层应分为两部分：
 
 ### 运行状态
 
-删除 Provider 时，在同一事务中级联：
+删除 Provider 时，在**配置库**的同一事务中级联：
 
 1. 将 Provider 标记为软删除；
 2. 软删除其全部 Provider 模型；
 3. 软删除这些模型与 Provider 自身的端点绑定（`provider_model_endpoints`）、端点（`provider_endpoints`）以及二者关联的 `protocol_converters`；
-4. 保留 `provider_health` 和各 ProviderModel 的 `provider_model_health`（便于恢复后观察历史健康状态）；若未来提供物理删除，则在同一事务中清理对应健康状态；
+4. 不清理 `provider_health` 与各 ProviderModel 的 `provider_model_health`：删除路径只写配置库，而且残留的健康行没有信息价值（只有 id、计数与时间戳）；孤儿行由下次启动的 `pruneOrphanHealthRows` 删掉（见 §6）；
 5. 保留历史请求日志和远端尝试记录。
 
 ### 请求日志
@@ -1252,8 +1303,8 @@ Store 层应分为两部分：
 
 本版本落地时需要同步修改：
 
-1. `packages/core/source/database/schema.ts`；
-2. `packages/core/source/database/index.ts`；
+1. `packages/core/source/database/config-schema.ts` 与 `data-schema.ts`（两个库各一份，表集合互斥）；
+2. `packages/core/source/database/index.ts`（双句柄、两条迁移链、启动时清理孤儿健康行）；
 3. `packages/core/source/database/provider-store.ts`、`model-store.ts`、`logical-model-store.ts`、`settings-store.ts`、`health-store.ts`、`request-log-store.ts`、`analytics-store.ts`；
 4. `packages/contracts/source/schemas.ts`；
 5. `packages/core/source/database/development-seed.ts`；
@@ -1262,11 +1313,12 @@ Store 层应分为两部分：
 8. 供应商包导入导出逻辑（`packages/core/source/management/provider-transfer/`、`packages/contracts/source/provider-bundle.ts`）；
 9. Provider、模型、路由和统计相关 SQL；
 10. 删除旧版 Drizzle 迁移文件，生成新的首发基线；
-11. 数据文件名规则（`packages/contracts/source/database-file.ts`）及其在 `apps/app/source/index.ts`、`packages/core/source/index.ts`、`packages/core/source/runtime/server-runtime.ts`、`packages/core/source/database/index.ts` 之间的传递；测试统一使用 `packages/core/source/database/test-support.ts` 里的固定文件名。
+11. 数据文件名规则（`packages/contracts/source/database-file.ts`，两个角色各自的 schema 版本常量）及其在 `apps/app/source/index.ts`、`packages/core/source/database/index.ts` 之间的传递；测试用自己的临时目录与 `createDatabaseFileName(role)`，不再有共享的固定文件名常量；
+12. 数据库边界静态守卫 `packages/core/scripts/check-database-boundaries.mjs`（并入 `pnpm lint` 的编排）。
 
 ## 11. 后续演进建议（评审补充）
 
-以下建议尚未定稿，按优先级排列，供后续迭代评审时决策。已定稿的决策（表名统一为 `settings`、`captureStatus` 枚举、时间戳毫秒、日志快照冗余、`provider_health` 与 `provider_model_health` 清理时机、转换事实并入 `request_attempts` 而不单独建表、正文按视角拆表（`request_contents` / `attempt_contents`，以 `attemptId` 唯一关联尝试）、用量按视角拆表（`request_usages` / `attempt_usages`）、`request_attempts` 去除 Provider 外键、唯一约束与 CHECK 约束、删除 `settings.version`、数据文件名带应用主版本号（`one-switch-v<主版本>.db`））已落入正文各章。
+以下建议尚未定稿，按优先级排列，供后续迭代评审时决策。已定稿的决策（表名统一为 `settings`、`captureStatus` 枚举、时间戳毫秒、日志快照冗余、`provider_health` 与 `provider_model_health` 清理时机、转换事实并入 `request_attempts` 而不单独建表、正文按视角拆表（`request_contents` / `attempt_contents`，以 `attemptId` 唯一关联尝试）、用量按视角拆表（`request_usages` / `attempt_usages`）、`request_attempts` 去除 Provider 外键、唯一约束与 CHECK 约束、删除 `settings.version`、数据文件名由库自己的 schema 版本号决定（`one-switch-<role>-v<n>.db`）、用户配置与系统观测拆为两个独立文件（无跨库外键，健康行惰性创建））已落入正文各章。
 
 ### 11.1 待产品决策
 

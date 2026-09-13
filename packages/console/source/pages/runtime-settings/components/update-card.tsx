@@ -8,28 +8,24 @@ import { Card, CardContent } from '@/components/ui/card'
 import { FormRow } from '@/components/form-kit'
 import { useToast } from '@/components/ui/toast'
 import { useLocale, useTranslation } from '@/i18n/provider'
+import { getPlatformCapabilities } from '@/platform/capabilities'
 
 type StatusBadgeProps = {
   status: UpdateCheckStatus
 }
 
 /**
- * `window.electronAPI.updater` 是 contextBridge 暴露出来的跨进程对象。
+ * 更新器是 contextBridge 暴露出来的跨进程对象。
  *
  * 原来是在渲染里现取（`typeof window !== 'undefined' ? window.electronAPI?.updater : undefined`）
  * 再把它写进 effect 的依赖数组。这种写法有两个问题：
- * 一是浏览器预览模式下根本没这个 API，二是跨进程对象的引用不保证稳定。
+ * 一是浏览器形态下根本没这个 API，二是跨进程对象的引用不保证稳定。
  * 一旦引用不稳定，下面的 effect 就会反复执行
  * 「refresh() → setState → 重渲染 → 引用又变了 → 再 refresh()」，形成无终止的同步更新链。
- * 这里惰性取一次并缓存，整个进程生命周期内引用恒定。
+ * `getPlatformCapabilities()` 惰性探测一次并缓存整个对象，引用恒定。
  */
-let cachedUpdater: UpdaterAPI | null | undefined
-
 function getUpdater(): UpdaterAPI | undefined {
-  if (cachedUpdater === undefined) {
-    cachedUpdater = typeof window === 'undefined' ? null : window.electronAPI?.updater ?? null
-  }
-  return cachedUpdater ?? undefined
+  return getPlatformCapabilities().updater ?? undefined
 }
 
 /**
@@ -284,9 +280,10 @@ export function UpdateCard() {
     }
   }
 
+  const capabilities = getPlatformCapabilities()
   const handleOpenReleases = async () => {
     if (!updater) {
-      window.open('https://github.com/yinxulai/one-switch/releases/latest', '_blank')
+      capabilities.openExternal('https://github.com/yinxulai/one-switch/releases/latest')
       return
     }
     await updater.openReleases()
@@ -295,7 +292,7 @@ export function UpdateCard() {
   if (!updater) return <PreviewCard />
 
   const { status, info, errorMessage, downloadProgress } = state
-  const isMacOS = window.electronAPI.platform === 'darwin'
+  const isMacOS = capabilities.os === 'darwin'
   const isChecking = status === 'checking'
   const isDownloading = status === 'downloading'
   const hasUpdate = status === 'update-available' || status === 'downloading' || status === 'downloaded'

@@ -15,8 +15,8 @@ import type {
 } from '@common/schemas'
 import { AttemptStatusSchema, ProtocolSchema, RequestContentCaptureStatusSchema, RequestStatusSchema, TransportKindSchema } from '@common/schemas'
 import { generateId, now } from '@common/utils'
-import { getDb } from './index'
-import { attemptContents, attemptUsages, requestAttributes, requestAttempts, requestContents, requestLogs, requestUsages } from './schema'
+import { getDataDb, reclaimUnusedSpace } from './index'
+import { attemptContents, attemptUsages, requestAttributes, requestAttempts, requestContents, requestLogs, requestUsages } from './data-schema'
 
 /**
  * 新建请求日志的入参。
@@ -130,7 +130,7 @@ export async function createRequestLog(input: CreateRequestLogInput): Promise<Re
   const id = input.id ?? generateId('req_')
   const time = now()
   const totalDurationMilliseconds = input.totalDurationMilliseconds ?? 0
-  getDb().insert(requestLogs).values({
+  getDataDb().insert(requestLogs).values({
     id,
     logicalModelId: input.logicalModelId,
     clientProtocol: input.clientProtocol,
@@ -140,7 +140,7 @@ export async function createRequestLog(input: CreateRequestLogInput): Promise<Re
     createdTime: time,
   }).run()
   if (input.attributes && input.attributes.length > 0) {
-    getDb().insert(requestAttributes).values(input.attributes.map(attribute => ({ ...attribute, requestId: id, createdTime: time }))).run()
+    getDataDb().insert(requestAttributes).values(input.attributes.map(attribute => ({ ...attribute, requestId: id, createdTime: time }))).run()
   }
   return {
     id,
@@ -164,12 +164,12 @@ export async function createRequestLog(input: CreateRequestLogInput): Promise<Re
 }
 
 export async function listRequestAttributes(requestId: string): Promise<RequestAttribute[]> {
-  return getDb().select().from(requestAttributes).where(eq(requestAttributes.requestId, requestId)).orderBy(requestAttributes.key).all().map(row => ({ ...row, createdTime: Number(row.createdTime) }))
+  return getDataDb().select().from(requestAttributes).where(eq(requestAttributes.requestId, requestId)).orderBy(requestAttributes.key).all().map(row => ({ ...row, createdTime: Number(row.createdTime) }))
 }
 
 export async function replaceRequestAttributes(requestId: string, attributes: Array<Omit<RequestAttribute, 'requestId' | 'createdTime'>>): Promise<void> {
   const time = now()
-  getDb().transaction(transaction => {
+  getDataDb().transaction(transaction => {
     transaction.delete(requestAttributes).where(eq(requestAttributes.requestId, requestId)).run()
     if (attributes.length > 0) transaction.insert(requestAttributes).values(attributes.map(attribute => ({ ...attribute, requestId, createdTime: time }))).run()
   })
@@ -187,7 +187,7 @@ export async function replaceRequestAttributes(requestId: string, attributes: Ar
 export async function recordAttemptUsage(input: AttemptUsageWriteInput): Promise<void> {
   const time = now()
   const rows = usageRows(input)
-  getDb().transaction(transaction => {
+  getDataDb().transaction(transaction => {
     transaction.delete(attemptUsages).where(eq(attemptUsages.attemptId, input.attemptId)).run()
     if (rows.length > 0) transaction.insert(attemptUsages).values(rows.map(row => ({ attemptId: input.attemptId, ...row, createdTime: time }))).run()
     if (!input.servesRequest) return
@@ -199,13 +199,13 @@ export async function recordAttemptUsage(input: AttemptUsageWriteInput): Promise
 }
 
 export async function getRequestUsage(requestId: string): Promise<RequestUsageValues> {
-  const rows = getDb().select({ type: requestUsages.type, value: requestUsages.value, rawValue: requestUsages.rawValue }).from(requestUsages).where(eq(requestUsages.requestId, requestId)).all()
+  const rows = getDataDb().select({ type: requestUsages.type, value: requestUsages.value, rawValue: requestUsages.rawValue }).from(requestUsages).where(eq(requestUsages.requestId, requestId)).all()
   const values = usageValues(rows)
   return { ...values, totalTokens: totalTokensOf(values) }
 }
 
 export async function getAttemptUsage(attemptId: string): Promise<RequestUsageValues> {
-  const rows = getDb().select({ type: attemptUsages.type, value: attemptUsages.value, rawValue: attemptUsages.rawValue }).from(attemptUsages).where(eq(attemptUsages.attemptId, attemptId)).all()
+  const rows = getDataDb().select({ type: attemptUsages.type, value: attemptUsages.value, rawValue: attemptUsages.rawValue }).from(attemptUsages).where(eq(attemptUsages.attemptId, attemptId)).all()
   const values = usageValues(rows)
   return { ...values, totalTokens: totalTokensOf(values) }
 }
@@ -220,34 +220,38 @@ export async function updateRequestLogStatus(id: string, update: RequestLogUpdat
   if (update.status !== undefined) fields.status = update.status
   if (update.totalDurationMilliseconds !== undefined) fields.totalDurationMilliseconds = update.totalDurationMilliseconds
   if (Object.keys(fields).length === 0) return
-  getDb().update(requestLogs).set(fields).where(eq(requestLogs.id, id)).run()
+  getDataDb().update(requestLogs).set(fields).where(eq(requestLogs.id, id)).run()
 }
 
 export async function listRequestLogs(limit = 50, offset = 0, filter?: RequestLogFilter): Promise<RequestLog[]> {
   const conditions = requestLogFilterConditions(filter)
-  const rows = getDb().select().from(requestLogs)
+  const rows = getDataDb().select().from(requestLogs)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(requestLogs.createdTime)).limit(limit).offset(offset).all()
   return mapRequestLogs(rows)
 }
 
 export async function getRequestLog(id: string): Promise<RequestLog | null> {
-  const row = getDb().select().from(requestLogs).where(eq(requestLogs.id, id)).get()
+  const row = getDataDb().select().from(requestLogs).where(eq(requestLogs.id, id)).get()
   return row ? mapRequestLogs([row])[0] ?? null : null
 }
 
 export async function countRequestLogs(filter?: RequestLogFilter): Promise<number> {
   const conditions = requestLogFilterConditions(filter)
-  return getDb().select({ count: sql<number>`count(*)` }).from(requestLogs)
+  return getDataDb().select({ count: sql<number>`count(*)` }).from(requestLogs)
     .where(conditions.length > 0 ? and(...conditions) : undefined).all()[0]?.count ?? 0
 }
 
 export async function pruneRequestLogs(retentionDays: number): Promise<void> {
-  await pruneRequestLogsInternal(retentionDays)
+  // 删完之后立刻回收空闲页：数据库是「一直会变大」的那个文件，
+  // 删掉的行只有回收过才真正还给磁盘。
+  if (pruneRequestLogsInternal(retentionDays) > 0) reclaimUnusedSpace()
 }
 
 export async function pruneRequestLogsBefore(retentionDays: number): Promise<number> {
-  return pruneRequestLogsInternal(retentionDays)
+  const deletedCount = pruneRequestLogsInternal(retentionDays)
+  if (deletedCount > 0) reclaimUnusedSpace()
+  return deletedCount
 }
 
 /**
@@ -257,11 +261,13 @@ export async function pruneRequestLogsBefore(retentionDays: number): Promise<num
  * 走了谁、快不快」全都在，只是看不到原文：历史统计与指标不会因为清理正文而失真。
  */
 export async function pruneRequestContents(retentionDays: number): Promise<void> {
-  pruneRequestContentsInternal(retentionDays)
+  if (pruneRequestContentsInternal(retentionDays) > 0) reclaimUnusedSpace()
 }
 
 export async function pruneRequestContentsBefore(retentionDays: number): Promise<number> {
-  return pruneRequestContentsInternal(retentionDays)
+  const deletedCount = pruneRequestContentsInternal(retentionDays)
+  if (deletedCount > 0) reclaimUnusedSpace()
+  return deletedCount
 }
 
 type CreateRequestAttemptInput = Omit<RequestAttempt, 'id' | 'createdTime' | 'errorCode' | 'errorMessage' | 'requestRewriteRuleIds' | 'responseRewriteRuleIds' | 'ttftMilliseconds'> & Partial<Pick<RequestAttempt, 'errorCode' | 'errorMessage' | 'requestRewriteRuleIds' | 'responseRewriteRuleIds' | 'ttftMilliseconds'>>
@@ -285,7 +291,7 @@ export async function createRequestAttempt(input: CreateRequestAttemptInput): Pr
     responseRewriteRuleIds: input.responseRewriteRuleIds ?? [],
     createdTime: now(),
   }
-  const inserted = getDb().insert(requestAttempts).values({
+  const inserted = getDataDb().insert(requestAttempts).values({
     ...attempt,
     requestRewriteRuleIds: JSON.stringify(attempt.requestRewriteRuleIds),
     responseRewriteRuleIds: JSON.stringify(attempt.responseRewriteRuleIds),
@@ -306,16 +312,16 @@ export async function createRequestContent(input: CreateRequestContentInput): Pr
     responseHeaders: input.responseHeaders ?? null,
     responseBody: input.responseBody ?? null,
   }
-  getDb().insert(requestContents).values({ id, ...content, createdTime: time, updatedTime: time }).run()
+  getDataDb().insert(requestContents).values({ id, ...content, createdTime: time, updatedTime: time }).run()
   return { id, ...content, createdTime: time, updatedTime: time }
 }
 
 export async function updateRequestContent(id: string, input: UpdateRequestContentInput): Promise<void> {
-  getDb().update(requestContents).set({ ...input, updatedTime: now() }).where(eq(requestContents.id, id)).run()
+  getDataDb().update(requestContents).set({ ...input, updatedTime: now() }).where(eq(requestContents.id, id)).run()
 }
 
 export async function listRequestContents(requestId: string): Promise<RequestContent[]> {
-  return getDb().select().from(requestContents).where(eq(requestContents.requestId, requestId)).orderBy(requestContents.createdTime).all().map(mapRequestContent)
+  return getDataDb().select().from(requestContents).where(eq(requestContents.requestId, requestId)).orderBy(requestContents.createdTime).all().map(mapRequestContent)
 }
 
 type CreateAttemptContentInput = Omit<AttemptContent, 'id' | 'createdTime' | 'updatedTime' | 'responseStatus' | 'responseHeaders' | 'responseBody'> & Partial<Pick<AttemptContent, 'responseStatus' | 'responseHeaders' | 'responseBody'>>
@@ -330,12 +336,12 @@ export async function createAttemptContent(input: CreateAttemptContentInput): Pr
     responseHeaders: input.responseHeaders ?? null,
     responseBody: input.responseBody ?? null,
   }
-  getDb().insert(attemptContents).values({ id, ...content, createdTime: time, updatedTime: time }).run()
+  getDataDb().insert(attemptContents).values({ id, ...content, createdTime: time, updatedTime: time }).run()
   return { id, ...content, createdTime: time, updatedTime: time }
 }
 
 export async function updateAttemptContent(id: string, input: UpdateAttemptContentInput): Promise<void> {
-  getDb().update(attemptContents).set({ ...input, updatedTime: now() }).where(eq(attemptContents.id, id)).run()
+  getDataDb().update(attemptContents).set({ ...input, updatedTime: now() }).where(eq(attemptContents.id, id)).run()
 }
 
 /**
@@ -345,7 +351,7 @@ export async function updateAttemptContent(id: string, input: UpdateAttemptConte
  * 持有，因此这里通过 `attemptId` 关联查询，不会出现两份归属不一致。
  */
 export async function listAttemptContents(requestId: string): Promise<AttemptContent[]> {
-  return getDb()
+  return getDataDb()
     .select({ content: attemptContents })
     .from(attemptContents)
     .innerJoin(requestAttempts, eq(attemptContents.attemptId, requestAttempts.id))
@@ -356,13 +362,13 @@ export async function listAttemptContents(requestId: string): Promise<AttemptCon
 }
 
 export async function listAttemptsByRequest(requestId: string): Promise<RequestAttempt[]> {
-  return getDb().select().from(requestAttempts).where(eq(requestAttempts.requestId, requestId)).orderBy(requestAttempts.attemptIndex).all().map(mapRequestAttempt)
+  return getDataDb().select().from(requestAttempts).where(eq(requestAttempts.requestId, requestId)).orderBy(requestAttempts.attemptIndex).all().map(mapRequestAttempt)
 }
 
 /** 批量列出一批请求的尝试：列表页一行一次查询会放大成上百次往返。 */
 export async function listAttemptsByRequests(requestIds: string[]): Promise<RequestAttempt[]> {
   if (requestIds.length === 0) return []
-  return getDb().select().from(requestAttempts).where(inArray(requestAttempts.requestId, requestIds)).orderBy(requestAttempts.requestId, requestAttempts.attemptIndex).all().map(mapRequestAttempt)
+  return getDataDb().select().from(requestAttempts).where(inArray(requestAttempts.requestId, requestIds)).orderBy(requestAttempts.requestId, requestAttempts.attemptIndex).all().map(mapRequestAttempt)
 }
 
 function requestLogFilterConditions(filter?: RequestLogFilter) {
@@ -385,7 +391,7 @@ function pruneRequestLogsInternal(retentionDays: number): number {
   // 既不撞 SQLite 的绑定变量上限，也不随数据量线性膨胀。
   const staleRequests = sql`(SELECT ${requestLogs.id} FROM ${requestLogs} WHERE ${requestLogs.createdTime} < ${cutoffTime})`
   const staleAttempts = sql`(SELECT ${requestAttempts.id} FROM ${requestAttempts} WHERE ${requestAttempts.requestId} IN ${staleRequests})`
-  return getDb().transaction(transaction => {
+  return getDataDb().transaction(transaction => {
     const staleCount = Number(transaction.select({ count: sql<number>`count(*)` }).from(requestLogs).where(lt(requestLogs.createdTime, cutoffTime)).get()?.count ?? 0)
     if (staleCount === 0) return 0
     // 先按外键倒序删子表，再删父表。
@@ -409,7 +415,7 @@ function pruneRequestLogsInternal(retentionDays: number): number {
 function pruneRequestContentsInternal(retentionDays: number): number {
   if (!Number.isInteger(retentionDays) || retentionDays < 1) return 0
   const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000
-  return getDb().transaction(transaction => {
+  return getDataDb().transaction(transaction => {
     const clientRows = transaction.delete(requestContents).where(lt(requestContents.createdTime, cutoffTime)).run()
     const upstreamRows = transaction.delete(attemptContents).where(lt(attemptContents.createdTime, cutoffTime)).run()
     // `changes` 的类型是 `number | bigint`（驱动差异），比较前统一收成 number。
@@ -473,10 +479,10 @@ function mapRequestLogs(rows: Array<typeof requestLogs.$inferSelect>): RequestLo
   if (rows.length === 0) return []
   const ids = rows.map(row => row.id)
   const usageByRequest = new Map<string, UsageValues>()
-  const usageRows = getDb().select({ requestId: requestUsages.requestId, type: requestUsages.type, value: requestUsages.value, rawValue: requestUsages.rawValue }).from(requestUsages).where(inArray(requestUsages.requestId, ids)).all()
+  const usageRows = getDataDb().select({ requestId: requestUsages.requestId, type: requestUsages.type, value: requestUsages.value, rawValue: requestUsages.rawValue }).from(requestUsages).where(inArray(requestUsages.requestId, ids)).all()
   for (const [requestId, group] of groupBy(usageRows, row => row.requestId)) usageByRequest.set(requestId, usageValues(group))
   const ttftByRequest = new Map<string, number | null>()
-  const ttftRows = getDb().select({ requestId: requestAttempts.requestId, value: min(requestAttempts.ttftMilliseconds) }).from(requestAttempts).where(inArray(requestAttempts.requestId, ids)).groupBy(requestAttempts.requestId).all()
+  const ttftRows = getDataDb().select({ requestId: requestAttempts.requestId, value: min(requestAttempts.ttftMilliseconds) }).from(requestAttempts).where(inArray(requestAttempts.requestId, ids)).groupBy(requestAttempts.requestId).all()
   for (const row of ttftRows) ttftByRequest.set(row.requestId, row.value == null ? null : Number(row.value))
   return rows.map(row => {
     const usage = usageByRequest.get(row.id) ?? EMPTY_USAGE_VALUES

@@ -1,8 +1,8 @@
 import { SettingsSchema } from '@common/schemas'
 import type { Settings } from '@common/schemas'
 import { now } from '@common/utils'
-import { getDb } from './index'
-import { settings } from './schema'
+import { getConfigDb } from './index'
+import { settings } from './config-schema'
 
 type SettingsChangeListener = (settings: Settings) => void
 const settingsChangeListeners: SettingsChangeListener[] = []
@@ -26,10 +26,12 @@ function notifySettingsChanged(newSettings: Settings): void {
 }
 
 export interface SettingsDefaults {
+  listenHost: string
   listenPort: number
 }
 
 let settingsDefaults: SettingsDefaults = {
+  listenHost: '127.0.0.1',
   listenPort: 9300,
 }
 
@@ -57,7 +59,7 @@ function parseStoredValue(key: string, raw: string | undefined): unknown {
 }
 
 export async function getSettings(): Promise<Settings> {
-  const db = getDb()
+  const db = getConfigDb()
   const rows = db.select().from(settings).all()
   const stored = new Map(rows.map(row => [row.key, row.value]))
   const parsed: Record<string, unknown> = {}
@@ -68,6 +70,7 @@ export async function getSettings(): Promise<Settings> {
   return SettingsSchema.parse({
     id: 'singleton',
     ...parsed,
+    listenHost: parsed.listenHost ?? settingsDefaults.listenHost,
     listenPort: parsed.listenPort ?? settingsDefaults.listenPort,
     updatedTime: now(),
   })
@@ -76,7 +79,7 @@ export async function getSettings(): Promise<Settings> {
 export async function updateSettings(
   updates: Partial<Omit<Settings, 'id' | 'updatedTime'>>,
 ): Promise<Settings> {
-  const db = getDb()
+  const db = getConfigDb()
   for (const [key, value] of Object.entries(updates)) {
     if (value === undefined) continue
     db.insert(settings)

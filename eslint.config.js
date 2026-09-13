@@ -25,7 +25,7 @@ export default [
     },
   },
   {
-    files: ['apps/app/source/**/*.{ts,tsx}', 'packages/*/source/**/*.{ts,tsx}'],
+    files: ['apps/app/source/**/*.{ts,tsx}', 'apps/cli/source/**/*.{ts,tsx}', 'packages/*/source/**/*.{ts,tsx}'],
     plugins: { i18n },
     rules: {
       'i18n/no-hardcoded-cjk': 'error',
@@ -36,6 +36,7 @@ export default [
     files: [
       'packages/contracts/source/i18n/catalogs/**',
       'apps/app/source/**/*.test.{ts,tsx}',
+      'apps/cli/source/**/*.test.{ts,tsx}',
       'packages/*/source/**/*.test.{ts,tsx}',
       'apps/app/source/**/test-support.ts',
       'packages/*/source/**/test-support.ts',

@@ -2,14 +2,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { closeDatabase, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
+import { closeDatabases, initDatabases } from './index'
 import { createWorkflow, getLatestWorkflow, getWorkflow, listWorkflows, updateWorkflow } from './workflow-store'
 
 const temporaryDirectories: string[] = []
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true })
   }
@@ -23,7 +22,7 @@ function createTemporaryDirectory(): string {
 
 describe('workflow store', () => {
   it('creates versioned workflow records and resolves the latest record by type', async () => {
-    await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)
+    await initDatabases(createTemporaryDirectory())
 
     const first = await createWorkflow({
       type: 'router',
@@ -47,7 +46,7 @@ describe('workflow store', () => {
   })
 
   it('updates workflow metadata without changing the version identity', async () => {
-    await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)
+    await initDatabases(createTemporaryDirectory())
 
     const workflow = await createWorkflow({
       type: 'router',

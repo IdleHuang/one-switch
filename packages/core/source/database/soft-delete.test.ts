@@ -3,9 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closeDatabase, getDb, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
-import { protocolConverters, providerEndpoints, providerModelEndpoints, schedulingPolicies } from './schema'
+import { closeDatabases, getConfigDb, initDatabases } from './index'
+import { protocolConverters, providerEndpoints, providerModelEndpoints, schedulingPolicies } from './config-schema'
 import {
   createProviderModelRoute,
   deleteProviderModelRoute,
@@ -20,11 +19,11 @@ let temporaryDirectory: string
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-soft-delete-'))
-  await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+  await initDatabases(temporaryDirectory)
 })
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   fs.rmSync(temporaryDirectory, { recursive: true, force: true })
 })
 
@@ -33,19 +32,19 @@ afterEach(async () => {
  * 只有直接看表才能证明「行还在，只是被打了标」。
  */
 function endpointRows(providerId: string) {
-  return getDb().select().from(providerEndpoints).where(eq(providerEndpoints.providerId, providerId)).all()
+  return getConfigDb().select().from(providerEndpoints).where(eq(providerEndpoints.providerId, providerId)).all()
 }
 
 function bindingRows(providerModelId: string) {
-  return getDb().select().from(providerModelEndpoints).where(eq(providerModelEndpoints.providerModelId, providerModelId)).all()
+  return getConfigDb().select().from(providerModelEndpoints).where(eq(providerModelEndpoints.providerModelId, providerModelId)).all()
 }
 
 function converterRows(providerModelEndpointId: string) {
-  return getDb().select().from(protocolConverters).where(eq(protocolConverters.providerModelEndpointId, providerModelEndpointId)).all()
+  return getConfigDb().select().from(protocolConverters).where(eq(protocolConverters.providerModelEndpointId, providerModelEndpointId)).all()
 }
 
 function schedulingPolicyRows(logicalModelId: string) {
-  return getDb().select().from(schedulingPolicies).where(eq(schedulingPolicies.logicalModelId, logicalModelId)).all()
+  return getConfigDb().select().from(schedulingPolicies).where(eq(schedulingPolicies.logicalModelId, logicalModelId)).all()
 }
 
 type SoftDeletableRow = { enabled: boolean; deletedTime: number | null }

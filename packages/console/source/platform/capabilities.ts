@@ -1,0 +1,65 @@
+/**
+ * 宿主能力。
+ *
+ * 控制台有两种运行形态：Electron 窗口里（`window.electronAPI` 由 preload 注入）和浏览器里
+ * （命令行形态托管，或 Vite dev server）。形态差异只在这一层判断一次，别处一律用
+ * `getPlatformCapabilities()`——业务组件里不该再出现 `window.electronAPI` 字面量
+ * （见 `product/packaging.md` §5.4）。
+ *
+ * 拿不到的能力就是 `null`：界面按「正常但不可用」渲染，不换一套简化排版。
+ */
+
+export type PlatformName = 'electron' | 'web'
+export type PlatformOs = 'darwin' | 'win32' | 'linux' | 'unknown'
+
+export interface PlatformCapabilities {
+  name: PlatformName
+  /** 宿主操作系统。只有 Electron 形态拿得到准确值，浏览器形态按 UA 猜。 */
+  os: PlatformOs
+  /** 应用内更新。浏览器形态没有这个概念（产物是托管在本地服务上的静态文件）。 */
+  updater: UpdaterAPI | null
+  /** 用系统默认方式打开外部链接。 */
+  openExternal: (url: string) => void
+}
+
+let cached: PlatformCapabilities | null = null
+
+export function getPlatformCapabilities(): PlatformCapabilities {
+  if (!cached) cached = detectCapabilities()
+  return cached
+}
+
+function detectCapabilities(): PlatformCapabilities {
+  const electronApi = typeof window === 'undefined' ? undefined : window.electronAPI
+  if (electronApi) {
+    return {
+      name: 'electron',
+      os: normalizeOs(electronApi.platform),
+      // `?? null`：老版本的 preload 可能没暴露 updater，缺能力不代表崩。
+      updater: electronApi.updater ?? null,
+      openExternal: url => electronApi.sendMessage('open-external', url),
+    }
+  }
+  return {
+    name: 'web',
+    os: detectBrowserOs(),
+    updater: null,
+    openExternal: url => {
+      if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
+    },
+  }
+}
+
+function normalizeOs(platform: string | undefined): PlatformOs {
+  if (platform === 'darwin' || platform === 'win32' || platform === 'linux') return platform
+  return 'unknown'
+}
+
+function detectBrowserOs(): PlatformOs {
+  if (typeof navigator === 'undefined') return 'unknown'
+  const source = `${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`.toLowerCase()
+  if (source.includes('mac')) return 'darwin'
+  if (source.includes('win')) return 'win32'
+  if (source.includes('linux') || source.includes('x11')) return 'linux'
+  return 'unknown'
+}

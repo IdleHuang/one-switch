@@ -52,11 +52,14 @@ packages/core/source/
 │   ├── request-rewrite/ capabilities/  # 请求重写、能力探测
 │   ├── observability/                  # 日志、用量与观测
 │   └── runtime/                        # 代理服务装配与生命周期
-├── database/                         # SQLite + Drizzle 持久化层
-│   ├── index.ts / schema.ts
+├── database/                         # SQLite + Drizzle 持久化层（两个库、两份 schema）
+│   ├── index.ts                      # 双句柄、两条迁移链、启动清理孤儿健康行
+│   ├── config-schema.ts              # 用户配置（12 张表）
+│   ├── data-schema.ts                # 观测数据（10 张表）
 │   ├── provider-store.ts / model-store.ts / logical-model-store.ts
-│   ├── settings-store.ts / health-store.ts / request-log-store.ts
-│   └── analytics-store.ts / development-seed.ts
+│   ├── settings-store.ts / workflow-store.ts / request-rewrite-rule-store.ts
+│   ├── health-store.ts / request-log-store.ts / analytics-store.ts / runtime-log-store.ts
+│   └── development-seed.ts
 ├── infrastructure/{secrets/,security/}
 └── security/                          # Host validation 等安全适配
 ```

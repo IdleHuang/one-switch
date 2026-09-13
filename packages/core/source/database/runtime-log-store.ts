@@ -1,5 +1,5 @@
 import type { LogEntry } from '@common/schemas'
-import { getDb } from './index'
+import { getDataDb, reclaimUnusedSpace } from './index'
 
 interface ListRuntimeLogsOptions {
   after?: number
@@ -25,7 +25,7 @@ function mapLogRow(row: RuntimeLogRow): LogEntry {
 }
 
 export function createRuntimeLog(level: LogEntry['level'], message: string, timestamp = Date.now()): LogEntry {
-  const result = getDb().$client
+  const result = getDataDb().$client
     .prepare('INSERT INTO runtime_logs (level, message, timestamp) VALUES (?, ?, ?)')
     .run(level, message, timestamp)
 
@@ -42,13 +42,13 @@ export function listRuntimeLogs(options?: ListRuntimeLogsOptions): LogEntry[] {
   const limit = options?.limit ?? DEFAULT_LIMIT
 
   if (after > 0) {
-    const rows = getDb().$client
+    const rows = getDataDb().$client
       .prepare('SELECT id, level, message, timestamp FROM runtime_logs WHERE id > ? ORDER BY id DESC LIMIT ?')
       .all(after, limit) as RuntimeLogRow[]
     return rows.map(mapLogRow)
   }
 
-  const rows = getDb().$client
+  const rows = getDataDb().$client
     .prepare('SELECT id, level, message, timestamp FROM runtime_logs ORDER BY id DESC LIMIT ?')
     .all(limit) as RuntimeLogRow[]
   return rows.map(mapLogRow)
@@ -83,29 +83,31 @@ function buildRuntimeLogConditions(filter?: RuntimeLogFilter): {
 
 export function listRuntimeLogsPaged(limit: number, offset: number, filter?: RuntimeLogFilter): RuntimeLogPage {
   const { sql, params } = buildRuntimeLogConditions(filter)
-  const rows = getDb().$client
+  const rows = getDataDb().$client
     .prepare(`SELECT id, level, message, timestamp FROM runtime_logs ${sql} ORDER BY id DESC LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as RuntimeLogRow[]
-  const countRow = getDb().$client
+  const countRow = getDataDb().$client
     .prepare(`SELECT count(*) AS total FROM runtime_logs ${sql}`)
     .get(...params) as { total: number | bigint } | undefined
   return { logs: rows.map(mapLogRow), total: Number(countRow?.total ?? 0) }
 }
 
 export function listAllRuntimeLogs(): LogEntry[] {
-  const rows = getDb().$client
+  const rows = getDataDb().$client
     .prepare('SELECT id, level, message, timestamp FROM runtime_logs ORDER BY id ASC')
     .all() as RuntimeLogRow[]
   return rows.map(mapLogRow)
 }
 
 export function clearRuntimeLogs(): void {
-  getDb().$client.prepare('DELETE FROM runtime_logs').run()
+  getDataDb().$client.prepare('DELETE FROM runtime_logs').run()
+  reclaimUnusedSpace()
 }
 
 export function pruneRuntimeLogsBefore(retentionDays: number): number {
   if (!Number.isInteger(retentionDays) || retentionDays < 1) return 0
   const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
-  const result = getDb().$client.prepare('DELETE FROM runtime_logs WHERE timestamp < ?').run(cutoff)
+  const result = getDataDb().$client.prepare('DELETE FROM runtime_logs WHERE timestamp < ?').run(cutoff)
+  reclaimUnusedSpace()
   return Number(result.changes)
 }

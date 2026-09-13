@@ -1,10 +1,11 @@
-import { app, BrowserWindow, Menu, nativeImage, ipcMain, dialog, session } from 'electron'
+import { app, BrowserWindow, Menu, nativeImage, ipcMain, dialog, session, shell } from 'electron'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startServer, stopServer } from '@server/index'
 import { installLogCapture } from '@server/management/infrastructure/log-buffer'
-import { createDatabaseFileName } from '@common/database-file'
+import { listCurrentDatabaseFileNames } from '@common/database-file'
+import { createRuntimeConfig } from '@common/runtime-config'
 import { getRuntimeProfile } from '@common/runtime-profile'
 import { ElectronSecretStore } from './secret-store'
 import { TrayManager } from './tray-manager'
@@ -31,12 +32,13 @@ const __dirname = path.dirname(__filename)
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL)
 const runtimeProfile = getRuntimeProfile(isDevelopment ? 'development' : 'production')
-// 数据文件名带主版本号：换了不兼容的结构就换一个文件，旧库原样留在磁盘上，不需要写迁移。
-const databaseFileName = createDatabaseFileName(app.getVersion())
 
 process.env.DIST = path.join(__dirname, '..')
 
-app.setPath('userData', path.join(app.getPath('appData'), runtimeProfile.userDataDirectoryName))
+// 数据目录固定落在用户主目录，与命令行形态同一处（见 `product/packaging.md` §5.5）：两种形态
+// 共用同一份配置与同一对数据库文件，所以「先用命令行跑起来、再开桌面端」不会看到两套空数据。
+// Electron 自己的缓存与凭据也跟着搬过去——`app.getPath('userData')` 是它们的唯一落点。
+app.setPath('userData', path.join(os.homedir(), runtimeProfile.dataDirectoryName))
 
 let win: BrowserWindow | null = null
 let trayManager: TrayManager | null = null
@@ -68,7 +70,26 @@ function registerUpdaterIpc() {
   ipcMain.handle('updater:open-releases', () => updater.openReleasesPage())
 }
 
+/**
+ * 控制台请求用系统默认方式打开外部链接（`PlatformCapabilities.openExternal`）。
+ *
+ * 只放行 `https:`：渲染进程发过来的字符串不能直接交给 `shell.openExternal`，
+ * 否则 `file:` / 自定义协议会被当成命令执行。
+ */
+function registerExternalLinkIpc(): void {
+  ipcMain.on('open-external', (_event, url: unknown) => {
+    if (typeof url !== 'string' || !url.startsWith('https://')) {
+      console.warn('[one-switch] refused to open external url', url)
+      return
+    }
+    void shell.openExternal(url).catch(error => {
+      console.error('[one-switch] failed to open external url', formatError(error))
+    })
+  })
+}
+
 registerUpdaterIpc()
+registerExternalLinkIpc()
 
 function reportFatalError(error: unknown, title = nativeTranslator()('native.error.fatalTitle')): void {
   if (fatalErrorShown) return
@@ -160,7 +181,7 @@ function logStartupBanner() {
     `  CPU Cores   :  ${os.cpus().length} (${os.cpus()[0]?.model ?? 'unknown'})`,
     `  Memory      :  ${Math.round(os.totalmem() / 1024 / 1024)} MB total`,
     `  User Data   :  ${app.getPath('userData')}`,
-    `  Data File   :  ${databaseFileName}`,
+    `  Databases   :  ${listCurrentDatabaseFileNames().join(', ')}`,
     `  Proxy Port  :  ${runtimeProfile.proxyPort}`,
     `  Admin Port  :  ${runtimeProfile.managementPort}`,
     `  PID         :  ${process.pid}`,
@@ -296,12 +317,16 @@ app.whenReady().then(async () => {
   logStartupBanner()
 
   const userDataDir = app.getPath('userData')
+  const runtimeConfig = createRuntimeConfig({
+    environment: runtimeProfile.environment,
+    dataDir: userDataDir,
+    // 桌面形态的窗口直接 loadFile 加载控制台产物，不由管理服务托管静态文件。
+    serveWeb: false,
+  })
   try {
     await startServer({
-      dataDir: userDataDir,
-      databaseFileName,
+      runtimeConfig,
       secretStore: new ElectronSecretStore(path.join(userDataDir, 'secrets.json')),
-      runtimeProfile,
       systemProxyResolver: targetUrl => session.defaultSession.resolveProxy(targetUrl),
     })
     console.info('[one-switch] server started successfully')

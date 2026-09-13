@@ -1,6 +1,36 @@
 import { sql } from 'drizzle-orm'
 import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
+/**
+ * 数据库（`one-switch-data-v1.db`）：**系统写的东西**（观测数据）。
+ *
+ * 请求日志、请求属性、请求级与尝试级用量、尝试、客户端与上游两侧的正文、运行时日志、
+ * 供应商与供应商模型的健康状态——全部是系统在跑的过程中自己产生的，用户不可编辑。
+ * 文件名的 schema 版本见 `@common/database-file`。
+ *
+ * 三条不变量，改动这个文件前先读完：
+ *
+ *   1. **不许 import `./config-schema`**，也不许反过来。两个库之间不存在外键、JOIN 与事务。
+ *   2. **这个文件里的东西必须可以整个删掉。** 删掉以后应用照常启动：请求日志清空、
+ *      健康状态归零（等于「所有上游都是健康的」），配置一行不少。任何「删了日志就没法启动」
+ *      或「日志里存着配置的唯一副本」的设计都是错的。
+ *   3. **这里的所有写操作都在请求路径上**，所以连接层给它 `synchronous = NORMAL`
+ *      与 `auto_vacuum = INCREMENTAL`（见 `./index.ts`）：宁可断电丢最后几条日志，
+ *      也不要让每个请求付一次 fsync。
+ *
+ * 关于 `provider_id` / `provider_model_id` 这两列：
+ *
+ * 它们指向配置库里的行，但**没有外键**——SQLite 的外键不能跨文件，而跨库写事务也不存在。
+ * 代价是这里可能出现「配置里已经删掉的供应商，健康表里还留着行」，处理方式是：
+ * 启动时做一次孤儿清理（`./health-store.ts` 的 `pruneOrphanHealthRows`，**唯一**一处
+ * 会同时读两个库的地方），运行期出现的孤儿行由懒创建 + 覆盖写自然收敛。
+ * 换来的是「删一个供应商」不需要跨库协调，也不会因为日志库损坏而删不掉配置。
+ *
+ * 正因为没有外键兜底，健康表的两个「成功」写入必须是 **upsert 而不是 `update`**：
+ * 行不存在时 `update` 影响 0 行、不报错、静默什么都不做，而「第一次成功」恰恰是最常见的
+ * 一次调用。见 `./health-store.ts`。
+ */
+
 /** 允许写入 `request_usages` / `attempt_usages` 的用量类型，避免出现无意义的透视键。 */
 const USAGE_TYPE_VALUES = "'inputTokens', 'outputTokens', 'cachedInputTokens', 'cacheCreationInputTokens', 'reasoningTokens', 'raw'"
 
@@ -10,36 +40,13 @@ const REQUEST_STATUS_VALUES = "'pending', 'success', 'failed', 'cancelled'"
 /** 尝试的状态取值。尝试行只在拿到结果后写入，「还没有结果」由没有行表达。 */
 const ATTEMPT_STATUS_VALUES = "'success', 'failed', 'cancelled'"
 
-export const settings = sqliteTable(
-  'settings',
-  {
-    key: text('key').primaryKey(),
-    value: text('value').notNull(),
-    valueType: text('valueType').notNull().default('string'),
-    updatedTime: integer('updatedTime').notNull(),
-  },
-  table => [index('idx_settings_updated_time').on(table.updatedTime)],
-)
-
-export const providers = sqliteTable(
-  'providers',
-  {
-    id: text('id').primaryKey(),
-    name: text('name').notNull(),
-    description: text('description').notNull().default(''),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-    createdTime: integer('createdTime').notNull(),
-    updatedTime: integer('updatedTime').notNull(),
-    deletedTime: integer('deletedTime'),
-  },
-  table => [
-    index('idx_providers_enabled').on(table.enabled),
-    index('idx_providers_deleted_time').on(table.deletedTime),
-  ],
-)
-
+/**
+ * 供应商健康状态。**每个成功请求都会写一次这张表**，所以它属于数据库而不是配置库。
+ *
+ * `providerId` 无外键引用（跨库），语义上是配置库里某个供应商的 id，见文件头。
+ */
 export const providerHealth = sqliteTable('provider_health', {
-  providerId: text('providerId').primaryKey().references(() => providers.id),
+  providerId: text('providerId').primaryKey(),
   consecutiveFailures: integer('consecutiveFailures').notNull().default(0),
   cooldownUntilTime: integer('cooldownUntilTime'),
   lastSuccessTime: integer('lastSuccessTime'),
@@ -47,185 +54,19 @@ export const providerHealth = sqliteTable('provider_health', {
   updatedTime: integer('updatedTime').notNull(),
 })
 
-export const providerSettings = sqliteTable(
-  'provider_settings',
-  {
-    providerId: text('providerId').notNull().references(() => providers.id),
-    key: text('key').notNull(),
-    value: text('value').notNull(),
-    valueType: text('valueType').notNull().default('string'),
-    updatedTime: integer('updatedTime').notNull(),
-  },
-  table => [
-    primaryKey({ columns: [table.providerId, table.key] }),
-    index('idx_provider_settings_key').on(table.key),
-  ],
-)
-
-export const providerEndpoints = sqliteTable(
-  'provider_endpoints',
-  {
-    id: text('id').primaryKey(),
-    providerId: text('providerId').notNull().references(() => providers.id),
-    protocol: text('protocol').notNull(),
-    url: text('url').notNull(),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-    createdTime: integer('createdTime').notNull(),
-    updatedTime: integer('updatedTime').notNull(),
-    deletedTime: integer('deletedTime'),
-  },
-  table => [
-    // 同一供应商同一协议只允许一条**未删除**的端点：软删除的行留在表里，
-    // 因此唯一约束必须是部分索引，否则重新添加同一协议会撞上历史行。
-    uniqueIndex('idx_provider_endpoints_provider_protocol_active')
-      .on(table.providerId, table.protocol)
-      .where(sql`deletedTime IS NULL`),
-    index('idx_provider_endpoints_protocol').on(table.protocol, table.enabled),
-    index('idx_provider_endpoints_deleted_time').on(table.deletedTime),
-  ],
-)
-
-export const providerModels = sqliteTable(
-  'provider_models',
-  {
-    id: text('id').primaryKey(),
-    providerId: text('providerId').notNull().references(() => providers.id),
-    modelName: text('modelName').notNull(),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-    createdTime: integer('createdTime').notNull(),
-    updatedTime: integer('updatedTime').notNull(),
-    deletedTime: integer('deletedTime'),
-  },
-  table => [
-    uniqueIndex('idx_provider_models_provider_model_active')
-      .on(table.providerId, table.modelName)
-      .where(sql`deletedTime IS NULL`),
-    index('idx_provider_models_enabled').on(table.providerId, table.enabled, table.deletedTime),
-  ],
-)
-
+/**
+ * 供应商模型健康状态。写频率与 `provider_health` 同级，理由同上。
+ *
+ * `providerModelId` 无外键引用（跨库）。
+ */
 export const providerModelHealth = sqliteTable('provider_model_health', {
-  providerModelId: text('providerModelId').primaryKey().references(() => providerModels.id),
+  providerModelId: text('providerModelId').primaryKey(),
   consecutiveFailures: integer('consecutiveFailures').notNull().default(0),
   cooldownUntilTime: integer('cooldownUntilTime'),
   lastSuccessTime: integer('lastSuccessTime'),
   lastFailureTime: integer('lastFailureTime'),
   updatedTime: integer('updatedTime').notNull(),
 })
-
-export const providerModelEndpoints = sqliteTable(
-  'provider_model_endpoints',
-  {
-    id: text('id').primaryKey(),
-    providerModelId: text('providerModelId').notNull().references(() => providerModels.id),
-    providerEndpointId: text('providerEndpointId').notNull().references(() => providerEndpoints.id),
-    url: text('url'),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-    createdTime: integer('createdTime').notNull(),
-    updatedTime: integer('updatedTime').notNull(),
-    deletedTime: integer('deletedTime'),
-  },
-  table => [
-    uniqueIndex('idx_provider_model_endpoints_unique_active')
-      .on(table.providerModelId, table.providerEndpointId)
-      .where(sql`deletedTime IS NULL`),
-    index('idx_provider_model_endpoints_provider_endpoint').on(table.providerEndpointId, table.enabled),
-    index('idx_provider_model_endpoints_deleted_time').on(table.deletedTime),
-  ],
-)
-
-export const requestRewriteRules = sqliteTable('request_rewrite_rules', {
-  id: text('id').primaryKey(), name: text('name').notNull(), description: text('description').notNull().default(''), enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true), scope: text('scope').notNull().default('model'), schemaVersion: integer('schemaVersion').notNull().default(1), source: text('source').notNull().default('user'), match: text('match').notNull(), actions: text('actions').notNull(), testCases: text('testCases').notNull().default('[]'), createdTime: integer('createdTime').notNull(), updatedTime: integer('updatedTime').notNull(), deletedTime: integer('deletedTime'),
-}, table => [index('idx_request_rewrite_rules_enabled').on(table.enabled), index('idx_request_rewrite_rules_scope').on(table.scope), index('idx_request_rewrite_rules_deleted_time').on(table.deletedTime)])
-
-export const providerModelRequestRewriteRules = sqliteTable('provider_model_request_rewrite_rules', {
-  providerModelId: text('providerModelId').notNull().references(() => providerModels.id), requestRewriteRuleId: text('requestRewriteRuleId').notNull().references(() => requestRewriteRules.id), priority: integer('priority').notNull(), enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true), createdTime: integer('createdTime').notNull(), updatedTime: integer('updatedTime').notNull(), deletedTime: integer('deletedTime'),
-}, table => [
-  primaryKey({ columns: [table.providerModelId, table.requestRewriteRuleId] }),
-  uniqueIndex('idx_provider_model_request_rewrite_rule_priority_active').on(table.providerModelId, table.priority).where(sql`deletedTime IS NULL`),
-  index('idx_provider_model_request_rewrite_rules_deleted_time').on(table.deletedTime),
-])
-
-export const protocolConverters = sqliteTable(
-  'protocol_converters',
-  {
-    id: text('id').primaryKey(),
-    providerModelEndpointId: text('providerModelEndpointId').notNull().references(() => providerModelEndpoints.id),
-    clientProtocol: text('clientProtocol').notNull(),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
-    createdTime: integer('createdTime').notNull(),
-    updatedTime: integer('updatedTime').notNull(),
-    deletedTime: integer('deletedTime'),
-  },
-  table => [
-    uniqueIndex('idx_protocol_converters_unique_active')
-      .on(table.providerModelEndpointId, table.clientProtocol)
-      .where(sql`deletedTime IS NULL`),
-    index('idx_protocol_converters_protocol').on(table.clientProtocol, table.enabled),
-    index('idx_protocol_converters_deleted_time').on(table.deletedTime),
-  ],
-)
-
-export const logicalModels = sqliteTable(
-  'logical_models',
-  {
-    id: text('id').primaryKey(),
-    name: text('name').notNull().unique(),
-    description: text('description').notNull().default(''),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-    /**
-     * 逻辑模型在管理页的展示顺序，数值越小越靠前。
-     * 全为 0（含 `default`）时回退到 `createdTime` 排序。
-     */
-    sortOrder: integer('sortOrder').notNull().default(0),
-    createdTime: integer('createdTime').notNull(),
-    updatedTime: integer('updatedTime').notNull(),
-    deletedTime: integer('deletedTime'),
-  },
-  table => [index('idx_logical_models_enabled').on(table.enabled), index('idx_logical_models_deleted_time').on(table.deletedTime)],
-)
-
-export const workflows = sqliteTable(
-  'workflows',
-  {
-    id: text('id').primaryKey(),
-    type: text('type').notNull(),
-    version: integer('version').notNull(),
-    name: text('name').notNull(),
-    description: text('description').notNull().default(''),
-    definition: text('definition').notNull(),
-    createdTime: integer('createdTime').notNull(),
-    updatedTime: integer('updatedTime').notNull(),
-    deletedTime: integer('deletedTime'),
-  },
-  table => [
-    uniqueIndex('idx_workflows_type_version').on(table.type, table.version),
-    index('idx_workflows_type').on(table.type, table.deletedTime),
-    index('idx_workflows_deleted_time').on(table.deletedTime),
-  ],
-)
-
-export const schedulingPolicies = sqliteTable(
-  'scheduling_policies',
-  {
-    logicalModelId: text('logicalModelId').notNull().references(() => logicalModels.id),
-    providerModelId: text('providerModelId').notNull().references(() => providerModels.id),
-    strategy: text('strategy').notNull().default('priority'),
-    priority: integer('priority').notNull().default(0),
-    weight: integer('weight').notNull().default(100),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-    createdTime: integer('createdTime').notNull(),
-    updatedTime: integer('updatedTime').notNull(),
-    deletedTime: integer('deletedTime'),
-  },
-  table => [
-    // 主键保留为「逻辑模型 + 供应商模型」：软删除的行会被重新加入时原地复活，
-    // 因此不需要为它让位，也就不需要部分索引（主键本身无法条件化）。
-    primaryKey({ columns: [table.logicalModelId, table.providerModelId] }),
-    index('idx_scheduling_policies_route').on(table.logicalModelId, table.enabled, table.priority, table.weight),
-    index('idx_scheduling_policies_deleted_time').on(table.deletedTime),
-  ],
-)
 
 export const requestLogs = sqliteTable(
   'request_logs',
@@ -246,6 +87,9 @@ export const requestLogs = sqliteTable(
      * 本次请求解析出的逻辑模型。为 `null` 表示请求在解析出逻辑模型之前
      * 就已经失败（模型非法 / 没有启用的逻辑模型），此时该请求不会产生任何
      * 上游尝试。
+     *
+     * 指向配置库 `logical_models`，**无外键**（跨库）。逻辑模型在请求发起当天就被删掉时，
+     * 这里允许留下悬空 id：日志是历史事实，不该因为配置改名而改写或删除。
      */
     logicalModelId: text('logicalModelId'),
     /** 本次请求从开始到收尾的总耗时：请求级唯一的数值指标，因此直接作列。 */
@@ -346,6 +190,10 @@ export const requestAttempts = sqliteTable(
   {
     id: text('id').primaryKey(),
     requestId: text('requestId').notNull().references(() => requestLogs.id),
+    /**
+     * 供应商与供应商模型 id。**没有外键**（指向配置库），并且下面两列名称是
+     * **写入当时的快照**：配置里改名字或删行都不影响已有日志。
+     */
     providerId: text('providerId').notNull(),
     providerModelId: text('providerModelId').notNull(),
     providerName: text('providerName').notNull(),
@@ -454,18 +302,8 @@ export const runtimeLogs = sqliteTable(
   table => [index('idx_runtime_logs_timestamp').on(table.timestamp), index('idx_runtime_logs_level_timestamp').on(table.level, table.timestamp)],
 )
 
-export type ProviderRow = typeof providers.$inferSelect
-export type LogicalModelRow = typeof logicalModels.$inferSelect
-export type ProviderModelRow = typeof providerModels.$inferSelect
 export type ProviderHealthRow = typeof providerHealth.$inferSelect
 export type ProviderModelHealthRow = typeof providerModelHealth.$inferSelect
-export type SettingsRow = typeof settings.$inferSelect
-export type ProviderSettingRow = typeof providerSettings.$inferSelect
-export type ProviderEndpointRow = typeof providerEndpoints.$inferSelect
-export type ProviderModelEndpointRow = typeof providerModelEndpoints.$inferSelect
-export type ProtocolConverterRow = typeof protocolConverters.$inferSelect
-export type SchedulingPolicyRow = typeof schedulingPolicies.$inferSelect
-export type WorkflowRow = typeof workflows.$inferSelect
 export type RuntimeLogRow = typeof runtimeLogs.$inferSelect
 export type RequestLogRow = typeof requestLogs.$inferSelect
 export type RequestAttributeRow = typeof requestAttributes.$inferSelect

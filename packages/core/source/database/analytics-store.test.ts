@@ -3,21 +3,20 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
-import { closeDatabase, getDb, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
+import { closeDatabases, getDataDb, initDatabases } from './index'
 import { createRequestAttempt, createRequestLog } from './request-log-store'
-import { requestAttempts, requestLogs } from './schema'
+import { requestAttempts, requestLogs } from './data-schema'
 import { formatLatencyBucketRange, getLatencyDistribution, getModelStats } from './analytics-store'
 
 let temporaryDirectory: string
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-analytics-store-'))
-  await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+  await initDatabases(temporaryDirectory)
 })
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   fs.rmSync(temporaryDirectory, { recursive: true, force: true })
 })
 
@@ -125,8 +124,8 @@ describe('getLatencyDistribution', () => {
   it('excludes samples created before the requested time window', async () => {
     await createLogWithTtft(120)
     await createLogWithTtft(120)
-    const staleId = getDb().select({ id: requestLogs.id }).from(requestLogs).all()[0].id
-    getDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(100, staleId)
+    const staleId = getDataDb().select({ id: requestLogs.id }).from(requestLogs).all()[0].id
+    getDataDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(100, staleId)
 
     expect(await getLatencyDistribution(1_000)).toEqual([{ range: '100ms-200ms', count: 1 }])
   })
@@ -187,8 +186,8 @@ describe('getModelStats', () => {
     // 模型名与提供方必须来自同一条记录：不能出现「A 家的 id 配 B 家的名字」。
     await createRankedAttempt({ providerId: 'prov_current', providerName: '现提供方' })
     const staleRequestId = await createRankedAttempt({ providerId: 'prov_stale', providerName: '旧提供方' })
-    const staleAttemptId = getDb().select({ id: requestAttempts.id }).from(requestAttempts).where(eq(requestAttempts.requestId, staleRequestId)).all()[0].id
-    getDb().$client.prepare('UPDATE request_attempts SET createdTime = ? WHERE id = ?').run(1, staleAttemptId)
+    const staleAttemptId = getDataDb().select({ id: requestAttempts.id }).from(requestAttempts).where(eq(requestAttempts.requestId, staleRequestId)).all()[0].id
+    getDataDb().$client.prepare('UPDATE request_attempts SET createdTime = ? WHERE id = ?').run(1, staleAttemptId)
 
     expect(await getModelStats(0)).toEqual([
       expect.objectContaining({ providerId: 'prov_current', providerName: '现提供方', providerModelName: 'ranking-model', attempts: 2 }),

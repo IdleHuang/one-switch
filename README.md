@@ -134,13 +134,14 @@ New rules are enabled; disable one from the list if you change your mind. Every 
 - The proxy listens on `127.0.0.1` by default and does not expose itself to the local network.
 - API keys are kept in the OS-encrypted store. Exporting providers has an **include plaintext API keys** switch that is on by default — an export carrying keys is a working credential, so pass it between your own devices and nowhere else.
 
-Configuration, logs and request metadata live in the per-user application data directory:
+Configuration, logs and request metadata live in one hidden directory in your home folder, and they are split into two SQLite files:
 
-| Platform | Path |
+| File | Contents |
 | --- | --- |
-| macOS | `~/Library/Application Support/One Switch/` |
-| Windows | `%APPDATA%\One Switch\` |
-| Linux | `~/.config/One Switch/` |
+| `~/.one-switch/one-switch-config-v1.db` | Providers, models, routing and rewrite rules — **your configuration, worth backing up** |
+| `~/.one-switch/one-switch-data-v1.db` | Request logs, captured bodies, usage and health state — **safe to delete**, you only lose history |
+
+The development build uses `~/.one-switch-development` instead, so a dev instance never touches your real data.
 
 A few more things worth knowing:
 

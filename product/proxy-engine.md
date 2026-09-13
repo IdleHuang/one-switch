@@ -66,7 +66,7 @@
 - `request_logs.transport`：客户端跳的形态，即**预期**，原值落库（不是布尔）；
 - `request_attempts.upstreamTransport`：上游这一跳实际是什么形态，即**事实**，没拿到响应时为 `null`——因此「上游没回」与「上游回了整包」在库里是两件事。
 
-改写规则试跑接口的 `testCase.transport` 同样是轴上的取值。preview 阶段不提供旧数据的迁移路径：`assertDatabaseIsSupported` 会拒绝任何带未知迁移记录的库（见 [server-architecture.md](./server-architecture.md) 的「不保留兼容出口」），比留一段一次性映射更省事，也更容易验证。
+改写规则试跑接口的 `testCase.transport` 同样是轴上的取值：库里存的就是原生取值，读取端也不做投影或兼容别名，所以不存在「旧值」需要映射。
 
 ### 1.2 响应头不能决定「做什么」
 

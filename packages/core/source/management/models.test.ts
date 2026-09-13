@@ -3,8 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ServerResponse } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { closeDatabase, initDatabase } from '../database'
-import { TEST_DATABASE_FILE_NAME } from '../database/test-support'
+import { closeDatabases, initDatabases } from '../database'
 import { createLogicalModel } from '@server/database/logical-model-store'
 import { modelRoutes } from './routes/catalog'
 import { mockResponse } from './test-support'
@@ -18,11 +17,11 @@ let temporaryDirectory: string
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-models-'))
-  await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+  await initDatabases(temporaryDirectory)
 })
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   fs.rmSync(temporaryDirectory, { recursive: true, force: true })
 })
 

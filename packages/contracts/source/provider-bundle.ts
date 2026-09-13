@@ -12,8 +12,8 @@ export const PROVIDER_BUNDLE_FORMAT = 'one-switch/provider-bundle'
 /**
  * 供应商包版本。
  *
- * preview 阶段不提供旧数据库/旧配置的升级路径（见 `product/data-model.md`），所以这里是字面量
- * 而不是可升级的联合类型；真要换代时直接改成 `2` 并让旧文件明确报错即可。
+ * 这里是字面量而不是可升级的联合类型：导入只接受当前这一个值，换代时把它改成 `2`，
+ * 让上一代的文件明确报错，而不是被猜着读。
  */
 export const PROVIDER_BUNDLE_VERSION = 1
 

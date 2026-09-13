@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { safeStorage } from 'electron'
-import type { KeychainApi } from '@common/keychain'
+import type { SecretStore } from '@common/secret-store'
 
-export class ElectronSecretStore implements KeychainApi {
+export class ElectronSecretStore implements SecretStore {
   constructor(private readonly filePath: string) {}
 
   async set(reference: string, value: string): Promise<void> {

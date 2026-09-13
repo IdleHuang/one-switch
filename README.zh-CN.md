@@ -134,13 +134,14 @@ curl http://127.0.0.1:9300/v1/models
 - 代理默认监听 `127.0.0.1`，不会主动暴露到局域网。
 - API Key 用系统加密存储保存在本地。导出供应商配置时有一个 **包含明文 API Key** 的开关（默认勾选）—— 带上密钥的导出文件等同于可用凭据，请只在设备之间私传，不要传到公开渠道。
 
-配置、日志和请求元数据都存在本机应用数据目录：
+配置、日志和请求元数据都放在用户主目录下的一个隐藏目录里，且拆成两个 SQLite 文件：
 
-| 平台 | 路径 |
+| 文件 | 内容 |
 | --- | --- |
-| macOS | `~/Library/Application Support/One Switch/` |
-| Windows | `%APPDATA%\One Switch\` |
-| Linux | `~/.config/One Switch/` |
+| `~/.one-switch/one-switch-config-v1.db` | 供应商、模型、路由与改写规则 —— **你的配置，值得单独备份** |
+| `~/.one-switch/one-switch-data-v1.db` | 请求日志、正文、用量与健康状态 —— **可以随时删**，只丢历史统计 |
+
+开发版跑的是 `~/.one-switch-development`，不会碰到你真实的数据。
 
 还有几件事值得你知道：
 

@@ -3,15 +3,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createDatabaseFileName } from '@common/database-file'
-import { closeDatabase, getDb, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
+import { createDatabaseFileName, listCurrentDatabaseFileNames } from '@common/database-file'
+import { closeDatabases, getConfigDb, getDataDb, initDatabases } from './index'
 import { listProviderModelsForLogicalModel } from './model-store'
 
 const temporaryDirectories: string[] = []
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true })
   }
@@ -23,50 +22,99 @@ function createTemporaryDirectory(): string {
   return directory
 }
 
-/** 伪造一个「不是本版本创建」的数据库：有表，并可选地带一份别的 migration 记账。 */
-function createUnsupportedDatabase(directory: string, appliedNames: string[]): void {
-  const client = new DatabaseSync(path.join(directory, TEST_DATABASE_FILE_NAME))
-  client.exec('CREATE TABLE request_logs (id TEXT PRIMARY KEY)')
-  if (appliedNames.length > 0) {
-    client.exec('CREATE TABLE __drizzle_migrations (id integer PRIMARY KEY, hash text, created_at numeric, name text)')
-    const insert = client.prepare('INSERT INTO __drizzle_migrations (hash, created_at, name) VALUES (?, ?, ?)')
-    appliedNames.forEach((name, index) => insert.run(`hash-${index}`, index, name))
-  }
-  client.close()
+function tableNames(client: DatabaseSync): string[] {
+  return client
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    .all()
+    .map(row => (row as { name: string }).name)
+}
+
+function indexNames(client: DatabaseSync): string[] {
+  return client
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+    .all()
+    .map(row => (row as { name: string }).name)
+}
+
+function columnNames(client: DatabaseSync, table: string): string[] {
+  return client
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .map(row => (row as { name: string }).name)
+}
+
+function tableDefinition(client: DatabaseSync, table: string): string {
+  const row = client.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)
+  if (!row) throw new Error(`missing table ${table}`)
+  return (row as { sql: string }).sql
 }
 
 describe('database lifecycle', () => {
-  it('clears the database reference on close and supports reinitialization', async () => {
-    const first = await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)
-    expect(first.$client.prepare('SELECT 1 AS value').get()).toEqual({ value: 1 })
+  it('refuses a handle before initialization', () => {
+    expect(() => getConfigDb()).toThrow('Config database not initialized')
+    expect(() => getDataDb()).toThrow('Data database not initialized')
+  })
 
-    await closeDatabase()
+  it('opens both files on initialization and clears the handles on close', async () => {
+    const directory = createTemporaryDirectory()
+    await initDatabases(directory)
 
-    expect(() => getDb()).toThrow('Database not initialized')
+    expect(getConfigDb().$client.prepare('SELECT 1 AS value').get()).toEqual({ value: 1 })
+    expect(getDataDb().$client.prepare('SELECT 1 AS value').get()).toEqual({ value: 1 })
+    expect(fs.readdirSync(directory).filter(name => name.endsWith('.db')).sort()).toEqual([...listCurrentDatabaseFileNames()].sort())
 
-    const second = await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)
-    expect(second.$client.prepare('SELECT 1 AS value').get()).toEqual({ value: 1 })
-    expect(getDb()).toBe(second)
+    await closeDatabases()
+
+    expect(() => getConfigDb()).toThrow('Config database not initialized')
+    expect(() => getDataDb()).toThrow('Data database not initialized')
   })
 
   it('can be closed repeatedly', async () => {
-    await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)
+    await initDatabases(createTemporaryDirectory())
 
-    await closeDatabase()
+    await closeDatabases()
 
-    await expect(closeDatabase()).resolves.toBeUndefined()
+    await expect(closeDatabases()).resolves.toBeUndefined()
   })
 
-  it('seeds the default logical model on a fresh database', async () => {
-    const client = (await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)).$client
-
-    const rows = client.prepare('SELECT id, name, enabled FROM logical_models').all()
-    expect(rows).toEqual([{ id: 'default', name: 'default', enabled: 1 }])
-  })
-
-  it('restores default when a database has no logical model', async () => {
+  // 重复初始化是幂等的：换掉已有句柄只会让调用方手里的引用变成孤儿，还会多出一个
+  // 写连接去抢同一个 `-wal`。
+  it('skips a redundant initialization instead of reopening', async () => {
     const directory = createTemporaryDirectory()
-    const client = (await initDatabase(directory, TEST_DATABASE_FILE_NAME)).$client
+    await initDatabases(directory)
+    const handle = getConfigDb()
+
+    await initDatabases(directory)
+
+    expect(getConfigDb()).toBe(handle)
+  })
+
+  it('reopens the same directory after a close', async () => {
+    const directory = createTemporaryDirectory()
+    await initDatabases(directory)
+    const time = Date.now()
+    getConfigDb()
+      .$client.prepare('INSERT INTO providers (id, name, createdTime, updatedTime) VALUES (?, ?, ?, ?)')
+      .run('prov_persisted', 'Persisted', time, time)
+
+    await closeDatabases()
+    await initDatabases(directory)
+
+    expect(getConfigDb().$client.prepare('SELECT id FROM providers').all()).toEqual([{ id: 'prov_persisted' }])
+  })
+
+  it('seeds the default logical model on a fresh configuration file', async () => {
+    await initDatabases(createTemporaryDirectory())
+
+    expect(getConfigDb().$client.prepare('SELECT id, name, enabled FROM logical_models').all()).toEqual([
+      { id: 'default', name: 'default', enabled: 1 },
+    ])
+  })
+
+  it('restores default when a configuration file has no logical model', async () => {
+    const directory = createTemporaryDirectory()
+    await initDatabases(directory)
+    const client = getConfigDb().$client
     const time = Date.now()
 
     client.prepare('DELETE FROM logical_models').run()
@@ -74,51 +122,89 @@ describe('database lifecycle', () => {
       .prepare('INSERT INTO logical_models (id, name, createdTime, updatedTime) VALUES (?, ?, ?, ?)')
       .run('custom', 'Custom', time, time)
 
-    await closeDatabase()
-    const reopened = (await initDatabase(directory, TEST_DATABASE_FILE_NAME)).$client
+    await closeDatabases()
+    await initDatabases(directory)
 
-    const rows = reopened.prepare('SELECT id FROM logical_models ORDER BY id').all()
-    expect(rows).toEqual([{ id: 'custom' }, { id: 'default' }])
-  })
-
-  it('creates the v0.3 relational baseline with an idempotent default model', async () => {
-    const directory = createTemporaryDirectory()
-    const client = (await initDatabase(directory, TEST_DATABASE_FILE_NAME)).$client
-    const expectedTables = [
-      'settings', 'providers', 'provider_health', 'provider_model_health',
-      'provider_models', 'provider_settings', 'provider_endpoints',
-      'provider_model_endpoints', 'protocol_converters', 'logical_models', 'workflows', 'request_rewrite_rules', 'provider_model_request_rewrite_rules',
-      'scheduling_policies', 'request_logs', 'request_attributes', 'request_usages',
-      'request_attempts', 'attempt_usages', 'request_contents', 'attempt_contents', 'runtime_logs',
-    ]
-    const tables = client
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-      .all()
-      .map(row => (row as { name: string }).name)
-
-    expect(tables).toEqual(['__drizzle_migrations', ...expectedTables].sort())
-    expect(client.prepare('SELECT id, name FROM logical_models').all()).toEqual([
-      { id: 'default', name: 'default' },
+    expect(getConfigDb().$client.prepare('SELECT id FROM logical_models ORDER BY id').all()).toEqual([
+      { id: 'custom' },
+      { id: 'default' },
     ])
+  })
+})
 
-    await closeDatabase()
-    const reopened = (await initDatabase(directory, TEST_DATABASE_FILE_NAME)).$client
-    expect(reopened.prepare('SELECT COUNT(*) AS count FROM logical_models').get()).toEqual({ count: 1 })
+describe('schema split', () => {
+  it('creates exactly the configuration tables in the configuration file', async () => {
+    await initDatabases(createTemporaryDirectory())
+
+    expect(tableNames(getConfigDb().$client)).toEqual([
+      '__drizzle_migrations',
+      'logical_models',
+      'protocol_converters',
+      'provider_endpoints',
+      'provider_model_endpoints',
+      'provider_model_request_rewrite_rules',
+      'provider_models',
+      'provider_settings',
+      'providers',
+      'request_rewrite_rules',
+      'scheduling_policies',
+      'settings',
+      'workflows',
+    ].sort())
   })
 
-  it('enforces v0.3 binding uniqueness and health foreign keys', async () => {
-    const client = (await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)).$client
+  it('creates exactly the observability tables in the data file', async () => {
+    await initDatabases(createTemporaryDirectory())
+
+    expect(tableNames(getDataDb().$client)).toEqual([
+      '__drizzle_migrations',
+      'attempt_contents',
+      'attempt_usages',
+      'provider_health',
+      'provider_model_health',
+      'request_attempts',
+      'request_attributes',
+      'request_contents',
+      'request_logs',
+      'request_usages',
+      'runtime_logs',
+    ].sort())
+  })
+
+  // 这条断言是「两个文件真的分开了」的核心证据：健康行写不起来自配置库的外键，
+  // 否则每次报成功都要跨库检查，而 SQLite 的外键又不可能跨文件生效。
+  it('keeps the health tables free of foreign keys', async () => {
+    await initDatabases(createTemporaryDirectory())
+
+    for (const table of ['provider_health', 'provider_model_health']) {
+      expect(tableDefinition(getDataDb().$client, table)).not.toContain('REFERENCES')
+    }
+  })
+
+  it('accepts a health row whose provider no longer exists', async () => {
+    await initDatabases(createTemporaryDirectory())
+
+    // 外键没了，孤儿行就必须能被写进来；真正兜住它们的是启动时的孤儿清理，
+    // 而不是让写入直接失败（那会在请求已经成功的路径上报错）。
+    expect(() =>
+      getDataDb().$client.prepare('INSERT INTO provider_health (providerId, updatedTime) VALUES (?, ?)').run('missing', Date.now()),
+    ).not.toThrow()
+  })
+
+  it('enforces route uniqueness inside the configuration file', async () => {
+    await initDatabases(createTemporaryDirectory())
+    const client = getConfigDb().$client
     const time = Date.now()
     client.prepare('INSERT INTO providers (id, name, createdTime, updatedTime) VALUES (?, ?, ?, ?)').run('prov_test', 'Test', time, time)
     client.prepare('INSERT INTO provider_models (id, providerId, modelName, createdTime, updatedTime) VALUES (?, ?, ?, ?, ?)').run('pm_test', 'prov_test', 'model-a', time, time)
     client.prepare('INSERT INTO scheduling_policies (logicalModelId, providerModelId, priority, weight, createdTime, updatedTime) VALUES (?, ?, ?, ?, ?, ?)').run('default', 'pm_test', 0, 100, time, time)
 
     expect(() => client.prepare('INSERT INTO scheduling_policies (logicalModelId, providerModelId, createdTime, updatedTime) VALUES (?, ?, ?, ?)').run('default', 'pm_test', time, time)).toThrow()
-    expect(() => client.prepare('INSERT INTO provider_health (providerId, updatedTime) VALUES (?, ?)').run('missing', time)).toThrow()
   })
 
-  it('keeps disabled models in management list while excluding them from scheduling', async () => {
-    const client = (await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)).$client
+  it('keeps disabled models in the management list while excluding them from scheduling', async () => {
+    await initDatabases(createTemporaryDirectory())
+    const client = getConfigDb().$client
     const time = Date.now()
     client.prepare('INSERT INTO providers (id, name, createdTime, updatedTime) VALUES (?, ?, ?, ?)').run('prov_test', 'Test', time, time)
     client.prepare('INSERT INTO provider_models (id, providerId, modelName, enabled, createdTime, updatedTime) VALUES (?, ?, ?, ?, ?, ?)').run('pm_disabled', 'prov_test', 'model-disabled', 0, time, time)
@@ -130,81 +216,90 @@ describe('database lifecycle', () => {
     ])
   })
 
-  it('creates the expected v0.3 indexes and request columns', async () => {
-    const client = (await initDatabase(createTemporaryDirectory(), TEST_DATABASE_FILE_NAME)).$client
-    const requestLogColumns = client.prepare('PRAGMA table_info(request_logs)').all()
-    const settingsColumns = client.prepare('PRAGMA table_info(settings)').all()
-    const attemptColumns = client.prepare('PRAGMA table_info(request_attempts)').all()
-    const workflowColumns = client.prepare('PRAGMA table_info(workflows)').all()
-    const indexes = client.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all()
+  it('creates the expected columns and indexes across both files', async () => {
+    await initDatabases(createTemporaryDirectory())
+    const config = getConfigDb().$client
+    const data = getDataDb().$client
 
-    // `PRAGMA table_info` 返回的是物理列顺序；整库现在由一个首发基线建表，物理顺序等于
-    // schema 声明顺序。这里仍然比较集合，避免测试在有人重排 `schema.ts` 时无意义地变红。
-    expect(requestLogColumns.map(column => (column as { name: string }).name).sort()).toEqual([
+    // `PRAGMA table_info` 返回的是物理列顺序；两个库各由一个首发基线建表，物理顺序等于
+    // schema 声明顺序。这里仍然比较集合，避免测试在有人重排 schema 时无意义地变红。
+    expect(columnNames(data, 'request_logs').sort()).toEqual([
       'clientProtocol', 'createdTime', 'id', 'logicalModelId', 'status', 'totalDurationMilliseconds', 'transport',
     ])
-    expect(settingsColumns.map(column => (column as { name: string }).name)).toEqual([
-      'key', 'value', 'valueType', 'updatedTime',
-    ])
-    expect(attemptColumns.map(column => (column as { name: string }).name)).toEqual(
+    expect(columnNames(config, 'settings')).toEqual(['key', 'value', 'valueType', 'updatedTime'])
+    expect(columnNames(data, 'request_attempts')).toEqual(
       expect.arrayContaining(['providerModelId', 'providerName', 'providerModelName', 'url', 'httpStatus', 'retryable', 'upstreamTransport', 'ttftMilliseconds', 'requestRewriteRuleIds', 'responseRewriteRuleIds']),
     )
-    expect(workflowColumns.map(column => (column as { name: string }).name).sort()).toEqual([
+    expect(columnNames(config, 'workflows').sort()).toEqual([
       'createdTime', 'definition', 'deletedTime', 'description', 'id', 'name', 'type', 'updatedTime', 'version',
     ])
-    expect(indexes.map(index => (index as { name: string }).name)).toEqual(
-      expect.arrayContaining(['idx_scheduling_policies_route', 'idx_request_attempts_request_order', 'idx_request_attributes_key_value', 'idx_runtime_logs_timestamp', 'idx_workflows_type_version', 'idx_provider_model_request_rewrite_rule_priority_active']),
+    expect(indexNames(config)).toEqual(
+      expect.arrayContaining(['idx_scheduling_policies_route', 'idx_workflows_type_version', 'idx_provider_model_request_rewrite_rule_priority_active']),
+    )
+    expect(indexNames(data)).toEqual(
+      expect.arrayContaining(['idx_request_attempts_request_order', 'idx_request_attributes_key_value', 'idx_runtime_logs_timestamp']),
     )
     // 唯一性只能由**部分**唯一索引表达（只约束未删除的行），这里断言不存在全量唯一索引：
     // 它会把「软删除旧绑定后在同 priority 绑定新规则」这条最常见的换绑路径堵死，
     // 而且只会在运行期以写入失败的形式暴露。
-    expect(indexes.map(index => (index as { name: string }).name)).not.toContain('idx_model_request_rewrite_rule_priority')
+    expect([...indexNames(config), ...indexNames(data)]).not.toContain('idx_model_request_rewrite_rule_priority')
   })
 })
 
-describe('unsupported database detection', () => {
-  it('refuses a database whose migration records are not the baseline', async () => {
+// 孤儿健康行是拆库的直接代价：健康表在观测库，外键又不可能跨文件，所以「配置里删掉的
+// 供应商，健康表里还留着行」只能由启动时的一次清理收掉。它是启动路径上唯一的跨库动作，
+// 因此必须被钉住——清理漏了会在界面上留下幽灵行，清理错了会抹掉真实状态。
+describe('orphan health rows', () => {
+  it('drops health rows whose provider or provider model is gone', async () => {
     const directory = createTemporaryDirectory()
-    createUnsupportedDatabase(directory, ['20250101000000_legacy_baseline', '20250202000000_legacy_followup'])
+    await initDatabases(directory)
+    const time = Date.now()
 
-    await expect(initDatabase(directory, TEST_DATABASE_FILE_NAME)).rejects.toThrow(/Unsupported database file[\s\S]*delete it/)
-    expect(() => getDb()).toThrow('Database not initialized')
+    getConfigDb()
+      .$client.prepare('INSERT INTO providers (id, name, createdTime, updatedTime) VALUES (?, ?, ?, ?)')
+      .run('prov_alive', 'Alive', time, time)
+    getConfigDb()
+      .$client.prepare('INSERT INTO provider_models (id, providerId, modelName, createdTime, updatedTime) VALUES (?, ?, ?, ?, ?)')
+      .run('pm_alive', 'prov_alive', 'model-alive', time, time)
+    for (const id of ['prov_alive', 'prov_gone']) {
+      getDataDb().$client.prepare('INSERT INTO provider_health (providerId, updatedTime) VALUES (?, ?)').run(id, time)
+    }
+    for (const id of ['pm_alive', 'pm_gone']) {
+      getDataDb().$client.prepare('INSERT INTO provider_model_health (providerModelId, updatedTime) VALUES (?, ?)').run(id, time)
+    }
 
-    // 拒绝就是拒绝：旧库必须原样留在磁盘上，等用户自己备份或删除。
-    const client = new DatabaseSync(path.join(directory, TEST_DATABASE_FILE_NAME))
-    const tables = client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all()
-    client.close()
-    expect(tables).toEqual([{ name: '__drizzle_migrations' }, { name: 'request_logs' }])
-  })
+    await closeDatabases()
+    await initDatabases(directory)
 
-  it('refuses a database that has tables but no migration bookkeeping', async () => {
-    const directory = createTemporaryDirectory()
-    createUnsupportedDatabase(directory, [])
-
-    await expect(initDatabase(directory, TEST_DATABASE_FILE_NAME)).rejects.toThrow('Unsupported database file')
-    expect(() => getDb()).toThrow('Database not initialized')
-  })
-
-  // 文件名带主版本号的意义就在这个测试里：换成另一个主版本时，应用会在一个全新的文件上初始化，
-  // 旧文件连打开都不打开，因此不需要任何迁移，也不会因为读不懂旧结构而启动失败。
-  it('creates the data file of the requested version and leaves other versions untouched', async () => {
-    const directory = createTemporaryDirectory()
-    const previousVersionPath = path.join(directory, createDatabaseFileName('0.9.0'))
-    const previousVersionClient = new DatabaseSync(previousVersionPath)
-    previousVersionClient.exec('CREATE TABLE previous_version_only (id TEXT PRIMARY KEY)')
-    previousVersionClient.close()
-    const previousVersionBytes = fs.readFileSync(previousVersionPath)
-
-    const client = (await initDatabase(directory, createDatabaseFileName('1.0.0-rc.6'))).$client
-
-    expect(fs.readdirSync(directory).filter(name => name.endsWith('.db')).sort()).toEqual([
-      'one-switch-v0.db',
-      'one-switch-v1.db',
+    expect(getDataDb().$client.prepare('SELECT providerId FROM provider_health').all()).toEqual([{ providerId: 'prov_alive' }])
+    expect(getDataDb().$client.prepare('SELECT providerModelId FROM provider_model_health').all()).toEqual([
+      { providerModelId: 'pm_alive' },
     ])
-    const previousOnly = client
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'previous_version_only'")
-      .all()
-    expect(previousOnly).toEqual([])
-    expect(fs.readFileSync(previousVersionPath)).toEqual(previousVersionBytes)
+  })
+})
+
+describe('schema version in the file name', () => {
+  // 文件名带的是**数据库结构版本**，不是应用版本：一次应用大版本升级不会换掉用户的配置文件名，
+  // 只有这个库的结构真的不兼容时才把 `DATABASE_SCHEMA_VERSIONS` 里那个数字加一，
+  // 下一次启动自然落到另一个全新的空文件上。所以这里没有任何版本检测代码。
+  it('creates both files of the current schema version and leaves other files untouched', async () => {
+    const directory = createTemporaryDirectory()
+    // 借同一个 API 造一个「上一代」的文件名：命名规则将来再变，这个用例也不会静默退化成
+    // 「造了一个永远不可能出现的字符串」。
+    const foreignPath = path.join(directory, createDatabaseFileName('config').replace(/-v\d+\.db$/, '-v0.db'))
+    const foreignClient = new DatabaseSync(foreignPath)
+    foreignClient.exec('CREATE TABLE previous_version_only (id TEXT PRIMARY KEY)')
+    foreignClient.close()
+    const foreignBytes = fs.readFileSync(foreignPath)
+
+    await initDatabases(directory)
+
+    expect(fs.readdirSync(directory).filter(name => name.endsWith('.db')).sort()).toEqual(
+      [path.basename(foreignPath), ...listCurrentDatabaseFileNames()].sort(),
+    )
+    expect(
+      getConfigDb().$client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'previous_version_only'").all(),
+    ).toEqual([])
+    expect(fs.readFileSync(foreignPath)).toEqual(foreignBytes)
   })
 })

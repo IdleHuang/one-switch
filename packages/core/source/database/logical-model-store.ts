@@ -1,11 +1,11 @@
 import { and, asc, desc, eq, isNull, max } from 'drizzle-orm'
 import type { LogicalModel, SchedulingPolicy } from '@common/schemas'
 import { now } from '@common/utils'
-import { getDb } from './index'
-import { logicalModels, schedulingPolicies } from './schema'
+import { getConfigDb } from './index'
+import { logicalModels, schedulingPolicies } from './config-schema'
 
 export async function listLogicalModels(includeDeleted = false): Promise<LogicalModel[]> {
-  const db = getDb()
+  const db = getConfigDb()
   const query = db.select().from(logicalModels)
   const rows = includeDeleted
     ? query.orderBy(asc(logicalModels.sortOrder), desc(logicalModels.createdTime)).all()
@@ -17,7 +17,7 @@ export async function listLogicalModels(includeDeleted = false): Promise<Logical
 }
 
 export async function getLogicalModel(id: string): Promise<LogicalModel | undefined> {
-  const row = getDb().select().from(logicalModels).where(eq(logicalModels.id, id)).get()
+  const row = getConfigDb().select().from(logicalModels).where(eq(logicalModels.id, id)).get()
   return row ? mapLogicalModel(row) : undefined
 }
 
@@ -27,7 +27,7 @@ export async function createLogicalModel(input: CreateLogicalModelInput): Promis
   const id = input.id
   const time = now()
   const name = input.name ?? id
-  const db = getDb()
+  const db = getConfigDb()
   // 新逻辑模型追加到末尾，用户拖动排序后的相对顺序不会被后续创建打乱。
   const maxSortOrder = db.select({ value: max(logicalModels.sortOrder) }).from(logicalModels).get()?.value ?? -1
   db
@@ -55,7 +55,7 @@ export async function createLogicalModel(input: CreateLogicalModelInput): Promis
 
 /** 按传入的 id 顺序重写展示顺序；未出现在列表中的逻辑模型保持原有顺序，不受影响。 */
 export async function reorderLogicalModels(ids: string[]): Promise<LogicalModel[]> {
-  const db = getDb()
+  const db = getConfigDb()
   const time = now()
   db.transaction(transaction => {
     ids.forEach((id, index) => {
@@ -69,7 +69,7 @@ export async function reorderLogicalModels(ids: string[]): Promise<LogicalModel[
 }
 
 export async function updateLogicalModel(id: string, updates: Partial<Omit<LogicalModel, 'id' | 'createdTime'>>): Promise<LogicalModel> {
-  const db = getDb()
+  const db = getConfigDb()
   const time = now()
   const existing = db.select().from(logicalModels).where(eq(logicalModels.id, id)).get()
   if (!existing) throw new Error(`logical model not found: ${id}`)
@@ -89,7 +89,7 @@ export async function updateLogicalModel(id: string, updates: Partial<Omit<Logic
 
 export async function deleteLogicalModel(id: string): Promise<void> {
   const time = now()
-  getDb()
+  getConfigDb()
     .update(logicalModels)
     .set({ deletedTime: time, updatedTime: time })
     .where(and(eq(logicalModels.id, id), isNull(logicalModels.deletedTime)))
@@ -114,7 +114,7 @@ function mapSchedulingPolicy(row: typeof schedulingPolicies.$inferSelect): Sched
 
 export async function listSchedulingPolicies(logicalModelId?: string): Promise<SchedulingPolicy[]> {
   const condition = and(isNull(schedulingPolicies.deletedTime), logicalModelId ? eq(schedulingPolicies.logicalModelId, logicalModelId) : undefined)
-  return getDb().select().from(schedulingPolicies)
+  return getConfigDb().select().from(schedulingPolicies)
     .where(condition)
     .orderBy(asc(schedulingPolicies.priority), desc(schedulingPolicies.weight), asc(schedulingPolicies.createdTime), asc(schedulingPolicies.providerModelId))
     .all()
@@ -138,17 +138,17 @@ export async function upsertSchedulingPolicy(input: UpsertSchedulingPolicyInput)
     updatedTime: time,
     deletedTime: null,
   }
-  getDb().insert(schedulingPolicies).values(values).onConflictDoUpdate({
+  getConfigDb().insert(schedulingPolicies).values(values).onConflictDoUpdate({
     target: [schedulingPolicies.logicalModelId, schedulingPolicies.providerModelId],
     // 主键不含 `deletedTime`，所以「重新把模型加回逻辑模型」就是让同一行复活：
     // 命中被软删除的历史行时把 `deletedTime` 清掉，而不是再插一条。
     set: { strategy: values.strategy, priority: values.priority, weight: values.weight, enabled: values.enabled, updatedTime: time, deletedTime: null },
   }).run()
-  return mapSchedulingPolicy(getDb().select().from(schedulingPolicies).where(and(eq(schedulingPolicies.logicalModelId, input.logicalModelId), eq(schedulingPolicies.providerModelId, input.providerModelId))).get()!)
+  return mapSchedulingPolicy(getConfigDb().select().from(schedulingPolicies).where(and(eq(schedulingPolicies.logicalModelId, input.logicalModelId), eq(schedulingPolicies.providerModelId, input.providerModelId))).get()!)
 }
 
 export async function deleteSchedulingPolicy(logicalModelId: string, providerModelId: string): Promise<void> {
   const time = now()
-  getDb().update(schedulingPolicies).set({ enabled: false, deletedTime: time, updatedTime: time })
+  getConfigDb().update(schedulingPolicies).set({ enabled: false, deletedTime: time, updatedTime: time })
     .where(and(eq(schedulingPolicies.logicalModelId, logicalModelId), eq(schedulingPolicies.providerModelId, providerModelId), isNull(schedulingPolicies.deletedTime))).run()
 }

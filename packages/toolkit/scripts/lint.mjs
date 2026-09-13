@@ -17,6 +17,7 @@ const main = async () => {
     // 用 process.execPath 而不是 'node'：Windows 上 run() 会给裸命令补 .cmd，`node.cmd` 并不存在。
     // 代理分层规则属于 core（改代理的人必须能自己跑它），所以脚本放在那个包里。
     await run(process.execPath, ['packages/core/scripts/check-proxy-layers.mjs'], { cwd: repositoryRoot })
+    await run(process.execPath, ['packages/core/scripts/check-database-boundaries.mjs'], { cwd: repositoryRoot })
     await run(process.execPath, ['packages/toolkit/scripts/check-package-boundaries.mjs'], { cwd: repositoryRoot })
     log.success('Lint passed')
   } catch (error) {

@@ -2,19 +2,18 @@ import { and, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm'
 import { ProviderEndpointSchema, ProviderSchema, ProviderSettingSchema } from '@common/schemas'
 import type { Provider, ProviderEndpoint, ProviderSetting } from '@common/schemas'
 import { generateId, now } from '@common/utils'
-import { getDb } from './index'
+import { getConfigDb } from './index'
 import {
   providerEndpoints,
-  providerHealth,
   providerModelEndpoints,
   providerModels,
   protocolConverters,
   providerSettings,
   providers,
-} from './schema'
+} from './config-schema'
 
 export async function listProviders(includeDeleted = false): Promise<Provider[]> {
-  const db = getDb()
+  const db = getConfigDb()
   const rows = includeDeleted
     ? db.select().from(providers).orderBy(desc(providers.createdTime)).all()
     : db.select().from(providers).where(isNull(providers.deletedTime)).orderBy(desc(providers.createdTime)).all()
@@ -22,7 +21,7 @@ export async function listProviders(includeDeleted = false): Promise<Provider[]>
 }
 
 export async function getProvider(id: string): Promise<Provider | undefined> {
-  const row = getDb().select().from(providers).where(eq(providers.id, id)).get()
+  const row = getConfigDb().select().from(providers).where(eq(providers.id, id)).get()
   return row ? mapProvider(row) : undefined
 }
 
@@ -31,19 +30,18 @@ type CreateProviderInput = { name: string; description?: string; apiKeyReference
 export async function createProvider(input: CreateProviderInput): Promise<Provider> {
   const id = generateId('prov_')
   const time = now()
-  const db = getDb()
+  const db = getConfigDb()
   const provider = ProviderSchema.parse({ ...input, description: input.description ?? '', id, createdTime: time, updatedTime: time, deletedTime: null })
   db.insert(providers).values({ id, name: provider.name, description: provider.description ?? '', enabled: provider.enabled, createdTime: time, updatedTime: time }).run()
   db.insert(providerSettings).values([
     { providerId: id, key: 'security.secretReference', value: provider.apiKeyReference, valueType: 'string', updatedTime: time },
     { providerId: id, key: 'connection.timeoutMilliseconds', value: String(provider.timeoutMilliseconds), valueType: 'number', updatedTime: time },
   ]).run()
-  db.insert(providerHealth).values({ providerId: id, consecutiveFailures: 0, updatedTime: time }).run()
   return provider
 }
 
 export async function updateProvider(id: string, updates: Partial<Omit<Provider, 'id' | 'createdTime'>>): Promise<Provider> {
-  const db = getDb()
+  const db = getConfigDb()
   const time = now()
   const existing = db.select().from(providers).where(eq(providers.id, id)).get()
   if (!existing) throw new Error(`provider not found: ${id}`)
@@ -61,34 +59,34 @@ export async function updateProvider(id: string, updates: Partial<Omit<Provider,
 }
 
 export async function listProviderSettings(providerId: string): Promise<ProviderSetting[]> {
-  return getDb().select().from(providerSettings).where(eq(providerSettings.providerId, providerId)).orderBy(providerSettings.key).all().map(row => ProviderSettingSchema.parse({ ...row, updatedTime: Number(row.updatedTime) }))
+  return getConfigDb().select().from(providerSettings).where(eq(providerSettings.providerId, providerId)).orderBy(providerSettings.key).all().map(row => ProviderSettingSchema.parse({ ...row, updatedTime: Number(row.updatedTime) }))
 }
 
 export async function getProviderSetting(providerId: string, key: string): Promise<ProviderSetting | undefined> {
-  const row = getDb().select().from(providerSettings).where(and(eq(providerSettings.providerId, providerId), eq(providerSettings.key, key))).get()
+  const row = getConfigDb().select().from(providerSettings).where(and(eq(providerSettings.providerId, providerId), eq(providerSettings.key, key))).get()
   return row ? ProviderSettingSchema.parse({ ...row, updatedTime: Number(row.updatedTime) }) : undefined
 }
 
 export async function upsertProviderSetting(input: Omit<ProviderSetting, 'updatedTime'>): Promise<ProviderSetting> {
   const setting = ProviderSettingSchema.parse({ ...input, updatedTime: now() })
-  getDb().insert(providerSettings).values(setting).onConflictDoUpdate({
+  getConfigDb().insert(providerSettings).values(setting).onConflictDoUpdate({
     target: [providerSettings.providerId, providerSettings.key], set: { value: setting.value, valueType: setting.valueType, updatedTime: setting.updatedTime },
   }).run()
   return setting
 }
 
 export async function deleteProviderSetting(providerId: string, key: string): Promise<void> {
-  getDb().delete(providerSettings).where(and(eq(providerSettings.providerId, providerId), eq(providerSettings.key, key))).run()
+  getConfigDb().delete(providerSettings).where(and(eq(providerSettings.providerId, providerId), eq(providerSettings.key, key))).run()
 }
 
 export async function listProviderEndpoints(providerId: string): Promise<ProviderEndpoint[]> {
-  return getDb().select().from(providerEndpoints)
+  return getConfigDb().select().from(providerEndpoints)
     .where(and(eq(providerEndpoints.providerId, providerId), isNull(providerEndpoints.deletedTime)))
     .orderBy(providerEndpoints.protocol).all().map(mapProviderEndpoint)
 }
 
 export async function getProviderEndpoint(id: string): Promise<ProviderEndpoint | undefined> {
-  const row = getDb().select().from(providerEndpoints).where(and(eq(providerEndpoints.id, id), isNull(providerEndpoints.deletedTime))).get()
+  const row = getConfigDb().select().from(providerEndpoints).where(and(eq(providerEndpoints.id, id), isNull(providerEndpoints.deletedTime))).get()
   return row ? mapProviderEndpoint(row) : undefined
 }
 
@@ -101,7 +99,7 @@ type CreateProviderEndpointInput = Omit<ProviderEndpoint, 'id' | 'createdTime' |
 export async function createProviderEndpoint(input: CreateProviderEndpointInput): Promise<ProviderEndpoint> {
   const time = now()
   const endpoint = ProviderEndpointSchema.parse({ ...input, id: generateId('end_'), enabled: input.enabled ?? true, createdTime: time, updatedTime: time })
-  getDb().insert(providerEndpoints).values({ ...endpoint, deletedTime: null }).run()
+  getConfigDb().insert(providerEndpoints).values({ ...endpoint, deletedTime: null }).run()
   return endpoint
 }
 
@@ -109,7 +107,7 @@ export async function updateProviderEndpoint(id: string, updates: Partial<Pick<P
   const existing = await getProviderEndpoint(id)
   if (!existing) throw new Error(`provider endpoint not found: ${id}`)
   const endpoint = ProviderEndpointSchema.parse({ ...existing, ...updates, id, updatedTime: now() })
-  getDb().update(providerEndpoints).set({ protocol: endpoint.protocol, url: endpoint.url, enabled: endpoint.enabled, updatedTime: endpoint.updatedTime })
+  getConfigDb().update(providerEndpoints).set({ protocol: endpoint.protocol, url: endpoint.url, enabled: endpoint.enabled, updatedTime: endpoint.updatedTime })
     .where(and(eq(providerEndpoints.id, id), isNull(providerEndpoints.deletedTime))).run()
   return endpoint
 }
@@ -123,7 +121,7 @@ export async function updateProviderEndpoint(id: string, updates: Partial<Pick<P
  */
 export async function deleteProviderEndpoint(id: string): Promise<void> {
   const time = now()
-  getDb().transaction(transaction => {
+  getConfigDb().transaction(transaction => {
     const bindingRows = transaction.select({ id: providerModelEndpoints.id }).from(providerModelEndpoints)
       .where(and(eq(providerModelEndpoints.providerEndpointId, id), isNull(providerModelEndpoints.deletedTime))).all()
     if (bindingRows.length > 0) {
@@ -153,7 +151,7 @@ export async function replaceProviderEndpoints(providerId: string, endpoints: Pa
  * 所以这里额外接收 `enabled`。传入的端点集合即该供应商的端点全集：没提到的协议一律置为禁用。
  */
 export async function replaceProviderEndpointStates(providerId: string, endpoints: Array<Pick<ProviderEndpoint, 'protocol' | 'url' | 'enabled'>>): Promise<ProviderEndpoint[]> {
-  const db = getDb()
+  const db = getConfigDb()
   const time = now()
   db.transaction(transaction => {
     const activeRows = transaction.select().from(providerEndpoints)
@@ -181,7 +179,7 @@ export async function replaceProviderEndpointStates(providerId: string, endpoint
 
 export async function deleteProvider(id: string): Promise<void> {
   const time = now()
-  getDb().transaction(transaction => {
+  getConfigDb().transaction(transaction => {
     transaction.update(providers).set({ deletedTime: time, updatedTime: time }).where(and(eq(providers.id, id), isNull(providers.deletedTime))).run()
     transaction.update(providerModels).set({ enabled: false, updatedTime: time, deletedTime: time }).where(and(eq(providerModels.providerId, id), isNull(providerModels.deletedTime))).run()
     // 端点、模型-端点绑定、协议转换器一并软删除：它们是供应商的子结构，
@@ -206,7 +204,7 @@ export async function deleteProvider(id: string): Promise<void> {
 }
 
 function mapProvider(row: typeof providers.$inferSelect): Provider {
-  const settingRows = getDb().select().from(providerSettings).where(eq(providerSettings.providerId, row.id)).all()
+  const settingRows = getConfigDb().select().from(providerSettings).where(eq(providerSettings.providerId, row.id)).all()
   const values = new Map(settingRows.map(setting => [setting.key, setting.value]))
   return {
     id: row.id, name: row.name, description: row.description, apiKeyReference: values.get('security.secretReference') ?? '',
