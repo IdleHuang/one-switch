@@ -11,13 +11,12 @@ export default defineConfig({
     rolldownOptions: {
       input: mainEntry,
       external: nodeExternals,
-      // 必须显式声明跑在 Node 上。Rolldown 默认按浏览器处理：
-      //   - 内置模块被换成「浏览器兼容」空模块（见 `vite.shared.ts` 的说明）
-      //   - 依赖里 `require('fs')` 这种外部引用不再自动接上 `createRequire`，
-      //     改成运行期抛错「Calling require for "fs" in an environment that
-      //     doesn't expose the require function」
-      // 这个值只影响解析条件与 CJS 互操作，不会让依赖变成外部依赖——
-      // 产物依旧是自包含的（`electron-builder.config.cjs` 只打包 `dist`）。
+      // 必须显式声明跑在 Node 上：Rolldown 默认按浏览器处理，依赖里 `require('fs')` 这种
+      // 外部引用不会自动接上 `createRequire`，而是在运行期抛
+      // 「Calling require for "fs" in an environment that doesn't expose the require function」。
+      // 它只管解析条件与 CJS 互操作，**不负责外部化**——内置模块仍要在 `external` 里显式列出
+      // （见 `vite.shared.ts`）。这个值也不会让依赖变成外部依赖：产物依旧是自包含的
+      // （`electron-builder.config.cjs` 只打包 `dist`）。
       platform: 'node',
       // 入口文件名必须固定。Electron 是用 `package.json#main`（`dist/command/index.js`）
       // 精确寻址这个文件的，默认的 `assets/index-<hash>.js` 会让应用直接启动失败。

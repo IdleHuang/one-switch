@@ -12,8 +12,11 @@ import packageJson from '../../package.json' with { type: 'json' }
 //
 // 这里的几个配置项都只在运行期暴露，且构建过程没有警告——代价与理由见
 // `apps/app/vite.shared.ts` 的注释与 product/packaging.md §5.8：
-//   `rolldownOptions.external` + `platform: 'node'`：内置模块不能被换成浏览器空模块
+//   `rolldownOptions.external`：内置模块不能被换成浏览器空模块（`platform: 'node'` 不管这件事）
 //   顶层 `define: { 'process.env': ... }`：不能被静态替换成 `{}`（放进 `build` 里会被忽略）
+//
+// 与 `apps/app/vite.shared.ts` 同一条规则，只是这里没有 `electron`：`node:` 前缀用正则，
+// 而不是 `builtinModules.map(m => \`node:${m}\`)`——后者把构建机的 Node 版本写进了产物。
 export default defineConfig({
   define: {
     'process.env': 'globalThis.process.env',
@@ -48,7 +51,7 @@ export default defineConfig({
     modulePreload: false,
     rolldownOptions: {
       input: fileURLToPath(new URL('./source/index.ts', import.meta.url)),
-      external: [...builtinModules, ...builtinModules.map((moduleName) => `node:${moduleName}`)],
+      external: [...builtinModules, /^node:/],
       platform: 'node',
       output: {
         // 入口文件名固定：`bin` 精确寻址 `dist/index.js`，默认的哈希名会让命令直接不可用。

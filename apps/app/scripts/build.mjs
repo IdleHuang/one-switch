@@ -35,6 +35,7 @@ const main = async () => {
     await run('pnpm', step.args, { cwd: appDirectory })
     log.info(`${step.label} built`)
   }
+
   log.success('Main process and preload built')
 
   if (!shouldPackage) return

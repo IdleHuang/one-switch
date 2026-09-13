@@ -36,16 +36,18 @@ export const sharedBuild = {
   assetsInlineLimit: Infinity,
 } satisfies UserConfig['build']
 
-// 宿主进程跑在 Node 里，不是浏览器里——但 Vite 默认按浏览器解包依赖。少了这一步，
-// `node:url`、`node:fs` 这些内置模块会被替换成一个「浏览器兼容性占位」空模块，
-// 构建期只留一句警告，运行期才炸成 `(0, v.fileURLToPath) is not a function`，
-// 而且报错点离真正的原因（构建配置）很远。
-// 用 `vite-plugin-electron` 时这些外部化是插件悄悄加的；现在配置归我们自己写，
-// 就得自己声明。`node:` 前缀的写法要单独补一份，`builtinModules` 只给裸名。
+// 宿主进程跑在 Node 里，不是浏览器里——但 rolldown 默认按浏览器解包依赖：没被列进
+// `external` 的内置模块会被换成「浏览器兼容」空模块，构建期只留一句警告，运行期才炸
+// （`TypeError: me.DatabaseSync is not a constructor` 就是这么来的）。
+// 注意 `platform: 'node'` 不负责这件事，它只管解析条件与 CJS 互操作，外部化必须显式声明。
+//
+// `node:` 前缀用**正则**、不展开 `builtinModules`：那是**构建机**的清单，Node 22 里没有
+// `sqlite`、Node 24 里有，于是同一个 commit 在两台机器上编出不同的包（1.1.0-beta.3 的
+// 启动失败）。`node:` 这个 scheme 按定义只属于内置模块，照抄进产物就对了，不必问构建机。
 export const nodeExternals = [
   'electron',
   ...builtinModules,
-  ...builtinModules.map((moduleName) => `node:${moduleName}`),
+  /^node:/,
 ]
 
 // 对齐 Electron 37 自带的 Node（22.x）。目标是让产物里的语法与内置模块按 Node 解析，
