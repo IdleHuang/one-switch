@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatVersionTime, toRouterGraphVersion, toRouterGraphVersions } from './graph-versions'
+import { createDefaultPolicyGraph } from '@common/router/presets'
+import { UNSAVED_ROUTER_GRAPH_VERSION } from '@common/router/types'
+import { formatVersionTime, hasSavedVersion, toRouterGraphVersion, toRouterGraphVersions } from './graph-versions'
 
 describe('router 图版本展示模型', () => {
   it('把服务端摘要翻成列表要用的形状', () => {
@@ -35,5 +37,13 @@ describe('router 图版本展示模型', () => {
   it('时间格式化按分钟精度输出，非法输入原样返回', () => {
     expect(formatVersionTime('2026-09-11T14:41:05.000Z')).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
     expect(formatVersionTime('not-a-date')).toBe('not-a-date')
+  })
+
+  it('内建默认策略（版本号 0）不算已保存版本', () => {
+    const graph = createDefaultPolicyGraph([])
+
+    // 一版都没存过时服务端给的就是这份图：它算「当前生效」，但不算「用户存下来的」。
+    expect(hasSavedVersion({ graph, version: UNSAVED_ROUTER_GRAPH_VERSION, savedAt: 0 })).toBe(false)
+    expect(hasSavedVersion({ graph, version: 1, savedAt: 1_700_000_000_000 })).toBe(true)
   })
 })

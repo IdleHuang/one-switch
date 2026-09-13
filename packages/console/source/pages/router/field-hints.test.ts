@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createAppTranslator } from '@common/i18n/catalogs'
-import { createDefaultGraph, ROUTER_POLICY_PRESETS } from '@common/router/presets'
+import { createBlankGraph, ROUTER_POLICY_PRESETS } from '@common/router/presets'
 import { requestShapeOf } from '@common/router/request-shape'
 import { resolveInputHints } from './field-hints'
 import { FIELD_READ_KINDS, readCandidates, type FieldReadKind } from './panel/field-candidates'
@@ -278,7 +278,7 @@ const presetModels: RuntimeLogicalModel[] = [
 
 describe('内置策略 × 字段候选表', () => {
   const builtInGraphs: { id: string, graph: WorkflowGraph }[] = [
-    { id: 'blank', graph: createDefaultGraph() },
+    { id: 'blank', graph: createBlankGraph() },
     ...ROUTER_POLICY_PRESETS.map(preset => ({ id: preset.id, graph: preset.createGraph(presetModels) })),
   ]
 

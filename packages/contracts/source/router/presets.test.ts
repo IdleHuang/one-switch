@@ -4,7 +4,7 @@ import {
   createConditionCase,
   createConditionRule,
   createControlItem,
-  createDefaultGraph,
+  createBlankGraph,
   createDefaultPolicyGraph,
   createId,
   createInputNode,
@@ -179,9 +179,9 @@ describe('预设工厂', () => {
   })
 })
 
-describe('内置策略 · 空白起始图', () => {
+describe('空白脚手架图', () => {
   it('认不出协议时直接进逻辑模型选择，其余三种协议都要先过条件', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const protocolEdges = graph.edges.filter(item => item.sourceNodeId === 'protocol')
     const byPort = new Map(protocolEdges.map(item => [item.sourcePort, item.targetNodeId]))
 
@@ -192,23 +192,23 @@ describe('内置策略 · 空白起始图', () => {
   })
 
   it('两条分支（命中 / ELSE）都通向同一个逻辑模型选择节点', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const conditionEdges = graph.edges.filter(item => item.sourceNodeId === 'condition')
 
     expect(conditionEdges.map(item => item.sourcePort).sort()).toEqual(['case-1', 'else'])
     expect(conditionEdges.every(item => item.targetNodeId === 'model')).toBe(true)
   })
 
-  it('每次生成都是新对象、内容完全一致（否则「当前策略」永远匹配不上）', () => {
-    const first = createDefaultGraph()
-    const second = createDefaultGraph()
+  it('每次生成都是新对象、内容完全一致（否则生成结果之间永远比对不相等）', () => {
+    const first = createBlankGraph()
+    const second = createBlankGraph()
 
     expect(first).not.toBe(second)
     expect(isSameGraph(first, second)).toBe(true)
   })
 
-  it('起始图能直接跑：没有选落点时如实报「没有可用逻辑模型」而不是崩', async () => {
-    const result = await runWorkflow(createDefaultGraph(), samplePayload)
+  it('这张图能直接跑：没有选落点时如实报「没有可用逻辑模型」而不是崩', async () => {
+    const result = await runWorkflow(createBlankGraph(), samplePayload)
 
     expect(result.stopReason).toBe('output')
     expect(traceOf(result, 'output')?.success).toBe(false)

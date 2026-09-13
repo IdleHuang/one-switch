@@ -20,7 +20,7 @@ import {
 } from './types'
 
 /**
- * 路由图的纯构造器：空白起始图、四个策略预设，以及改图时用到的小工厂。
+ * 路由图的纯构造器：四个策略预设（第一个即内建默认策略）、空白脚手架图，以及改图时用到的小工厂。
  *
  * 这里没有任何渲染层依赖（React / React Flow / 图标库），因为**服务端也要用它**：
  * 代理遇到「还没有人保存过路由图」时用它生成一份内建默认策略直接跑，
@@ -418,12 +418,13 @@ export function createDefaultPolicyGraph(models: RuntimeLogicalModel[]): Workflo
 }
 
 /**
- * 空白 / 新建图：没有本地缓存（或缓存损坏）时给用户的起始图。
+ * 空白图：一张只有基础骨架、不含任何策略的图。
  *
- * 起点选「协议发现 → 条件 → 逻辑模型选择」，因为协议是路由里最基础的一层事实；
- * 它不是策略预设 —— 菜单里的「逻辑模型命中」才是内建默认策略。
+ * 它**不是**内建默认策略，也不是任何界面上的起始状态 —— 一版图都没保存过时，
+ * 画布与代理拿到的都是 `ROUTER_POLICY_PRESETS` 里 `isDefault` 的那一个（`createDefaultPolicyGraph`）。
+ * 留在这里是因为图编辑用例需要一个「节点种类齐、连线少」的脚手架：改一条边能一眼看出结果。
  */
-export function createDefaultGraph(): WorkflowGraph {
+export function createBlankGraph(): WorkflowGraph {
   // 分支 id 固定，保证同一预设每次生成的图完全一致（否则「当前策略」永远匹配不上）。
   const conditionCase = createConditionCase('case-1')
   const nodes: WorkflowNodeModel[] = [

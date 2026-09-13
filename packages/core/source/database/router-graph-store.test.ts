@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createDefaultPolicyGraph, isSameGraph } from '@common/router/presets'
+import { UNSAVED_ROUTER_GRAPH_VERSION } from '@common/router/types'
 import type { RuntimeLogicalModel, WorkflowGraph } from '@common/router/types'
 import { closeDatabases, initDatabases } from './index'
 import { listLogicalModels } from './logical-model-store'
@@ -49,7 +50,7 @@ describe('router graph store', () => {
 
     const snapshot = await resolveRouterGraph()
 
-    expect(snapshot.version).toBe(0)
+    expect(snapshot.version).toBe(UNSAVED_ROUTER_GRAPH_VERSION)
     expect(snapshot.savedAt).toBe(0)
     expect(isSameGraph(snapshot.graph, createDefaultPolicyGraph(models))).toBe(true)
     expect(await readRouterGraphSnapshot()).toBeNull()

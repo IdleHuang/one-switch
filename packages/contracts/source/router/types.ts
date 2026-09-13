@@ -635,10 +635,20 @@ export interface RouterGraphVersionSummary {
   nodeCount: number
 }
 
-/** 当前生效的路由图：代理运行时读的就是这一份。 */
+/**
+ * 「一版都没保存过」占用的版本号。
+ *
+ * 读当前生效的图时用它表示这份图是内建默认策略，不来自任何已保存版本（真实版本号从 1 开始）；
+ * 因此拿到它不能去读历史版本，也不能把这张图当成「用户存下来的」。
+ */
+export const UNSAVED_ROUTER_GRAPH_VERSION = 0
+
+/** 当前生效的路由图：代理运行时读的就是这一份（一版都没保存过时是内建默认策略）。 */
 export interface RouterGraphSnapshot {
   graph: WorkflowGraph
+  /** 版本号；内建默认策略固定为 `UNSAVED_ROUTER_GRAPH_VERSION` */
   version: number
+  /** 保存时间（epoch 毫秒）；内建默认策略（版本号 0）没有保存时间，为 0 */
   savedAt: number
 }
 

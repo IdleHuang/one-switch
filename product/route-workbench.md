@@ -82,7 +82,7 @@ packages/console/source/pages/router/
 packages/contracts/source/router/       # 图数据与执行，console 与 core 共用
 ├── types.ts / schemas.ts         # 节点、端口、边的类型与校验
 ├── engine.ts                     # 图执行
-└── presets.ts                    # 默认图与策略预设
+└── presets.ts                    # 策略预设（含内建默认策略）与空白脚手架图
 ```
 
 ### 3.3 组件职责
