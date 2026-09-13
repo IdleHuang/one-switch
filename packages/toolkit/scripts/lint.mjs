@@ -11,7 +11,9 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const main = async () => {
   log.title('Linting')
   try {
-    await run('pnpm', ['exec', 'eslint', '.'], { cwd: repositoryRoot })
+    // `--cache` 只跳过「内容与配置都没变」的文件，缓存过期最多是多跑一遍；
+    // 位置放进 node_modules/.cache 而不是仓库根，免得 `.eslintcache` 变成常驻的未跟踪文件。
+    await run('pnpm', ['exec', 'eslint', '.', '--cache', '--cache-location', 'node_modules/.cache/eslintcache'], { cwd: repositoryRoot })
     // 用 process.execPath 而不是 'node'：Windows 上 run() 会给裸命令补 .cmd，`node.cmd` 并不存在。
     // 代理分层规则属于 core（改代理的人必须能自己跑它），所以脚本放在那个包里。
     await run(process.execPath, ['packages/core/scripts/check-proxy-layers.mjs'], { cwd: repositoryRoot })

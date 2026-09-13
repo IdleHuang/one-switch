@@ -337,6 +337,23 @@ S0 平移后复盘出的两类真实脆点，都属于「静态检查看不见�
 1. **测试内硬编码的目录路径**。`migration-chain.test.ts`（以固定层数 `import.meta.url` 推导 `drizzle/`）与 `i18n/catalogs.test.ts`（硬编码 `render` / `command` / `common` / `server` 子目录名当扫描根）都在平移后失效，typecheck 与 lint 都报不出来。任何以固定层数向上推导资源位置的地方，都应改成显式路径列表或从配置读入。
 2. **HTML 入口里的模块引用**。`packages/console/index.html` 的 `<script type="module" src="/source/main.tsx">` 在文件被移动后仍指向旧路径，`pnpm typecheck`、`pnpm lint`、`pnpm test` 全绿，只有 `pnpm vite build` 会失败（`Failed to resolve /source/main.tsx`）。同理，任何 `index.html` / manifest 里的相对资源路径都应视为迁移清单的一部分，而不是「内容文件」。
 
+CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/actions/setup/action.yml`，两处缓存都由它按 job 开关，因为缓存的适用面本来就不是「全仓库」而是「某个任务到底有没有写这个目录」：
+
+| 缓存 | 路径 | 开关 | 实际在用的 job |
+| --- | --- | --- | --- |
+| Turbo 任务缓存 | `.turbo` | `turbo-cache`（默认开） | 只有 `Build` 会写：它是唯一跑 `turbo run build` 的 job，其余 job 的 typecheck / lint / test 由包内脚本直跑 |
+| ESLint 缓存 / tsc 增量信息 | `node_modules/.cache` | `tool-cache`（默认关） | `Lint`（`eslint . --cache`）与 `Typecheck`（`tsc --incremental`） |
+
+缓存一个命令根本不会创建的目录比不缓存更糟：`actions/cache` 在保存阶段报 `Path Validation Error`，job 白跑一趟，还占着日志让人以为缓存生效了——原先 typecheck / lint / test 三个 job 的 `.turbo` 正是这种情况，现在显式关掉。另一点是收益只出现在第二次运行（首次要写盘，约 15 s），所以 key 不能高频变化，否则等于每次都在付写入成本。本地冷热对照（同机、同一份工作树）：`tsc -p tsconfig.check.json` 16.7 s → 6.9 s；`eslint .` 6.1 s → 2.5 s（`pnpm lint` 整体只快一点，守卫脚本与 turbo/pnpm 启动占了大头）。electron-builder 的 Electron 二进制缓存（Windows 的 `%LOCALAPPDATA%\electron\Cache`、macOS 的 `~/Library/Caches/electron*`，每系统约 1.3 GB）**没有**纳入本次改动：Electron 压缩包从 CDN 下载是秒级的，而 Windows 87 s / macOS 91 s 的打包耗时主要在解压与封装本身，为它占掉一个可观份额的 10 GB 缓存配额不划算（未实测，只按量级判断）。
+
+发布说明不再手工维护。原先的 `.github/release-body.md` 已删除，改由 `apps/app/scripts/release-notes.mjs` 从提交记录生成（本地用 `pnpm release:notes` 预览；`release.yml` 的 publish job 不装依赖直接 `node` 跑它，因为它只 import `node:` 内建模块与 `electron-builder.config.cjs`）：
+
+- 变更范围是「上一个发布标签..HEAD」。上一个标签优先取「走得到的标签里离 HEAD 最近的那个」——它表达的是「这一版从哪儿长出来」，历史被重写、补发旧线版本时都对；取不到时退回语义化版本比较，这里**不能**用 git 的 `versionsort`，它默认把 `-rc.1` 这类后缀排在同号正式版**之后**，`v1.0.0` 与 `v1.0.0-rc.8` 并存时会选反。两条都失效时按 `--since=<旧标签时间>` 划范围：旧标签落在已被重写的旧血统上时，`标签..HEAD` 会把两边不相干的三百多个提交也算进来（这不是假设，`v1.0.0-rc.8` 就是这种状态）。
+- 分组与破坏性变更都从 Conventional Commit 的 subject / body 里读：`feat` → New，`fix` → Fixed，`perf` → Performance，`refactor` / `polish` / `style` → Changed，其余 → Under the hood；不符合约定的一律进 Other changes，宁可难看也不丢提交。`chore(release):` 不进列表，版本号提交不是变更。
+- 下载表由**真实产物文件名**反推：按 `artifactName` 编译出带命名组的正则，平台与架构从匹配结果里取，大小取文件字节数。这样表里出现的文件一定真的在 release 里，不会出现「文档说有、实际没有」；`.zip` / `.blockmap` / `latest*.yml` 不列（内置更新器自己会取），`.sha256` 只在存在时给链接。
+- 与之配套，校验文件的生成从「只算 macOS 的 dmg」改成遍历全部 `.dmg` / `.exe` / `.AppImage`：`Create installer checksums` 在三个系统的矩阵 job 内各算各的，所以下载表每一行都能给 SHA-256，不会只剩某一两行有链接、看起来像漏了。
+- `softprops/action-gh-release` 不再开 `generate_release_notes`：它自己附带的那行 Full Changelog 与脚本写的重复，两行怎么合并由 action 决定，不如自己只留一行。
+
 ## 6. CLI 契约
 
 命令名 `one-switch`，无子命令时等价于 `start`。
