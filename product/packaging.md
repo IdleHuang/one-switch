@@ -160,16 +160,18 @@ S0 之后根目录只保留工作区级配置（`pnpm-workspace.yaml`、`turbo.j
 | --- | --- | --- |
 | 应用图标与托盘图标 | `apps/app/build/` | 源码里用 `?url` 内联（`assetsInlineLimit: Infinity` 让图标变成 data URL，避免 asar 内多一次文件寻址）；electron-builder 的 `icon` 相对 `apps/app` 解析 |
 | 打包配置 | `apps/app/electron-builder.config.cjs` | `apps/app/scripts/build.mjs` 显式 `--config`；`directories.output` 指回仓库根 `release/`，`afterPack` 为同包内 `scripts/macos-adhoc-sign.cjs` |
+| Electron 与 electron-builder | `apps/app/package.json` 的 devDependencies | 宿主包自己声明。electron-builder 只在 `<projectDir>/node_modules` 里找 Electron（见坑 4），把依赖留在仓库根等于「开发全通、只在打包时失败」 |
 | 控制台静态资源 | `packages/console/public/` | Vite 的 `publicDir`，随渲染层构建拷贝进 `packages/console/dist` |
 | 各包脚本 | `apps/app/scripts/`、`packages/core/scripts/`、`packages/console/scripts/` | 根 `package.json` 的 scripts 指向包内路径（`apps/app/scripts/{build,dev,version}.mjs`、`packages/core/scripts/{db,check-proxy-layers}.mjs`、`packages/console/scripts/{eslint-plugin-i18n.mjs,vitest.setup.ts}`） |
 | 跨包脚本 | `packages/toolkit/scripts/` | 私有工作区包（`@one-switch/toolkit`，无运行时代码）：任务编排（lint / test / typecheck）、包边界守卫与脚本运行库。它们不属于任何单一业务包，所以独立成包而不是堆在根目录 |
 | 打包产物 | `release/<version>/` | 仍在仓库根：它是构建**输出**，不属于任何包的源码 |
 
-搬运时的三个坑：
+搬运时的四个坑：
 
 1. **图标同时被源码级相对路径引用**。`?url` 的解析基准是源码文件而不是配置文件，所以改目录必须连带改源码里的引用，只看配置文件会漏。
 2. **`__dirname` 推导需要重新核对**。产物布局是「主进程代码住 `apps/app/dist/command/`，渲染层与迁移基线由 electron-builder 抬进 asar 的 `dist/render` 与 `packages/core/drizzle`」——这三条映射是一组，动一条必须重新验算另外两条。`apps/app/electron-builder.config.cjs` 与 `apps/app/vite.shared.ts` 里各有一段注释专门记录这层约束。
 3. **脚本的「仓库根」是数目录数出来的**。脚本用 `import.meta.url` 往上数目录定位仓库根，换目录必须同步改层数，否则它会在错误的 cwd 里跑（症状是「找不到 tsconfig」而不是「找不到脚本」）。同理，跨包引用运行库用相对路径时，层数也跟着目录深度变。
+4. **electron-builder 只属于自己的包里找 Electron**。它探测版本的实现是读 `<projectDir>/node_modules/electron/package.json`，**不会逐级向上找**，而打包时的 `projectDir` 就是 `apps/app`。把 Electron 留在仓库根，`pnpm dev`、lint、typecheck、test 全部照常通过，只有真正打包才失败（`Cannot compute electron version from installed node modules`）。同理 `author` 与产物入口 `main` 也得在被打包的那份 `package.json` 里：electron-builder 读的是 app 自己的清单，根清单不再参与。根 `package.json` 保留 `electron` 只剩一个理由——仓库级测试要跑在 Electron 的 Node 里（`node:sqlite` 的 ABI 必须与 app 对齐），那是测试基建的事，不是宿主的事。
 
 结论：原先「随 S3（App 回归）一起处理」的两项已经完成，不再挂账。
 
@@ -368,7 +370,7 @@ S0 平移后复盘出的两类真实脆点，都属于「静态检查看不见�
 
 `pnpm dev` 已端到端复验：控制台 dev server 起来后才拉起 Electron，首轮构建落定后才开始监听产物，启动横幅显示 `Environment : development` 与 19300 / 19301 端口，数据库初始化、两个监听器与托盘初始化全部完成，且主进程改动恰好触发一次重启。
 
-平移期间发现并修复：`packages/console/index.html` 的入口脚本仍写着 `/source/main.tsx`（详见 §5.8 末段）。这类问题三个静态检查全绿也发现不了，必须跑一次真实构建。
+平移期间发现并修复：`packages/console/index.html` 的入口脚本仍写着 `/source/main.tsx`（详见 §5.8 末段）。这类问题三个静态检查全绿也发现不了，必须跑一次真实构建。同类问题还有一个：Electron 留在仓库根，开发与静态检查全部照常，但 electron-builder 在打包时探测不到版本，直到第一次真实发布三个平台同时失败才暴露（详见 §4.3 坑 4）。
 
 环境限制（与平移无关）：Windows 上以非管理员身份跑完整 `pnpm build`，electron-builder 解压 `winCodeSign` 缓存时需要创建符号链接的权限而失败（`Cannot create symbolic link ... libssl.dylib`）。需要开启「开发者模式」或以管理员身份执行；临时绕过可加 `-c.win.signAndEditExecutable=false`，代价是 exe 不嵌入图标。
 
