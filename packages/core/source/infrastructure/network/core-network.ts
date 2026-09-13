@@ -1,6 +1,5 @@
 import http from 'node:http'
 import https from 'node:https'
-import { AppError } from '@server/errors'
 import { createOutboundConnector, OutboundProxyConnectionError, type OutboundConnector } from './outbound-connector'
 
 export type CoreHttpRequestOptions = http.RequestOptions
@@ -21,7 +20,13 @@ export interface BufferedCoreHttpResponse {
 
 export interface CoreNetworkClient {
   requestHttp(url: URL, options: CoreHttpRequestOptions, body: Buffer, hooks: CoreHttpHooks | ((response: CoreHttpResponse) => void)): http.ClientRequest
-  requestHttpBuffered(url: URL, options: CoreHttpRequestOptions, body: Buffer, maxResponseBytes?: number): Promise<BufferedCoreHttpResponse>
+  /**
+   * 一问一答地取一份正文。
+   *
+   * 不设大小上限：这条路上没有「多大的正文算可疑」这种事，收多少就是多少
+   * （同一条判断见 `product/security-privacy.md` 的「请求与响应都不设大小上限」）。
+   */
+  requestHttpBuffered(url: URL, options: CoreHttpRequestOptions, body: Buffer): Promise<BufferedCoreHttpResponse>
 }
 
 type ConnectorResolver = () => OutboundConnector
@@ -70,21 +75,14 @@ function buildCoreNetworkClient(resolve: ConnectorResolver): CoreNetworkClient {
       return request
     },
 
-    async requestHttpBuffered(url, options, body, maxResponseBytes = Number.POSITIVE_INFINITY) {
+    async requestHttpBuffered(url, options, body) {
       return new Promise((resolveResult, reject) => {
         let responseBody = ''
-        let bufferedBytes = 0
 
         this.requestHttp(url, options, body, {
           onResponse: response => {
             response.on('data', chunk => {
-              const text = chunk.toString('utf8')
-              bufferedBytes += Buffer.byteLength(text, 'utf8')
-              if (bufferedBytes > maxResponseBytes) {
-                response.destroy(new AppError('UPSTREAM_UNAVAILABLE', 502, `Response body exceeded the ${maxResponseBytes} bytes limit`, { details: { maxBytes: maxResponseBytes } }))
-                return
-              }
-              responseBody += text
+              responseBody += chunk.toString('utf8')
             })
             response.on('end', () => resolveResult({
               statusCode: response.statusCode ?? 502,

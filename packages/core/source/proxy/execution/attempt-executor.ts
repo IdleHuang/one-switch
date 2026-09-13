@@ -1,7 +1,7 @@
 import { getSettings } from '@server/database/settings-store'
 import { classifyUpstreamStatus } from '@server/proxy/response/response'
 import type { UpstreamStatusDisposition } from '@server/proxy/response/response'
-import { createProtocolAuthHeaders } from '@common/protocols'
+import { resolveProtocolAuthHeaders } from '@common/protocols'
 import { getSecretStore } from '@server/infrastructure/secrets/secret-store'
 import { createRequestContext, type RequestContext } from '@server/proxy/request/request-context'
 import { protocolAdapters } from '@server/proxy/protocols/registry'
@@ -144,7 +144,7 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
       adapter,
       requestContext,
       providerModelName: target.providerModelName,
-      authHeaders: createProtocolAuthHeaders(endpointProtocol, apiKey, target.customAuthHeader),
+      auth: resolveProtocolAuthHeaders(endpointProtocol, apiKey, target.customAuthHeader),
       rules,
       onRewriteEvaluated: result => { Object.assign(requestEvaluation, result) },
     })

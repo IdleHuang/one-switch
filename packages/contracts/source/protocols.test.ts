@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createProtocolAuthHeaders } from './protocols'
+import { createProtocolAuthHeaders, resolveProtocolAuthHeaders } from './protocols'
 
 describe('createProtocolAuthHeaders', () => {
   it.each(['openai-completions', 'openai-responses'] as const)(
@@ -46,6 +46,35 @@ describe('createProtocolAuthHeaders', () => {
   it('ignores an empty custom auth header name and falls back to the protocol default', () => {
     expect(createProtocolAuthHeaders('openai-completions', 'secret', '')).toEqual({
       authorization: 'Bearer secret',
+    })
+  })
+})
+
+describe('resolveProtocolAuthHeaders', () => {
+  it('separates the credential landing spot from the protocol fixed headers', () => {
+    // 转发方向的两半必须能分开：`replace` 覆盖客户端带来的同名头，`fill` 只在缺了时补上。
+    // 合成一份就表达不出「anthropic-version 不该盖掉客户端的值」这件事。
+    expect(resolveProtocolAuthHeaders('anthropic-messages', 'secret', null)).toEqual({
+      replace: { 'x-api-key': 'secret' },
+      fill: { 'anthropic-version': '2023-06-01' },
+    })
+  })
+
+  it('puts an explicitly configured custom header in replace, not in fill', () => {
+    expect(resolveProtocolAuthHeaders('anthropic-messages', 'secret', 'X-Custom-Key')).toEqual({
+      replace: { 'X-Custom-Key': 'secret' },
+      fill: { 'anthropic-version': '2023-06-01' },
+    })
+  })
+
+  it('has nothing to replace when the API key is absent but still fills the fixed headers', () => {
+    expect(resolveProtocolAuthHeaders('anthropic-messages', null, null)).toEqual({
+      replace: {},
+      fill: { 'anthropic-version': '2023-06-01' },
+    })
+    expect(resolveProtocolAuthHeaders('openai-completions', null, null)).toEqual({
+      replace: {},
+      fill: {},
     })
   })
 })

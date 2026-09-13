@@ -535,6 +535,8 @@ flowchart TD
 - [x] `modifiers/` 有自己的单测：`response-modifiers.test.ts`
 - [x] 下游背压会被等待：`ResponseSink.write` 返回 `false` 时先等 `drain` 再算这一帧写完（`adapters/http-response-sink.test.ts`），客户端来不及收时不会把内存堆上去
 - [x] 不向上游协商压缩：`createUpstreamRequestHeaders` 剥掉 `accept-encoding`（`response/headers.test.ts`）。整条链路上没有任何解压——协议转换、正文改写、失败归因与日志读的都是原始字节，HTTP 保证 `identity` 总是可接受的，要了压缩等于让上面每一步都去解析读不懂的字节
+- [x] 请求头**默认转发**：`createUpstreamRequestHeaders` 不维护「允许转发」的白名单，客户端带了什么就转发什么，连名字的大小写都不动，只排除四类有理由的头——与位置绑定的 `host` / `content-length`、逐跳头与 `connection` 点名的头、客户端鉴权头、以及上一条的 `accept-encoding`。官方接口的自定义方言（`openai-beta`、`anthropic-beta`、`x-stainless-*`、`originator`、`session_id`、`x-goog-*`）因此不需要代理认识它们：代理猜不全，也不必猜——多带一个对方不认识的头最多无害，少带一个却是 400（`response/headers.test.ts` 的 `forwards unknown custom headers verbatim`）
+- [x] 协议固定头**只补缺、不覆盖**：凭据落点与协议固定头分成 `replace` / `fill` 两半（`resolveProtocolAuthHeaders`）。客户端自己带了 `anthropic-version` 就用客户端的值，代理只在缺了这个头时补 `2023-06-01`——把两半合成一份就表达不出「该覆盖」与「该让位」的区别（`protocols.test.ts`、`response/headers.test.ts`）
 - [x] 上游中途断连会变成一帧终止错误：`transports/http.ts` 监听响应的 `close`，在 `readableEnded` 为假时发一帧 `error`，而不是让下游等一个永远不会来的结尾（`transports/http.test.ts`）
 - [x] 自定义鉴权头不吞掉协议固定头：`createProtocolAuthHeaders` 的自定义头分支保留 `preset.fixedHeaders`（例如 Anthropic 的 `anthropic-version`）（`protocols.test.ts`）
 
@@ -545,7 +547,7 @@ flowchart TD
 
 ## 六、开放问题
 
-1. **认证固定头与自定义头的组合**：当前行为是「配置了自定义认证头就只发该头，连 Anthropic 的 `anthropic-version` 固定头也不发」。这看起来是个真实缺陷：指向 Anthropic 兼容网关并自定义认证头名时会缺版本头。需要确认是否修正。
+1. **~~认证固定头与自定义头的组合~~（已落实）**：曾经的缺陷是「配置了自定义认证头就只发该头，连 Anthropic 的 `anthropic-version` 固定头也不发」，指向 Anthropic 兼容网关并自定义认证头名时会缺版本头。S2.4 已修：`createProtocolAuthHeaders` 的自定义头分支保留 `preset.fixedHeaders`，并在请求头透传收口时进一步拆成「凭据覆盖（`replace`）」与「协议固定头只补缺（`fill`）」两半。
 2. **修改器冲突语义**：两个同方向修改器改同一个字段时，是靠 `order` 后者胜，还是内核检测冲突并报错？倾向后者（显式），但需要确认重写规则与协议转换必然同时命中的场景。
 3. **`frame` 修改器的背压**：改写是否允许改变帧的节奏（如把 1 个上游帧展开成多个下游帧）？会直接影响 SSE 客户端的解析假设。
 4. **Exchange 状态的类型化**：观察者之间共享数据（如「请求行 ID」）用字符串键 `Map` 还是声明式扩展点？后者更安全但需要在契约里做泛型装配。

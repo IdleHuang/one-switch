@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http'
+import type { ProtocolAuthHeaders } from '@common/protocols'
 import type { HeaderMap } from '@server/proxy/contracts/headers'
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -27,10 +28,23 @@ const CLIENT_AUTH_HEADERS = new Set([
  * 留下一段坏字符串、失败归因读出乱码、改写把压缩字节当 JSON 解析。
  *
  * 既然读得懂才算代理，就不要去要压缩：HTTP 规定 `identity` 永远合法，去掉这个头
- * 不会让上游拒收请求，客户端拿到的正文只会更直白。
+ * 不会让上游拒收请求，客户端拿到的正文只会更直白。这是转发时**唯一**一个「既有理由、
+ * 又不是被协议逼着」的例外，其余的头一律原样转发。
  */
 const COMPRESSION_HEADERS = new Set([
   'accept-encoding',
+])
+
+/**
+ * 与「这一跳连到哪里、发多少字节」绑定的头。
+ *
+ * 它们不是客户端的偏好，是**位置**的函数：上游不是同一个地址（客户端的 `host` 指的是我们），
+ * 正文也可能被协议转换或改写规则换掉（客户端的 `content-length` 说的是它自己发的那一份）。
+ * 所以这两个值必须由我们现算，转发客户端的原值只会把请求打到别人的虚拟主机上，或者让上游截断正文。
+ */
+const POSITION_HEADERS = new Set([
+  'host',
+  'content-length',
 ])
 
 const SENSITIVE_HEADERS = new Set([
@@ -60,26 +74,50 @@ export function serializeCapturedHeaders(headers: IncomingHttpHeaders | Outgoing
   return JSON.stringify(redactHeaders(headers))
 }
 
-export function createUpstreamRequestHeaders(source: IncomingHttpHeaders, authHeaders: Record<string, string>, contentLength: number): Record<string, string | string[]> {
+/**
+ * 客户端请求头 → 上游请求头。
+ *
+ * **默认转发**：客户端带了什么就照原样转发出去，连名字的大小写都不动。理由很实在——官方接口
+ * 各有各的方言（`openai-beta`、`anthropic-beta`、`x-stainless-*`、`originator`、`session_id`、
+ * `x-goog-*`、`x-app`……），代理不可能穷举，也不该去猜。多带一个对方不认识的头最多是无害的，
+ * 少带一个却是 400。所以这里**不维护**「允许转发」的白名单，只维护下面这份有理由的例外清单：
+ *
+ * 1. {@link POSITION_HEADERS}：`host` / `content-length` 由位置和真实字节数决定，必须现算。
+ * 2. {@link HOP_BY_HOP_HEADERS} 与 `connection` 里点名的头：HTTP/1.1 规定它们描述的是「这一段连接」
+ *    而不是「这个请求」，转发等于让上游拿我们的连接状态去理解它自己的连接。
+ * 3. 客户端的鉴权头：{@link CLIENT_AUTH_HEADERS} 与 `auth.replace` 的落点。那份密钥是客户端对
+ *    **另一家**发的，转发出去既不生效，也把客户端的凭据交给了别人；供应商的凭据随后覆盖上去。
+ * 4. {@link COMPRESSION_HEADERS}：本链路上没有解压环节（见上面的注释）。
+ *
+ * `auth.fill`（协议形态要求的头）**只补缺**：客户端已经带了同名头就用客户端的值，
+ * 我们只是那个「没带时的兜底」。
+ */
+export function createUpstreamRequestHeaders(source: IncomingHttpHeaders, auth: ProtocolAuthHeaders, contentLength: number): Record<string, string | string[]> {
   const headers: Record<string, string | string[]> = {}
   const connectionHeaders = parseConnectionHeaders(source.connection)
-  const replacementAuthHeaders = new Set(Object.keys(authHeaders).map(name => name.toLowerCase()))
+  const replacedHeaders = new Set(Object.keys(auth.replace).map(name => name.toLowerCase()))
+  const forwardedHeaders = new Set<string>()
 
   for (const [name, value] of Object.entries(source)) {
     const normalizedName = name.toLowerCase()
     if (value === undefined) continue
-    if (normalizedName === 'host' || normalizedName === 'content-length') continue
+    if (POSITION_HEADERS.has(normalizedName)) continue
     if (HOP_BY_HOP_HEADERS.has(normalizedName) || connectionHeaders.has(normalizedName)) continue
     if (COMPRESSION_HEADERS.has(normalizedName)) continue
-    if (CLIENT_AUTH_HEADERS.has(normalizedName) || replacementAuthHeaders.has(normalizedName)) continue
+    if (CLIENT_AUTH_HEADERS.has(normalizedName) || replacedHeaders.has(normalizedName)) continue
+    headers[name] = value
+    forwardedHeaders.add(normalizedName)
+  }
+
+  for (const [name, value] of Object.entries(auth.fill)) {
+    if (forwardedHeaders.has(name.toLowerCase())) continue
     headers[name] = value
   }
 
-  Object.assign(headers, authHeaders)
+  Object.assign(headers, auth.replace)
   if (contentLength > 0) headers['content-length'] = String(contentLength)
   return headers
 }
-
 
 export function createDownstreamHeaders(source: IncomingHttpHeaders): HeaderMap {
   const headers: HeaderMap = {}

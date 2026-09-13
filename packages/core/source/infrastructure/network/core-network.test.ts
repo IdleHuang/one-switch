@@ -83,33 +83,6 @@ describe('core network client', () => {
     connector.destroy()
   })
 
-  it('fails buffered requests when response body exceeds maxResponseBytes', async () => {
-    const connector = createNoProxyConnector()
-    const client = createCoreNetworkClient(connector)
-    const server = http.createServer((_req, res) => {
-      res.write('12345')
-      res.end('67890')
-    })
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-    const address = server.address()
-    if (!address || typeof address === 'string') throw new Error('server start failed')
-    const url = new URL(`http://127.0.0.1:${address.port}/limit`)
-
-    try {
-      await expect(client.requestHttpBuffered(url, {
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: 'GET',
-      }, Buffer.alloc(0), 8)).rejects.toMatchObject({
-        code: 'UPSTREAM_UNAVAILABLE',
-      })
-    } finally {
-      await new Promise<void>(resolve => server.close(() => resolve()))
-      connector.destroy()
-    }
-  })
-
   it('uses configured shared connector from module state', async () => {
     const connector = createNoProxyConnector()
     const requestOptionsSpy = vi.spyOn(connector, 'requestOptions')
