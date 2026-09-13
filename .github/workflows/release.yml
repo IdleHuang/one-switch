@@ -130,12 +130,21 @@ jobs:
         run: |
           # 每个安装包都配一份 `.sha256`：发布说明的下载表把校验链接放在文件名旁边，
           # 只给 macOS 的 dmg 算，表里其余几行就只能写「—」，看起来像漏了。
-          # Windows 的 bash 来自 Git for Windows，只保证有其中之一。
-          HASHER=$(command -v shasum || command -v sha256sum)
+          # GNU 的 `sha256sum` 与 Perl 的 `shasum` 参数不同：`-a 256` 只有 `shasum` 认，
+          # `sha256sum` 会直接报 `unknown option -- a`（Windows 的 bash 来自 Git for Windows，
+          # 它只提供 `sha256sum`，这一条曾经让整个 Windows 构建挂在最后一步）。
+          # 两者的输出格式一致（`<hash>  <name>`），所以按可用性挑一个再统一调用。
+          hash256() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1"
+            else
+              shasum -a 256 "$1"
+            fi
+          }
           while IFS= read -r INSTALLER; do
             DIR=$(dirname "$INSTALLER")
             NAME=$(basename "$INSTALLER")
-            (cd "$DIR" && "$HASHER" -a 256 "$NAME" > "$NAME.sha256")
+            (cd "$DIR" && hash256 "$NAME" > "$NAME.sha256")
           done < <(find release -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.AppImage' \))
 
       - name: Collect installer and update metadata
