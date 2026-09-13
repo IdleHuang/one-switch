@@ -4,7 +4,7 @@
 
 ## 一、设计定稿（已完成）
 
-以下设计文档已评审定稿，是后续实施的唯一依据。v0.3 已在 `main` 上按不兼容的新版本契约实施：22 张表数据库基线（后拆为配置/观测两个文件，见「工程演进」S2.3）、公共 Schema、分域 Store、关系模型管理、核心路由、协议适配器、请求观测和管理界面已经完成；当前主要收尾协议转换补充验收、跨平台和正式发布包端到端验证。
+以下设计文档已评审定稿，是后续实施的唯一依据。v0.3 已按不兼容的新版本契约实施：22 张表数据库基线（现为配置库与观测库两个文件，见 [data-model.md](./data-model.md) §2.1）、公共 Schema、分域 Store、关系模型管理、核心路由、协议适配器、请求观测和管理界面已经完成；当前主要收尾协议转换补充验收、跨平台和正式发布包端到端验证。
 
 当前实现进度：Provider 默认端点已从 Provider JSON 完全迁移到 `provider_endpoints`；ProviderModel 通过端点绑定和 `scheduling_policies` 参与路由；Provider 与 ProviderModel 双层健康冷却已接入候选过滤和请求尝试。
 
@@ -12,7 +12,7 @@
 - [x] [proxy.md](./proxy.md)（外部行为契约）、[proxy-engine.md](./proxy-engine.md)（分层引擎）：代理管线按入口 → 路由 → 尝试规划 → 尝试执行 → 协议/适配 → 传输 → 响应产出 → 观测分层。
 - [x] [protocol-conversion.md](./protocol-conversion.md)、[server-architecture.md](./server-architecture.md)、[tech-architecture.md](./tech-architecture.md)、[security-privacy.md](./security-privacy.md)、[observability.md](./observability.md)。
 
-### 当前实现结论（2026-08-22）
+### 当前实现结论
 
 - v0.3 的数据库基线、关系模型、分域 Store、路由、协议适配器、请求观测分层、管理 API 和控制台主流程已落地。
 - 请求链路统一使用 `client*` / `upstream*` 边界：`clientProtocol` 表示客户端协议，`request_attempts.upstreamProtocol` 表示每次真实远端尝试；正文按视角拆为 `request_contents`（客户端）与 `attempt_contents`（上游）。
@@ -191,14 +191,15 @@
 
 目标是把核心能力拆成包，让同一套能力同时服务 CLI 与桌面 App 两种形态。设计、包边界、目录映射与宿主适配点以 [packaging.md](./packaging.md) 为唯一权威；本节的勾选状态是该计划的进度来源。
 
-- [x] S0 骨架平移（不改逻辑）：建立 pnpm workspace 与 `packages/{contracts,core,console}` 三个库包 + `apps/app` 宿主壳，按迁移映射表平移目录与导入别名，并顺手完成根目录清理——目录名统一为 `source/`、脚本按业务归入各包 `scripts/`（跨包的收在 `packages/toolkit/scripts/`）、打包资产按「谁用谁持有」进 `apps/app/`、turbo 接管任务编排。验收结果：`pnpm typecheck` / `pnpm lint` / `pnpm test` 全过（109 文件 / 1123 测试，与平移前一致）、`pnpm build` 2 个 turbo 任务通过、`pnpm dev` 端到端复验通过（详见 [packaging.md](./packaging.md) §7 S0）
-- [ ] S1 `core` 可独立运行：`core` / `contracts` 产出独立构建产物，新增裸 Node 冒烟脚本。验收：不安装 Electron 的 Node 进程能启动服务、完成一次成功转发与一次失败切换，并能干净退出。**本轮跳过**：CLI 选择直接用 Vite 别名打包 `core` / `contracts` 的**源码**，不依赖它们产出独立 ESM 产物，因此没有驱动这一阶段的需求；留到真有第三方单独消费 `core` 时再做
-- [x] S2 CLI 成型：落地密钥存储、Web 托管、前端运行时注入、桌面能力抽象与运行时配置（[packaging.md](./packaging.md) §5.1–§5.5），建立 `apps/cli` 并实现 `start` / `stop` / `status` / `version`。验收：`node apps/cli/dist/index.js start` 之后浏览器可打开完整控制台、控制台到管理 API 全链路可达，`stop` 后端口释放（结果与实测数据见 [packaging.md](./packaging.md) §7 S2）。**未包含**：`config` 子命令、`--daemon`，以及 §7 S4 的发布形态
-- [x] S2.1 CLI 生产级细节：单实例互斥（`instance.lock`）与崩溃兜底、`status --json`、端口/版本漂移诊断、非回环监听的安全告警，以及 9 步真实子进程冒烟脚本 `pnpm smoke:cli`。验收：`pnpm smoke:cli` 9/9 通过，`pnpm test`（116 文件 / 1197 测试）、`pnpm typecheck`、`pnpm lint` 全绿（详见 [packaging.md](./packaging.md) §7 S2.1）
-- [x] S2.2 两种形态的一致性：命令行与桌面形态必须是「同一套服务、同一份数据，只是驱动方式不同」。修掉 Linux 上数据目录分叉（命令行的 `$XDG_CONFIG_HOME/one-switch` vs 桌面形态的 `~/.config/One Switch`）：目录名一律取 `runtimeProfile.dataDirectoryName`，平台 appData 目录抽成可单测的纯函数（后来这个纯函数在 S2.3 里连同「按平台算 appData 目录」一起被删掉了）；修掉两种形态在同一数据目录里写同名 `secrets.json` 的问题（密文算法不同，同名会让后写的把前一份密钥全部作废）；把「一致 / 能力差异 / 形态差异」三类逐项列清（见 [packaging.md](./packaging.md) §6「与桌面形态的一致性」）。验收：新增 7 个用例；`pnpm test`（116 文件 / 1204 测试）、`pnpm typecheck`、`pnpm lint`、`pnpm build`、`pnpm smoke:cli`（9/9）全绿
-- [x] S2.3 数据落在用户主目录 + 配置与观测拆成两个库：数据库文件从 `<平台 appData>/<目录名>` 改成 `<用户主目录>/.one-switch`（开发档 `~/.one-switch-development`）；单个 `one-switch-v<应用主版本>.db` 拆成 `one-switch-config-<n>.db` / `one-switch-data-<n>.db`，两份 schema、两条 Drizzle 链、两份 `drizzle.config.<role>.ts`，跨库外键全部移除（健康行改为惰性创建 + 启动时清理孤儿行），文件名里的版本号改为两个独立的 schema 版本常量；新增库边界守卫 `check-database-boundaries.mjs` 并入 `pnpm lint`。明确不考虑兼容与历史：换代只换文件名，没有迁移，也没有任何版本检测代码。验收：`pnpm typecheck` / `pnpm lint` / `pnpm test`（116 文件 / 1210 测试）/ `pnpm build` / `pnpm smoke:cli` 全绿，无参启动的真实产物确实在 `~/.one-switch` 下建出两个库文件（详见 [packaging.md](./packaging.md) §7 S2.3）
-- [x] S2.4 宿主与实例身份收口：把三条「只在某一个宿主/某一条路径上成立」的保证收进 core——实例互斥从 `apps/cli` 移到 `packages/core/source/runtime/instance-lock.ts` 并由 `startServer` 在绑定端口前取锁（顺便把存活判定从「pid 活着」改成「pid 活着且心跳新鲜」），新增 `runtime/runtime-identity.ts` 为每次启动生成内存态实例 Token 并让 `/api/*` 一律校验、统一守卫 `management/core/request-guards.ts` 收口鉴权与跨域，桌面形态补上 `app.requestSingleInstanceLock()` 与异步 `before-quit`；同一轮还修掉代理的失败归因（双向形态不符、流中途截断）、观察者隔离、下游背压、`accept-encoding` 协商、协议固定头丢失，以及控制台的查询键撞车、监听器泄漏与加载失败静默；收口时又把两处「宿主自己动手」的地方一并拆掉——`stop` 不再清残留锁（接管只发生在取锁那一刻），管理接口与代理入口的请求体上限整个撤掉（本地工具，不做资源消耗攻击假设）；同一次收口里还把请求头改成**默认转发**——只有鉴权、逐跳头、与位置绑定的 `host`/`content-length` 和 `accept-encoding` 会被动，其余（官方接口那些 `openai-beta` / `anthropic-beta` / `x-stainless-*` 之类的自定义头）原样透传，协议固定头拆成「该覆盖」与「只补缺」两半。验收：`pnpm typecheck` / `pnpm lint` / `pnpm test`（116 文件 / 1235 测试）/ `pnpm build:cli` / `pnpm smoke:cli`（9/9）全绿（详见 [packaging.md](./packaging.md) §7 S2.4）
-- [ ] S3 App 回归：`app` 改为消费 `core` + `console`，托盘 / 自动更新 / 开机自启 / 原生对话框保持（`electron-builder` 配置与打包脚本已在 S0 迁入包内，本阶段只剩构建产物映射与 `apps/app/source` 的 `main/` / `preload/` 细分）。验收：桌面安装包端到端可用且升级路径不回归
-- [ ] S4 分发与文档：CLI 以 npm 全局 bin 分发并声明 `engines`；`tech-architecture.md`、`server-architecture.md` 与本节同步（CLI 侧「暂不发布」是当前明确决定，见 [packaging.md](./packaging.md) §7 S4）
+- [x] S0 搬目录与配置：建立 pnpm workspace 与 `packages/{contracts,core,console}` + `apps/app` 宿主壳；目录名统一为 `source/`，脚本按业务归入各包 `scripts/`（跨包收在 `packages/toolkit/scripts/`），打包资产按「谁用谁持有」进 `apps/app/`，turbo 接管任务编排。
+- [ ] S1 `core` 可独立运行：`core` / `contracts` 产出独立构建产物 + 裸 Node 冒烟脚本。**跳过**：CLI 直接用 Vite 别名打包 `core` / `contracts` 的源码，不消费它们的独立产物，因此没有驱动它的需求；留到真有第三方单独消费 `core` 时再做。
+- [x] S2 CLI 成型：落地 §5.1–§5.5 五项宿主适配，建立 `apps/cli` 并实现 `start` / `stop` / `status` / `version`。**未包含**：`config` 子命令、`--daemon`、发布形态。
+- [x] S2.1 CLI 生产级细节：单实例互斥（`instance.lock`）与崩溃兜底、`status --json`、端口/版本漂移诊断、非回环监听告警、9 步真实子进程冒烟脚本 `pnpm smoke:cli`。
+- [x] S2.2 两种形态的一致性：同一套服务、同一份数据，差别只在「怎么把它起来」。数据目录名唯一取自 `runtimeProfile.dataDirectoryName`；两个形态的密钥文件分开命名（密文算法不同，同名会让后写的把前一份全部作废）；「一致 / 能力差异 / 形态差异」三类逐项列清（[packaging.md](./packaging.md) §6）。
+- [x] S2.3 数据落用户主目录 + 两库拆分：数据目录改为 `<用户主目录>/.one-switch`（开发档 `~/.one-switch-development`）；`one-switch-v<n>.db` 拆成 `one-switch-config-<n>.db` / `one-switch-data-<n>.db`，两份 schema、两条 Drizzle 链，跨库外键全部移除（健康行惰性创建 + 启动时清理孤儿行），文件名版本号改用各库自己的 schema 版本常量，新增库边界守卫 `check-database-boundaries.mjs`。**不考虑兼容与历史**：换代只换文件名。
+- [x] S2.4 宿主与实例身份收口：把只在某一个宿主/某一条路径上成立的保证收进 core——实例互斥移到 `packages/core/source/runtime/instance-lock.ts` 并由 `startServer` 在绑定端口前取锁（存活判定为「pid 活着且心跳新鲜」）；代理侧修失败归因（双向形态不符、流中途截断）、观察者隔离、下游背压、`accept-encoding` 协商与协议固定头丢失，并把请求头改成**默认转发**（只动鉴权头、逐跳头、与位置绑定的 `host`/`content-length` 和 `accept-encoding`，协议固定头分「该覆盖」与「只补缺」两半）；控制台修查询键撞车、监听器泄漏与加载失败静默。
+- [x] S2.5 管理接口去鉴权 + 拆掉专门加的校验：管理接口撤掉实例 Token（`runtime-identity.ts` 删除），边界只剩回环监听与来源白名单；`node:sqlite` 的产物级断言删除，`external` 固定为 `[...builtinModules, /^node:/]`；`typecheck.mjs` 的 `include` 前置检查删除。保留三个 `check-*` 边界守卫与 `version.mjs --check`（声明式规则表，验的是架构约束而非某次构建的输出）。
+- [ ] S3 App 回归：`apps/app/source` 按 §4.1 拆出 `main/` 与 `preload/` 并复核构建产物映射（`electron-builder` 配置与打包脚本已归 `apps/app/`）；托盘 / 自动更新 / 开机自启 / 原生对话框保持。验收：桌面安装包端到端可用且升级路径不回归。
+- [ ] S4 分发与文档：CLI 以 npm 全局 bin 分发并声明 `engines`。**当前明确不发布**，`bin` 已就位但 `private: true` 未摘。
 
-已落地的工程前置：在既有分层守卫之外新增包边界守卫 `packages/toolkit/scripts/check-package-boundaries.mjs`（随 `pnpm lint` 执行），强制 `packages/*` 与 `apps/*` 之间的依赖方向。规则里预留的 CLI 分支已在 S2 建立 `apps/cli` 时自动生效（`RULES.cli`：禁止依赖 `console` 与 `app`、禁止 `electron`）。
+已落地的工程前置：包边界守卫 `packages/toolkit/scripts/check-package-boundaries.mjs`（随 `pnpm lint` 执行）强制 `packages/*` 与 `apps/*` 之间的依赖方向；`RULES.cli` 禁止 CLI 依赖 `console` 与 `app`、禁止 `electron`。

@@ -2,7 +2,7 @@
 
 ## 设计目标
 
-`packages/core/src` 是一个本地模块化服务，当前由 Electron 主进程使用，并服务于测试。它不依赖 Electron，之后作为核心包同时服务于 CLI 与 App，包边界与迁移阶段见 [packaging.md](./packaging.md)（S0 平移已完成）。当前阶段优先让代码按能力聚合、职责清楚，不为尚未出现的复杂度预设完整的领域驱动目录。
+`packages/core/source` 是一个本地模块化服务，当前由 Electron 主进程使用，并服务于测试。它不依赖 Electron，之后作为核心包同时服务于 CLI 与 App，包边界与阶段划分见 [packaging.md](./packaging.md) 与 [tech-architecture.md](./tech-architecture.md)。当前优先让代码按能力聚合、职责清楚，不为尚未出现的复杂度预设完整的领域驱动目录。
 
 遵循四条规则：
 
@@ -141,14 +141,13 @@ stateDiagram-v2
 - 停止操作保持幂等。
 - 两个监听器均为实例，由 `ServerRuntime` 持有，不使用模块级可变状态。
 
-## 实施状态
+## 结构约定
 
-1. [已完成] `runtime/server-runtime.ts` 持有管理服务、代理服务和数据库生命周期。
-2. [已完成] 管理 API 按 Provider、LogicalModel、ProviderModel、关系、配置、日志、分析和运行时控制分域，统一由 `management/router.ts` 注册。
-3. [已完成] 代理入口解析、路由决策、尝试规划与执行、协议描述与适配、传输、响应产出、修改器、请求重写和观测已拆为 `proxy/` 下的独立分层目录，分层契约见 [proxy-engine.md](./proxy-engine.md)。
-4. [已完成] SQLite 代码保留在 `database/`，并按 Provider、Model、LogicalModel、Settings、Health、Request Log、Analytics 拆分 store；不使用 `infrastructure/database/store.ts`。
-5. [已完成] Render 端通过 `api/*.ts`、`features/*`、页面 hooks 和 `infrastructure/polling-manager.ts` 分域；不保留单体 API 或 app-service 兼容出口。
-6. [已完成] v0.3 不保留兼容 facade、re-export、旧 API 别名、旧领域名称或双读双写。
-7. [已完成（源码/构建验证）] `typecheck`、`lint`、`test` 全部通过；Vite bundling 通过。`electron-builder` 在 Windows 当前用户缺少符号链接权限时失败，因此 UI 回归与发布包验证仍待人工完成。
+1. 两个监听器均为实例，由 `runtime/server-runtime.ts` 持有，不使用模块级可变状态；启动失败必须回滚已启动的监听器与数据库。
+2. 管理 API 按 Provider、LogicalModel、ProviderModel、关系、配置、日志、分析和运行时控制分域，统一由 `management/router.ts` 注册。
+3. 代理入口解析、路由决策、尝试规划与执行、协议描述与适配、传输、响应产出、修改器、请求重写和观测拆为 `proxy/` 下的独立分层目录，分层契约见 [proxy-engine.md](./proxy-engine.md)。
+4. SQLite 代码统一在 `database/`，并按 Provider、Model、LogicalModel、Settings、Health、Request Log、Analytics 拆分 store。
+5. 控制台通过 `api/*.ts`、`features/*`、页面 hooks 和 `infrastructure/polling-manager.ts` 分域。
+6. 不保留兼容 facade、re-export、旧 API 别名、旧领域名称或双读双写。
 
 验证命令以根目录 `package.json` 的 scripts 为准；文档更新不代替最终验证执行。

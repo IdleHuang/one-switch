@@ -112,25 +112,33 @@ one-switch/
 │       └── scripts/                     # lint / test / typecheck / version / 包边界守卫 / lib
 │
 ├── apps/                                # 宿主壳，不作为库发布
-│   └── app/                             # Electron 主进程、预加载与命令入口
-│       ├── vite.config.ts               # 主进程构建（ESM）
-│       ├── vite.preload.config.ts       # preload 构建（CJS，必须与主进程分成两次构建）
-│       ├── vite.shared.ts               # 两份配置共用的入口、别名与 Node 外部化
-│       ├── electron-builder.config.cjs  # 打包配置
-│       ├── build/                       # 应用图标与托盘图标
-│       ├── scripts/                     # build.mjs、dev.mjs、macos-adhoc-sign.cjs
-│       ├── dist/command/                # 构建产物：index.js（主进程）+ preload.js
-│       └── source/
-│           ├── index.ts                 # Electron 应用编排
-│           ├── preload.ts               # 暴露最小化 API 给渲染进程
-│           ├── auto-launch.ts           # 开机自启
-│           ├── tray-manager.ts          # 菜单栏/托盘管理
-│           └── secret-store.ts          # 系统密钥环封装
+│   ├── app/                             # Electron 主进程、预加载与命令入口
+│   │   ├── vite.config.ts               # 主进程构建（ESM）
+│   │   ├── vite.preload.config.ts       # preload 构建（CJS，必须与主进程分成两次构建）
+│   │   ├── vite.shared.ts               # 两份配置共用的入口、别名与 Node 外部化
+│   │   ├── electron-builder.config.cjs  # 打包配置
+│   │   ├── build/                       # 应用图标与托盘图标
+│   │   ├── scripts/                     # build.mjs、dev.mjs、release-notes.mjs、macos-adhoc-sign.cjs
+│   │   ├── dist/command/                # 构建产物：index.js（主进程）+ preload.js
+│   │   └── source/
+│   │       ├── index.ts                 # Electron 应用编排
+│   │       ├── preload.ts               # 暴露最小化 API 给渲染进程
+│   │       ├── auto-launch.ts           # 开机自启
+│   │       ├── tray-manager.ts          # 菜单栏/托盘管理
+│   │       ├── updater.ts               # 自动更新
+│   │       ├── i18n.ts                  # 原生界面语言
+│   │       └── secret-store.ts          # 系统密钥环封装
+│   │
+│   └── cli/                             # 命令行宿主（`one-switch`）
+│       ├── vite.config.ts               # ESM 构建（自带外部化 / platform / define）
+│       ├── scripts/                     # build.mjs、smoke.mjs
+│       ├── dist/                        # 构建产物：index.js + web/（控制台）+ 按需分块
+│       └── source/                      # index.ts（分发与退出码）、options.ts、宿主适配与 commands/
 │
 └── release/                             # 打包产物
 ```
 
-包边界、每包构建产物与目录对照见 [packaging.md](./packaging.md)。当前状态：S0（目录平移与工具链搬迁）已完成——目录名用 `source/`、根目录只留工作区级配置、脚本按业务归入各包 `scripts/`（跨包的收在 `packages/toolkit/scripts/`）、turbo 接管任务编排、三份 Vite 配置各自构建一个目标（控制台 / 主进程 / preload）；导入别名仍沿用旧名（`@common` / `@server` / `@`）而只是重指向新位置；`apps/cli` 尚未建立。
+包边界、每包构建产物、目录归属与阶段划分见 [packaging.md](./packaging.md)。目录名统一用 `source/`；根目录只留工作区级配置；脚本按业务归入各包 `scripts/`（跨包的收在 `packages/toolkit/scripts/`）；turbo 接管任务编排；三份 Vite 配置各自构建一个目标（控制台 / 主进程 / preload）；导入别名沿用旧名（`@common` / `@server` / `@`）但重指向新位置。
 
 ## 模块地图
 
