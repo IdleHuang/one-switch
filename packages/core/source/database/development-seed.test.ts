@@ -3,21 +3,21 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
-import type { KeychainApi } from '@common/keychain'
-import { closeDatabase, getDb, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
+import type { SecretStore } from '@common/secret-store'
+import { closeDatabases, getConfigDb, getDataDb, initDatabases } from './index'
 import { seedDevelopmentData } from './development-seed'
-import { providerModels, requestUsages } from './schema'
+import { providerModels } from './config-schema'
+import { requestUsages } from './data-schema'
 import { createProvider, listProviders } from './provider-store'
 import { listLogicalModels } from './logical-model-store'
 import { getAttemptUsage, getRequestLog, getRequestUsage, listAttemptContents, listAttemptsByRequest, listRequestContents, listRequestLogs } from './request-log-store'
 
 let temporaryDirectory: string
-let secretStore: KeychainApi
+let secretStore: SecretStore
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-seed-'))
-  await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+  await initDatabases(temporaryDirectory)
   secretStore = {
     set: vi.fn(async () => undefined),
     get: vi.fn(async () => null),
@@ -26,7 +26,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   fs.rmSync(temporaryDirectory, { recursive: true, force: true })
 })
 
@@ -38,7 +38,7 @@ describe('development seed', () => {
     expect((await listProviders()).map(provider => provider.name)).toEqual(expect.arrayContaining(['OpenAI', 'Anthropic', 'Volcengine Ark', 'DeepSeek']))
     expect((await listProviders()).every(provider => !provider.name.includes('开发示例'))).toBe(true)
     expect(await listLogicalModels()).toHaveLength(1)
-    expect(getDb().select({ id: providerModels.id }).from(providerModels).all()).toHaveLength(7)
+    expect(getConfigDb().select({ id: providerModels.id }).from(providerModels).all()).toHaveLength(7)
     expect(await listRequestLogs(200)).toHaveLength(120)
     const firstBatchRequests = await listRequestLogs(120, 0)
     const successfulRequest = await getRequestLog(firstBatchRequests.find(request => request.status === 'success')!.id)
@@ -60,9 +60,9 @@ describe('development seed', () => {
         total_tokens: expect.any(Number),
       }),
     }))
-    expect(getDb().select().from(providerModels).all()).toHaveLength(7)
+    expect(getConfigDb().select().from(providerModels).all()).toHaveLength(7)
     // 数值用量表里只有可求和的 token 类条目，原始报文另占一行 `raw`。
-    const usageRows = getDb().select().from(requestUsages).where(eq(requestUsages.requestId, successfulRequestId)).all()
+    const usageRows = getDataDb().select().from(requestUsages).where(eq(requestUsages.requestId, successfulRequestId)).all()
     expect(usageRows).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'inputTokens', value: expect.any(Number), rawValue: null }),
       expect.objectContaining({ type: 'raw', value: null, rawValue: expect.stringContaining('prompt_tokens') }),
@@ -126,7 +126,7 @@ describe('development seed', () => {
     expect(await seedDevelopmentData(secretStore, { allowExisting: true })).toBe(true)
     expect(await listProviders()).toHaveLength(5)
     expect(await listLogicalModels()).toHaveLength(1)
-    expect(getDb().select({ id: providerModels.id }).from(providerModels).all()).toHaveLength(7)
+    expect(getConfigDb().select({ id: providerModels.id }).from(providerModels).all()).toHaveLength(7)
     const allRequests = await listRequestLogs(300)
     expect(allRequests).toHaveLength(240)
     const secondBatchRequests = allRequests.filter(request => !firstBatchIds.has(request.id))

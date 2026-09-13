@@ -136,7 +136,7 @@ outboundProxyBypass: string
 - 设置更新接口；
 - 设置页草稿与保存请求。
 
-上游代理是全局设置，**不进入供应商包**：`/api/provider/export` 只携带单个供应商的端点、模型、自定义设置和可选的明文 API Key（详见 [provider-model.md](./provider-model.md)）。跨机器迁移代理配置需要在新环境的设置页重新填写。preview 阶段不提供旧配置/旧库的兼容升级路径，缺少新字段时按 `SettingsSchema` 的默认值处理。
+上游代理是全局设置，**不进入供应商包**：`/api/provider/export` 只携带单个供应商的端点、模型、自定义设置和可选的明文 API Key（详见 [provider-model.md](./provider-model.md)）。跨机器迁移代理配置需要在新环境的设置页重新填写。缺少新字段时按 `SettingsSchema` 的默认值处理，不做任何兼容升级路径。
 
 ## 安全与隐私
 

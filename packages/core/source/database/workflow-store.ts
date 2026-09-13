@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNull } from 'drizzle-orm'
 import { generateId, now } from '@common/utils'
-import { getDb } from './index'
-import { workflows } from './schema'
+import { getConfigDb } from './index'
+import { workflows } from './config-schema'
 
 export interface WorkflowRecord {
   id: string
@@ -33,17 +33,17 @@ function parseWorkflow(row: WorkflowRow): WorkflowRecord {
 }
 
 export async function listWorkflows(includeDeleted = false): Promise<WorkflowRecord[]> {
-  const rows = getDb().select().from(workflows).where(includeDeleted ? undefined : isNull(workflows.deletedTime)).orderBy(asc(workflows.type), desc(workflows.version)).all()
+  const rows = getConfigDb().select().from(workflows).where(includeDeleted ? undefined : isNull(workflows.deletedTime)).orderBy(asc(workflows.type), desc(workflows.version)).all()
   return rows.map(parseWorkflow)
 }
 
 export async function getWorkflow(type: string, version: number): Promise<WorkflowRecord | undefined> {
-  const row = getDb().select().from(workflows).where(and(eq(workflows.type, type), eq(workflows.version, version))).get()
+  const row = getConfigDb().select().from(workflows).where(and(eq(workflows.type, type), eq(workflows.version, version))).get()
   return row ? parseWorkflow(row) : undefined
 }
 
 export async function getLatestWorkflow(type: string): Promise<WorkflowRecord | undefined> {
-  const row = getDb().select().from(workflows).where(and(eq(workflows.type, type), isNull(workflows.deletedTime))).orderBy(desc(workflows.version), desc(workflows.updatedTime)).get()
+  const row = getConfigDb().select().from(workflows).where(and(eq(workflows.type, type), isNull(workflows.deletedTime))).orderBy(desc(workflows.version), desc(workflows.updatedTime)).get()
   return row ? parseWorkflow(row) : undefined
 }
 
@@ -60,7 +60,7 @@ export async function createWorkflow(input: Omit<WorkflowRecord, 'id' | 'created
     updatedTime: time,
     deletedTime: null,
   }
-  getDb().insert(workflows).values({
+  getConfigDb().insert(workflows).values({
     id: workflow.id,
     type: workflow.type,
     version: workflow.version,
@@ -75,7 +75,7 @@ export async function createWorkflow(input: Omit<WorkflowRecord, 'id' | 'created
 }
 
 export async function updateWorkflow(id: string, updates: Partial<Omit<WorkflowRecord, 'id' | 'type' | 'version' | 'createdTime'>>): Promise<WorkflowRecord> {
-  const existing = getDb().select().from(workflows).where(eq(workflows.id, id)).get()
+  const existing = getConfigDb().select().from(workflows).where(eq(workflows.id, id)).get()
   if (!existing) throw new Error(`workflow not found: ${id}`)
   const next: WorkflowRecord = {
     ...parseWorkflow(existing),
@@ -85,7 +85,7 @@ export async function updateWorkflow(id: string, updates: Partial<Omit<WorkflowR
     version: existing.version,
     updatedTime: now(),
   }
-  getDb().update(workflows).set({
+  getConfigDb().update(workflows).set({
     name: next.name,
     description: next.description,
     definition: JSON.stringify(next.definition),
@@ -97,5 +97,5 @@ export async function updateWorkflow(id: string, updates: Partial<Omit<WorkflowR
 
 export async function deleteWorkflow(id: string): Promise<void> {
   const time = now()
-  getDb().update(workflows).set({ deletedTime: time, updatedTime: time }).where(eq(workflows.id, id)).run()
+  getConfigDb().update(workflows).set({ deletedTime: time, updatedTime: time }).where(eq(workflows.id, id)).run()
 }

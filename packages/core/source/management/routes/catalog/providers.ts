@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
-import { generateKeyReference } from '@common/keychain'
+import { generateKeyReference } from '@common/secret-store'
 import { ProtocolSchema, ProviderSchema, type Provider } from '@common/schemas'
 import {
   createProvider,

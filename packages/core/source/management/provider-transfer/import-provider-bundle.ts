@@ -1,4 +1,4 @@
-import { generateKeyReference } from '@common/keychain'
+import { generateKeyReference } from '@common/secret-store'
 import { ProviderBundleImportRequestSchema } from '@common/provider-bundle'
 import type { ProviderBundleImportRequest, ProviderBundleModel, ProviderBundleProvider, ProviderBundleSetting } from '@common/provider-bundle'
 import { BUILT_IN_DEFAULT_LOGICAL_MODEL_NAME } from '@common/schemas'
@@ -22,7 +22,7 @@ export interface ProviderBundleImportResult {
 }
 
 /**
- * `initDatabase` 会保证 `default` 逻辑模型存在，与「新建供应商模型」接口的默认归属一致。
+ * `initDatabases` 会保证 `default` 逻辑模型存在，与「新建供应商模型」接口的默认归属一致。
  *
  * 调度位置（挂在哪个逻辑模型、优先级、权重）属于逻辑模型域，不在供应商包里；但如果不给新建的
  * 模型建策略，搬过来的供应商就会变成一个不参与任何路由的空壳。所以新建的模型按手工新建的默认

@@ -3,8 +3,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-// 迁移基线现在随核心包分发（`packages/core/drizzle`），与实现源码同包但不同目录。
+// 迁移基线随核心包分发（`packages/core/drizzle`），与实现源码同包但不同目录。
+// 两个库各有自己的链：`drizzle/config` 与 `drizzle/data`，drizzle-kit 一份配置只能喂一条链，
+// 所以下面每一条不变量都必须在两个目录里分别成立。
 const drizzleDirectory = fileURLToPath(new URL('../../drizzle', import.meta.url))
+const databaseRoles = ['config', 'data'] as const
 
 interface MigrationSnapshot {
   folder: string
@@ -15,17 +18,21 @@ interface MigrationSnapshot {
   ddl: unknown[]
 }
 
-function listMigrationFolders(): string[] {
+function roleDirectory(role: (typeof databaseRoles)[number]): string {
+  return path.join(drizzleDirectory, role)
+}
+
+function listMigrationFolders(role: (typeof databaseRoles)[number]): string[] {
   return fs
-    .readdirSync(drizzleDirectory, { withFileTypes: true })
+    .readdirSync(roleDirectory(role), { withFileTypes: true })
     .filter(entry => entry.isDirectory())
     .map(entry => entry.name)
     .sort()
 }
 
-function readSnapshots(): MigrationSnapshot[] {
-  return listMigrationFolders().map(folder => {
-    const raw = JSON.parse(fs.readFileSync(path.join(drizzleDirectory, folder, 'snapshot.json'), 'utf8')) as Omit<
+function readSnapshots(role: (typeof databaseRoles)[number]): MigrationSnapshot[] {
+  return listMigrationFolders(role).map(folder => {
+    const raw = JSON.parse(fs.readFileSync(path.join(roleDirectory(role), folder, 'snapshot.json'), 'utf8')) as Omit<
       MigrationSnapshot,
       'folder'
     >
@@ -36,23 +43,28 @@ function readSnapshots(): MigrationSnapshot[] {
 // 这些不变量保护的是 drizzle-kit 的 diff 基线选择：
 // 缺失 snapshot.json 会让基线回退到更早的状态，而分叉的链（多个叶子）会被当成
 // 分支合并，从而生成一份把早已应用过的 DDL 再重放一遍的假迁移。
-// 当前 `drizzle/` 里只有一个首发基线，这些不变量就是「它必须保持干净」的定义；
+// 当前每条链里只有一个首发基线，这些不变量就是「它必须保持干净」的定义；
 // 将来真的开始追加迁移时，它们同样成立。
-describe('drizzle migration chain integrity', () => {
-  const folders = listMigrationFolders()
+describe.each(databaseRoles)('%s migration chain integrity', (role) => {
+  const folders = listMigrationFolders(role)
+
+  it('has a migration baseline at all', () => {
+    // 少了基线，运行时的 `migrate()` 会静默建出一个空库：所有查询都在启动后才炸。
+    expect(folders.length).toBeGreaterThan(0)
+  })
 
   it('keeps migration.sql and snapshot.json together in every folder', () => {
     const incomplete = folders.filter(
       folder =>
-        !fs.existsSync(path.join(drizzleDirectory, folder, 'migration.sql')) ||
-        !fs.existsSync(path.join(drizzleDirectory, folder, 'snapshot.json')),
+        !fs.existsSync(path.join(roleDirectory(role), folder, 'migration.sql')) ||
+        !fs.existsSync(path.join(roleDirectory(role), folder, 'snapshot.json')),
     )
 
     expect(incomplete).toEqual([])
   })
 
   it('forms one linear snapshot chain with a single tip', () => {
-    const snapshots = readSnapshots()
+    const snapshots = readSnapshots(role)
     const byId = new Map(snapshots.map(snapshot => [snapshot.id, snapshot]))
     const childCount = new Map(snapshots.map(snapshot => [snapshot.id, 0]))
     const danglingParents: string[] = []
@@ -80,16 +92,16 @@ describe('drizzle migration chain integrity', () => {
   })
 
   it('keeps the baseline a pure create-only migration', () => {
-    // preview 阶段不兼容旧库，历史里不存在需要演进的中间态，所以首发基线只能由 schema 直接
-    // 生成：出现 ALTER / DROP 就说明文件被手工改过，或者更早的历史混了进来。
-    const baselineSql = fs.readFileSync(path.join(drizzleDirectory, folders[0], 'migration.sql'), 'utf8')
+    // 每个库只保留一份由 schema 直接生成的首发基线：出现 ALTER / DROP 就说明文件被手工改过，
+    // 或者混进了不该在这里的历史。
+    const baselineSql = fs.readFileSync(path.join(roleDirectory(role), folders[0], 'migration.sql'), 'utf8')
 
     expect(baselineSql).toMatch(/^\s*CREATE TABLE/m)
     expect(baselineSql).not.toMatch(/^\s*(ALTER TABLE|DROP)/m)
   })
 
   it('writes sqlite version 7 snapshots for every link', () => {
-    for (const snapshot of readSnapshots()) {
+    for (const snapshot of readSnapshots(role)) {
       expect({ folder: snapshot.folder, version: snapshot.version, dialect: snapshot.dialect }).toEqual({
         folder: snapshot.folder,
         version: '7',
@@ -100,7 +112,7 @@ describe('drizzle migration chain integrity', () => {
   })
 
   it('counts each snapshot node exactly once while walking the chain', () => {
-    const snapshots = readSnapshots()
+    const snapshots = readSnapshots(role)
     const byId = new Map(snapshots.map(snapshot => [snapshot.id, snapshot]))
 
     let cursor: MigrationSnapshot | undefined = snapshots[snapshots.length - 1]
@@ -112,5 +124,21 @@ describe('drizzle migration chain integrity', () => {
     }
 
     expect(visited.size).toBe(snapshots.length)
+  })
+
+  // 文件角色必须与它的链一致：一个只建配置表的链被放进 `data/`，运行时两边的迁移
+  // 都会「成功」，然后查询在启动几秒后才因为缺表而失败——那是最难定位的一类故障。
+  it('keeps the configuration file free of observability tables and vice versa', () => {
+    const sql = folders
+      .map(folder => fs.readFileSync(path.join(roleDirectory(role), folder, 'migration.sql'), 'utf8'))
+      .join('\n')
+    const observabilityTables = ['request_logs', 'request_attempts', 'request_usages', 'runtime_logs', 'provider_health']
+
+    if (role === 'config') {
+      for (const table of observabilityTables) expect(sql).not.toContain(`CREATE TABLE \`${table}\``)
+    } else {
+      expect(sql).not.toContain('CREATE TABLE `providers`')
+      expect(sql).not.toContain('CREATE TABLE `logical_models`')
+    }
   })
 })

@@ -6,7 +6,7 @@ describe('runtime profile', () => {
     const development = getRuntimeProfile('development')
     const production = getRuntimeProfile('production')
 
-    expect(development.userDataDirectoryName).not.toBe(production.userDataDirectoryName)
+    expect(development.dataDirectoryName).not.toBe(production.dataDirectoryName)
     expect(development.proxyPort).not.toBe(production.proxyPort)
     expect(development.managementPort).not.toBe(production.managementPort)
   })

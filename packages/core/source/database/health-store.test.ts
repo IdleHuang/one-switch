@@ -2,8 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closeDatabase, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
+import { closeDatabases, initDatabases } from './index'
 import {
   getProviderHealth,
   getProviderModelHealth,
@@ -23,11 +22,11 @@ let temporaryDirectory: string
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-health-store-'))
-  await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+  await initDatabases(temporaryDirectory)
 })
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   fs.rmSync(temporaryDirectory, { recursive: true, force: true })
 })
 
@@ -40,10 +39,9 @@ describe('health store', () => {
       enabled: true,
     })
 
-    expect(await getProviderHealth(provider.id)).toMatchObject({
-      providerId: provider.id,
-      consecutiveFailures: 0,
-    })
+    // 健康行在观测库里，没有外键，也不在「新建供应商」时预建——那会是一次跳库写入，
+    // 不可能原子完成。所以「没有记录」就是初始状态，它在调度与界面上都等效于健康。
+    expect(await getProviderHealth(provider.id)).toBeUndefined()
 
     await recordProviderFailure(provider.id, 3, 10, 60)
     await recordProviderFailure(provider.id, 3, 10, 60)
@@ -96,8 +94,8 @@ describe('health store', () => {
       }],
     })
 
-    const initial = await getProviderModelHealth(model.id)
-    expect(initial).toMatchObject({ providerModelId: model.id, consecutiveFailures: 0 })
+    // 同上：模型级健康行同样是懒创建的。
+    expect(await getProviderModelHealth(model.id)).toBeUndefined()
 
     await recordProviderModelFailure(model.id, 2, 5, 30)
     await recordProviderModelFailure(model.id, 2, 5, 30)

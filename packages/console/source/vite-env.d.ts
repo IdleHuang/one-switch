@@ -52,6 +52,18 @@ interface ElectronAPI {
   updater: UpdaterAPI
 }
 
+/**
+ * 宿主注入的运行时信息（`window.__ONE_SWITCH__`）。
+ *
+ * 目前只用于覆盖管理 API 基地址（见 `source/api/client.ts`）：Electron 形态从 `file://`
+ * 加载页面，靠 URL 推不出管理服务在哪儿，需要宿主明说。
+ */
+interface OneSwitchRuntime {
+  apiBase?: string
+}
+
 interface Window {
-  electronAPI: ElectronAPI
+  /** 只有 Electron 形态（preload 注入）才有；浏览��形态是 `undefined`。 */
+  electronAPI?: ElectronAPI
+  __ONE_SWITCH__?: OneSwitchRuntime
 }

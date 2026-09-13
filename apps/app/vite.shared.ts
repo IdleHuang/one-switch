@@ -65,4 +65,12 @@ export const nodeDefine = {
 export const nodeBuild = {
   ...sharedBuild,
   target: nodeTarget,
+  // 与 `apps/cli/vite.config.ts` 同一条理由：Vite 会把动态 `import()` 包成
+  // `__vitePreload(() => import(...), deps)`，而那个辅助函数在 `deps` 非空时会去读
+  // `document.getElementsByTagName('link')`——宿主进程里没有 `document`，一旦出现带
+  // 依赖清单的动态导入，就会在运行期炸 `ReferenceError: document is not defined`。
+  // 主进程目前没有任何动态导入（产物里那份 `preload-helper-*.js` 只有 import、没有调用），
+  // 所以这一行今天没有可观察效果，是**纯防御**：真正要防的是「哪天给主进程加一个动态
+  // 导入」，而那一刻没有人会想起来回头改构建配置。
+  modulePreload: false,
 } satisfies UserConfig['build']

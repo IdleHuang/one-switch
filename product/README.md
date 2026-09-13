@@ -34,4 +34,4 @@
 | 国际化 | [i18n.md](./i18n.md) | 三层语言模型、UI 目录、诊断固定英文、错误码契约、迁移阶段 |
 | 版本规划 | [roadmap.md](./roadmap.md) | 唯一的进度与验收状态来源 |
 
-管理 API 清单以代码为准（`packages/core/source/management/router.ts` 与 `packages/core/source/management/routes/`）；控制台页面清单以 `packages/console/source/pages/` 为准；数据库表与字段以 `packages/core/source/database/schema.ts` 为准。
+管理 API 清单以代码为准（`packages/core/source/management/router.ts` 与 `packages/core/source/management/routes/`）；控制台页面清单以 `packages/console/source/pages/` 为准；数据库表与字段以 `packages/core/source/database/config-schema.ts`（用户配置）与 `data-schema.ts`（观测数据）为准——两个库各自是一份独立 schema。

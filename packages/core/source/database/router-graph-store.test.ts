@@ -4,8 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createDefaultPolicyGraph, isSameGraph } from '@common/router/presets'
 import type { RuntimeLogicalModel, WorkflowGraph } from '@common/router/types'
-import { closeDatabase, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
+import { closeDatabases, initDatabases } from './index'
 import { listLogicalModels } from './logical-model-store'
 import {
   MAX_ROUTER_GRAPH_VERSIONS,
@@ -19,7 +18,7 @@ import {
 const temporaryDirectories: string[] = []
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true })
   }
@@ -28,11 +27,11 @@ afterEach(async () => {
 async function initTemporaryDatabase(): Promise<void> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-router-graph-'))
   temporaryDirectories.push(directory)
-  await initDatabase(directory, TEST_DATABASE_FILE_NAME)
+  await initDatabases(directory)
 }
 
 async function createModels(): Promise<RuntimeLogicalModel[]> {
-  // 内建默认逻辑模型由 `initDatabase` 落库，这里不重复创建它（`logical_models.name` 上是唯一索引）。
+  // 内建默认逻辑模型由 `initDatabases` 落库，这里不重复创建它（`logical_models.name` 上是唯一索引）。
   const seeded = await listLogicalModels()
   return seeded.map(model => ({ id: model.id, name: model.name, enabled: model.enabled }))
 }

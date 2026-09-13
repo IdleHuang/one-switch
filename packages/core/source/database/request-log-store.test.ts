@@ -2,8 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closeDatabase, getDb, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
+import { closeDatabases, getDataDb, initDatabases } from './index'
 import { createProvider } from './provider-store'
 import {
   countRequestLogs,
@@ -30,11 +29,11 @@ let temporaryDirectory: string
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-request-log-'))
-  await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+  await initDatabases(temporaryDirectory)
 })
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   fs.rmSync(temporaryDirectory, { recursive: true, force: true })
 })
 
@@ -63,8 +62,8 @@ describe('request log store persistence', () => {
   it('filters, counts, paginates, and maps request logs from stored rows', async () => {
     const first = await createLog('req_first', 'success')
     const second = await createLog('req_second', 'failed')
-    getDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(100, first.id)
-    getDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(200, second.id)
+    getDataDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(100, first.id)
+    getDataDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(200, second.id)
 
     expect(await countRequestLogs({ status: 'failed', createdTimeFrom: 150, createdTimeTo: 250 })).toBe(1)
     expect(await listRequestLogs(1, 0, { logicalModelId: 'model_default' })).toEqual([
@@ -197,14 +196,14 @@ describe('request log store persistence', () => {
       responseBody: null,
     })
     await recordAttemptUsage({ attemptId: pruneAttempt.id, servesRequest: true, ...EMPTY_USAGE, inputTokens: 1, outputTokens: 1 })
-    getDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(Date.now() - 3 * 24 * 60 * 60 * 1000, log.id)
+    getDataDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(Date.now() - 3 * 24 * 60 * 60 * 1000, log.id)
 
     expect(await pruneRequestLogsBefore(1)).toBe(1)
     expect(await getRequestLog(log.id)).toBeNull()
-    expect(await getDb().$client.prepare('SELECT COUNT(*) AS count FROM request_contents WHERE requestId = ?').get(log.id)).toEqual({ count: 0 })
-    expect(await getDb().$client.prepare('SELECT COUNT(*) AS count FROM attempt_contents WHERE attemptId = ?').get(pruneAttempt.id)).toEqual({ count: 0 })
-    expect(await getDb().$client.prepare('SELECT COUNT(*) AS count FROM attempt_usages WHERE attemptId = ?').get(pruneAttempt.id)).toEqual({ count: 0 })
-    expect(await getDb().$client.prepare('SELECT COUNT(*) AS count FROM request_usages WHERE requestId = ?').get(log.id)).toEqual({ count: 0 })
+    expect(await getDataDb().$client.prepare('SELECT COUNT(*) AS count FROM request_contents WHERE requestId = ?').get(log.id)).toEqual({ count: 0 })
+    expect(await getDataDb().$client.prepare('SELECT COUNT(*) AS count FROM attempt_contents WHERE attemptId = ?').get(pruneAttempt.id)).toEqual({ count: 0 })
+    expect(await getDataDb().$client.prepare('SELECT COUNT(*) AS count FROM attempt_usages WHERE attemptId = ?').get(pruneAttempt.id)).toEqual({ count: 0 })
+    expect(await getDataDb().$client.prepare('SELECT COUNT(*) AS count FROM request_usages WHERE requestId = ?').get(log.id)).toEqual({ count: 0 })
   })
 
   it('只清理正文时保留请求、尝试与用量', async () => {
@@ -250,8 +249,8 @@ describe('request log store persistence', () => {
     })
     // 两条正文各自记录写入时刻，清理只按这个时刻判断，因此分别挪到 10 天前。
     const staleTime = Date.now() - 10 * 24 * 60 * 60 * 1000
-    getDb().$client.prepare('UPDATE request_contents SET createdTime = ? WHERE requestId = ?').run(staleTime, log.id)
-    getDb().$client.prepare('UPDATE attempt_contents SET createdTime = ? WHERE attemptId = ?').run(staleTime, attempt.id)
+    getDataDb().$client.prepare('UPDATE request_contents SET createdTime = ? WHERE requestId = ?').run(staleTime, log.id)
+    getDataDb().$client.prepare('UPDATE attempt_contents SET createdTime = ? WHERE attemptId = ?').run(staleTime, attempt.id)
 
     expect(await pruneRequestContentsBefore(7)).toBe(2)
 

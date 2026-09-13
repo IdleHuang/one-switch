@@ -2,20 +2,19 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { KeychainApi } from '@common/keychain'
-import { closeDatabase, initDatabase } from '../database'
-import { TEST_DATABASE_FILE_NAME } from '../database/test-support'
+import type { SecretStore } from '@common/secret-store'
+import { closeDatabases, initDatabases } from '../database'
 import { createProvider, getProvider, listProviders } from '@server/database/provider-store'
 import { configureSecretStore } from '@server/infrastructure/secrets/secret-store'
 import { deleteProviderAndSecret, providerRoutes } from './routes/catalog/providers'
 import { mockResponse } from './test-support'
 
 let temporaryDirectory: string
-let secretStore: KeychainApi
+let secretStore: SecretStore
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-provider-'))
-  await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+  await initDatabases(temporaryDirectory)
   secretStore = {
     set: vi.fn(async () => undefined),
     get: vi.fn(async () => null),
@@ -25,7 +24,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   fs.rmSync(temporaryDirectory, { recursive: true, force: true })
 })
 

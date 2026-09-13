@@ -19,7 +19,14 @@ import { LOCALES, type Catalog, type MessageValue } from './types'
 const REPO_ROOT = fileURLToPath(new URL('../../../..', import.meta.url))
 
 /** 生产源码分布在各个包内；这里必须覆盖全部宿主侧入口，否则「死 key」结论只是漏扫的假象。 */
-const SOURCE_DIRECTORIES = ['packages/console/source', 'apps/app/source', 'packages/contracts/source', 'packages/core/source']
+const SOURCE_DIRECTORIES = [
+  'packages/console/source',
+  'packages/contracts/source',
+  'packages/core/source',
+  'apps/app/source',
+  // 命令行宿主用的是同一份目录（`native.cli.*`）：漏掉它，那批 key 会被误判成死 key。
+  'apps/cli/source',
+]
 
 /** 动态拼 key 的调用点：`` t(`errors.${code}`) `` 这种扫描不到字面量，只能按前缀豁免。 */
 const DYNAMIC_KEY_PREFIXES = ['errors.', 'failureReason.']

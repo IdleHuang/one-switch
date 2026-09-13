@@ -12,7 +12,7 @@ module.exports = {
   // projectDir 就是本包（`apps/app`），所以这里的路径一律相对它解析；
   // 两个 `{ from, to }` 把「不是本包构建出来的」产物抬进 asar，落到主进程代码反推的位置上：
   //   `dist/render`           ← 渲染层静态产物（`__dirname/../render`）
-  //   `packages/core/drizzle` ← 迁移基线（`__dirname/../../packages/core/drizzle`）
+  //   `packages/core/drizzle` ← 两条迁移链 `config/` 与 `data/`（`__dirname/../../packages/core/drizzle`）
   // 这两条映射和 `apps/app/vite.config.ts` 里 `dist/command` 的命名是一组，改一处必须改全部。
   files: [
     'dist',

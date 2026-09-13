@@ -2,20 +2,19 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { closeDatabase, initDatabase } from './index'
-import { TEST_DATABASE_FILE_NAME } from './test-support'
+import { closeDatabases, initDatabases } from './index'
 import { configureSettingsDefaults, getSettings, onSettingsChanged, updateSettings } from './settings-store'
 
 let temporaryDirectory: string
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-settings-store-'))
-  await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
-  configureSettingsDefaults({ listenPort: 9300 })
+  await initDatabases(temporaryDirectory)
+  configureSettingsDefaults({ listenHost: '127.0.0.1', listenPort: 9300 })
 })
 
 afterEach(async () => {
-  await closeDatabase()
+  await closeDatabases()
   fs.rmSync(temporaryDirectory, { recursive: true, force: true })
 })
 
@@ -57,7 +56,7 @@ describe('settings store', () => {
   })
 
   it('falls back to configured defaults when a key is absent', async () => {
-    configureSettingsDefaults({ listenPort: 9500 })
+    configureSettingsDefaults({ listenHost: '127.0.0.1', listenPort: 9500 })
 
     const settings = await getSettings()
     expect(settings.listenPort).toBe(9500)

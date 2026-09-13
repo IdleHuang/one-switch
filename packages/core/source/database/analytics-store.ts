@@ -1,8 +1,8 @@
 import { and, eq, gte, sql, type SQL } from 'drizzle-orm'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import type { FailureReasonCategory, RequestSourceStat, RequestStatus } from '@common/schemas'
-import { getDb } from './index'
-import { attemptUsages, requestAttempts, requestAttributes, requestLogs, requestUsages } from './schema'
+import { getDataDb } from './index'
+import { attemptUsages, requestAttempts, requestAttributes, requestLogs, requestUsages } from './data-schema'
 
 /**
  * 用量表里可以求和的类型。
@@ -45,7 +45,7 @@ export interface StatsSummary {
 }
 
 export async function getStatsSummary(sinceMs: number): Promise<StatsSummary> {
-  const db = getDb()
+  const db = getDataDb()
   const result = db
     .select({
       total: sql<number>`count(*)`.as('total'),
@@ -92,7 +92,7 @@ type TrendPointRow = {
 //
 // 逐类型取值意味着 `raw` 行（上游原始报文，数值列为 NULL）不会进入任何一列。
 function buildRequestUsagePivot(sinceMs: number) {
-  return getDb()
+  return getDataDb()
     .select({ requestId: requestUsages.requestId, ...usagePivotColumns(requestUsages.type, requestUsages.value) })
     .from(requestUsages)
     .where(gte(requestUsages.createdTime, sinceMs))
@@ -110,7 +110,7 @@ function usageTrendSelect(pivot: RequestUsagePivot): UsageTokenSums<SQL.Aliased<
 
 export async function getUsageTrend(sinceMs: number): Promise<DailyTrendPoint[]> {
   const pivot = buildRequestUsagePivot(sinceMs)
-  const rows = getDb().select({ label: sql<string>`strftime('%Y-%m-%d', ${requestLogs.createdTime} / 1000, 'unixepoch', 'localtime')`.as('label'), ...usageTrendSelect(pivot) })
+  const rows = getDataDb().select({ label: sql<string>`strftime('%Y-%m-%d', ${requestLogs.createdTime} / 1000, 'unixepoch', 'localtime')`.as('label'), ...usageTrendSelect(pivot) })
     .from(requestLogs)
     .leftJoin(pivot, eq(pivot.requestId, requestLogs.id))
     .where(gte(requestLogs.createdTime, sinceMs))
@@ -124,7 +124,7 @@ export async function getIntradayUsageTrend(sinceMs: number): Promise<DailyTrend
   const intervalMs = 15 * 60 * 1000
   const sinceFloor = Math.floor(sinceMs / intervalMs) * intervalMs
   const pivot = buildRequestUsagePivot(sinceMs)
-  const rows = getDb().select({ bucket: sql<number>`floor((${requestLogs.createdTime} - ${sinceFloor}) / ${intervalMs})`.as('bucket'), ...usageTrendSelect(pivot) })
+  const rows = getDataDb().select({ bucket: sql<number>`floor((${requestLogs.createdTime} - ${sinceFloor}) / ${intervalMs})`.as('bucket'), ...usageTrendSelect(pivot) })
     .from(requestLogs)
     .leftJoin(pivot, eq(pivot.requestId, requestLogs.id))
     .where(gte(requestLogs.createdTime, sinceMs))
@@ -160,16 +160,16 @@ function formatIntradayLabel(startMs: number): string {
  * `max(case when key = ... end)` 取到的就是那一行。
  */
 export async function getRequestSourceStats(sinceMs: number, limit = 20): Promise<RequestSourceStat[]> {
-  const attributes = getDb().select({
+  const attributes = getDataDb().select({
     requestId: requestAttributes.requestId,
     source: sql<string>`max(case when ${requestAttributes.key} = 'request.source' then ${requestAttributes.value} end)`.as('source'),
     category: sql<string>`max(case when ${requestAttributes.key} = 'client.category' then ${requestAttributes.value} end)`.as('category'),
   }).from(requestAttributes).where(gte(requestAttributes.createdTime, sinceMs)).groupBy(requestAttributes.requestId).as('request_attribute_pivot')
-  const usages = getDb().select({
+  const usages = getDataDb().select({
     requestId: requestUsages.requestId,
     tokens: sql<number>`sum(${TOTAL_REQUEST_TOKENS})`.as('tokens'),
   }).from(requestUsages).where(gte(requestUsages.createdTime, sinceMs)).groupBy(requestUsages.requestId).as('request_usage_pivot')
-  const rows = getDb().select({
+  const rows = getDataDb().select({
     source: sql<string>`coalesce(${attributes.source}, 'unknown')`.as('source'),
     category: sql<string>`coalesce(${attributes.category}, 'unknown')`.as('category'),
     requests: sql<number>`count(*)`.as('requests'),
@@ -221,12 +221,12 @@ function mapProviderStat(row: ProviderStatRow): ProviderStat {
 }
 
 export async function getProviderStats(sinceMs: number): Promise<ProviderStat[]> {
-  const rows = getDb().select(providerStatSelect).from(requestAttempts).where(gte(requestAttempts.createdTime, sinceMs)).groupBy(requestAttempts.providerId).orderBy(sql`attempts desc`).all()
+  const rows = getDataDb().select(providerStatSelect).from(requestAttempts).where(gte(requestAttempts.createdTime, sinceMs)).groupBy(requestAttempts.providerId).orderBy(sql`attempts desc`).all()
   return rows.map(mapProviderStat)
 }
 
 export async function getProviderStat(providerId: string, sinceMs: number): Promise<ProviderStat | null> {
-  const row = getDb().select(providerStatSelect).from(requestAttempts).where(and(eq(requestAttempts.providerId, providerId), gte(requestAttempts.createdTime, sinceMs))).groupBy(requestAttempts.providerId).get()
+  const row = getDataDb().select(providerStatSelect).from(requestAttempts).where(and(eq(requestAttempts.providerId, providerId), gte(requestAttempts.createdTime, sinceMs))).groupBy(requestAttempts.providerId).get()
   return row ? mapProviderStat(row) : null
 }
 
@@ -251,7 +251,7 @@ type ProviderTrendRow = TrendPointRow & {
  * 逐类型取值意味着 `raw` 行（上游原始报文，数值列为 NULL）不会进入任何一列。
  */
 function buildAttemptUsagePivot(sinceMs: number) {
-  return getDb()
+  return getDataDb()
     .select({ attemptId: attemptUsages.attemptId, ...usagePivotColumns(attemptUsages.type, attemptUsages.value) })
     .from(attemptUsages)
     .where(gte(attemptUsages.createdTime, sinceMs))
@@ -285,7 +285,7 @@ export async function getProviderAnalyticsTrend(providerId: string, sinceMs: num
     ? sql<string>`floor((${requestLogs.createdTime} - ${sinceFloor}) / ${intervalMs})`
     : sql<string>`strftime('%Y-%m-%d', ${requestLogs.createdTime} / 1000, 'unixepoch', 'localtime')`
   const pivot = buildAttemptUsagePivot(sinceMs)
-  const rows = getDb().select({ label: bucket.as('label'), ...providerTrendSelect(pivot) })
+  const rows = getDataDb().select({ label: bucket.as('label'), ...providerTrendSelect(pivot) })
     .from(requestAttempts)
     .innerJoin(requestLogs, eq(requestAttempts.requestId, requestLogs.id))
     .leftJoin(pivot, eq(pivot.attemptId, requestAttempts.id))
@@ -338,7 +338,7 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
   const pivot = buildAttemptUsagePivot(sinceMs)
   // 失败尝试的用量不算进这些列；未命中透视的尝试以 0 参与。
   const successOnly = (type: UsageTokenType) => sql<number>`coalesce(sum(case when ${requestAttempts.status} = 'success' then ${pivot[type]} else 0 end), 0)`
-  const rows = getDb().select({
+  const rows = getDataDb().select({
     // 排行单位是「上游模型」：一个 providerModelId 只属于一个提供方，所以只按它分组——
     // 带上 providerId 会让提供方改绑后留在尝试行里的旧快照把同一个模型拆成两行，
     // 排行榜上同一个模型出现两次，还要各占一个 TOP 名额。
@@ -414,7 +414,7 @@ export function formatLatencyBucketRange(index: number): string {
 export async function getLatencyDistribution(sinceMs: number, providerId?: string): Promise<LatencyBucket[]> {
   const filters = [sql`${requestLogs.createdTime} >= ${sinceMs}`, eq(requestLogs.status, 'success'), sql`${requestAttempts.ttftMilliseconds} is not null`]
   if (providerId) filters.push(eq(requestAttempts.providerId, providerId))
-  const rows = getDb()
+  const rows = getDataDb()
     .select({ bucket: sql<number>`${latencyBucketIndex}`.as('bucket'), count: sql<number>`count(*)`.as('count') })
     .from(requestAttempts)
     .innerJoin(requestLogs, eq(requestAttempts.requestId, requestLogs.id))
@@ -431,7 +431,7 @@ export async function getFailureReasons(sinceMs: number, providerId?: string): P
   const finalFailedAttempt = sql`${requestAttempts.attemptIndex} = (SELECT max(final_attempt.attemptIndex) FROM request_attempts AS final_attempt WHERE final_attempt.requestId = ${requestAttempts.requestId} AND final_attempt.status = 'failed')`
   const filters = [sql`${requestLogs.createdTime} >= ${sinceMs}`, eq(requestLogs.status, 'failed'), eq(requestAttempts.status, 'failed' as RequestStatus), finalFailedAttempt]
   if (providerId) filters.push(eq(requestAttempts.providerId, providerId))
-  const rows = getDb().select({ errorCode: requestAttempts.errorCode, count: sql<number>`count(distinct ${requestAttempts.requestId})`.as('count') }).from(requestAttempts).innerJoin(requestLogs, eq(requestAttempts.requestId, requestLogs.id)).where(and(...filters)).groupBy(requestAttempts.errorCode).orderBy(sql`count desc`).all()
+  const rows = getDataDb().select({ errorCode: requestAttempts.errorCode, count: sql<number>`count(distinct ${requestAttempts.requestId})`.as('count') }).from(requestAttempts).innerJoin(requestLogs, eq(requestAttempts.requestId, requestLogs.id)).where(and(...filters)).groupBy(requestAttempts.errorCode).orderBy(sql`count desc`).all()
   // 桶名是机器码，界面自己翻：服务端不该决定标签长什么样（见 `FAILURE_REASON_CATEGORIES`）。
   const categories: Record<FailureReasonCategory, number> = { TIMEOUT: 0, RATE_LIMITED: 0, SERVER_ERROR: 0, AUTH_FAILED: 0, OTHER: 0 }
   for (const row of rows) {

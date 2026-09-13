@@ -1,22 +1,24 @@
-import type { KeychainApi } from '@common/keychain'
+import type { SecretStore } from '@common/secret-store'
 import { and, eq, inArray } from 'drizzle-orm'
-import { getDb } from './index'
+import { getConfigDb, getDataDb } from './index'
 import {
   providerEndpoints,
-  providerHealth,
   providerModelEndpoints,
-  providerModelHealth,
   providerModels,
   providerSettings,
   providers,
+  schedulingPolicies,
+} from './config-schema'
+import {
   attemptContents,
   attemptUsages,
+  providerHealth,
+  providerModelHealth,
   requestAttempts,
   requestContents,
   requestLogs,
   requestUsages,
-  schedulingPolicies,
-} from './schema'
+} from './data-schema'
 
 const PROVIDER_FIXTURES = [
   {
@@ -81,23 +83,27 @@ interface DevelopmentSeedOptions {
   allowExisting?: boolean
 }
 
-export async function seedDevelopmentData(secretStore: KeychainApi, options: DevelopmentSeedOptions = {}): Promise<boolean> {
-  const db = getDb()
+export async function seedDevelopmentData(secretStore: SecretStore, options: DevelopmentSeedOptions = {}): Promise<boolean> {
+  const config = getConfigDb()
+  const data = getDataDb()
   // 注意：logical_models 不参与判断 —— 初始化时会自动创建 default 逻辑模型，不代表用户已有配置
+  // 「有没有配置」要两边一起看：只配了供应商算配置，只留下请求记录也算。
   const hasConfiguration = Boolean(
-    db.select({ id: providers.id }).from(providers).limit(1).get()
-    || db.select({ id: requestLogs.id }).from(requestLogs).limit(1).get(),
+    config.select({ id: providers.id }).from(providers).limit(1).get()
+    || data.select({ id: requestLogs.id }).from(requestLogs).limit(1).get(),
   )
   if (hasConfiguration && !options.allowExisting) return false
 
+  const fixtureProviderIds = PROVIDER_FIXTURES.map(provider => provider.id)
+  const fixtureProviderModelIds = PROVIDER_MODEL_FIXTURES.map((_, index) => `model_dev_provider_${index + 1}`)
   const existingProviderIds = new Set(
-    db.select({ id: providers.id }).from(providers).where(inArray(providers.id, PROVIDER_FIXTURES.map(provider => provider.id))).all().map(row => row.id),
+    config.select({ id: providers.id }).from(providers).where(inArray(providers.id, fixtureProviderIds)).all().map(row => row.id),
   )
   const existingHealthProviderIds = new Set(
-    db.select({ id: providerHealth.providerId }).from(providerHealth).where(inArray(providerHealth.providerId, PROVIDER_FIXTURES.map(provider => provider.id))).all().map(row => row.id),
+    data.select({ id: providerHealth.providerId }).from(providerHealth).where(inArray(providerHealth.providerId, fixtureProviderIds)).all().map(row => row.id),
   )
   const existingProviderModelIds = new Set(
-    db.select({ id: providerModels.id }).from(providerModels).where(inArray(providerModels.id, PROVIDER_MODEL_FIXTURES.map((_, index) => `model_dev_provider_${index + 1}`))).all().map(row => row.id),
+    config.select({ id: providerModels.id }).from(providerModels).where(inArray(providerModels.id, fixtureProviderModelIds)).all().map(row => row.id),
   )
 
   for (const provider of PROVIDER_FIXTURES) {
@@ -106,7 +112,10 @@ export async function seedDevelopmentData(secretStore: KeychainApi, options: Dev
 
   const timestamp = Date.now()
   const batchId = `${timestamp.toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-  db.transaction(transaction => {
+  const providerModelsToInsert = PROVIDER_MODEL_FIXTURES.map((fixture, index) => ({ fixture, index })).filter(({ index }) => !existingProviderModelIds.has(`model_dev_provider_${index + 1}`))
+
+  // 两个库、两个事务：SQLite 的事务不能跨文件，配置先写一次、观测数据再写一次。
+  config.transaction(transaction => {
     const providersToInsert = PROVIDER_FIXTURES.filter(provider => !existingProviderIds.has(provider.id))
     if (providersToInsert.length > 0) transaction.insert(providers).values(providersToInsert.map(provider => ({
       id: provider.id,
@@ -121,29 +130,12 @@ export async function seedDevelopmentData(secretStore: KeychainApi, options: Dev
         .set({ name: provider.name, updatedTime: timestamp })
         .where(and(eq(providers.id, provider.id), eq(providers.name, provider.legacyName)))
         .run()
-      transaction.update(requestAttempts)
-        .set({ providerName: provider.name })
-        .where(and(eq(requestAttempts.providerId, provider.id), eq(requestAttempts.providerName, provider.legacyName)))
-        .run()
     }
     if (providersToInsert.length > 0) transaction.insert(providerSettings).values(providersToInsert.flatMap(provider => [
       { providerId: provider.id, key: 'security.secretReference', value: provider.apiKeyReference, valueType: 'string', updatedTime: timestamp },
       { providerId: provider.id, key: 'connection.timeoutMilliseconds', value: '30000', valueType: 'number', updatedTime: timestamp },
     ])).run()
 
-    const healthToInsert = PROVIDER_FIXTURES.filter(provider => !existingHealthProviderIds.has(provider.id))
-    if (healthToInsert.length > 0) transaction.insert(providerHealth).values(healthToInsert.map(provider => {
-      const index = PROVIDER_FIXTURES.findIndex(item => item.id === provider.id)
-      return {
-      providerId: provider.id,
-      consecutiveFailures: index === 3 ? 1 : 0,
-      lastSuccessTime: timestamp - (index + 1) * 90_000,
-      lastFailureTime: index === 3 ? timestamp - 45_000 : null,
-      updatedTime: timestamp,
-      }
-    })).run()
-
-    const providerModelsToInsert = PROVIDER_MODEL_FIXTURES.map((fixture, index) => ({ fixture, index })).filter(({ index }) => !existingProviderModelIds.has(`model_dev_provider_${index + 1}`))
     if (providerModelsToInsert.length > 0) {
       transaction.insert(providerModels).values(providerModelsToInsert.map(({ fixture, index }) => ({
         id: `model_dev_provider_${index + 1}`,
@@ -153,7 +145,7 @@ export async function seedDevelopmentData(secretStore: KeychainApi, options: Dev
         createdTime: timestamp,
         updatedTime: timestamp,
       }))).run()
-      transaction.insert(providerModelHealth).values(providerModelsToInsert.map(({ index }) => ({ providerModelId: `model_dev_provider_${index + 1}`, updatedTime: timestamp }))).run()
+
       for (const { fixture, index } of providerModelsToInsert) {
         const protocols = [fixture[3]]
         for (const protocol of protocols) {
@@ -165,6 +157,31 @@ export async function seedDevelopmentData(secretStore: KeychainApi, options: Dev
         }
         transaction.insert(schedulingPolicies).values({ logicalModelId: fixture[0], providerModelId: `model_dev_provider_${index + 1}`, priority: fixture[4], weight: 100, enabled: true, createdTime: timestamp, updatedTime: timestamp }).run()
       }
+    }
+  })
+
+  data.transaction(transaction => {
+    // 供应商改名时，历史尝试里冗余存着的名字要跟着走：那是同一件事的两份落库位置。
+    for (const provider of PROVIDER_FIXTURES.filter(provider => existingProviderIds.has(provider.id))) {
+      transaction.update(requestAttempts)
+        .set({ providerName: provider.name })
+        .where(and(eq(requestAttempts.providerId, provider.id), eq(requestAttempts.providerName, provider.legacyName)))
+        .run()
+    }
+
+    const healthToInsert = PROVIDER_FIXTURES.filter(provider => !existingHealthProviderIds.has(provider.id))
+    if (healthToInsert.length > 0) transaction.insert(providerHealth).values(healthToInsert.map(provider => {
+      const index = PROVIDER_FIXTURES.findIndex(item => item.id === provider.id)
+      return {
+        providerId: provider.id,
+        consecutiveFailures: index === 3 ? 1 : 0,
+        lastSuccessTime: timestamp - (index + 1) * 90_000,
+        lastFailureTime: index === 3 ? timestamp - 45_000 : null,
+        updatedTime: timestamp,
+      }
+    })).run()
+    if (providerModelsToInsert.length > 0) {
+      transaction.insert(providerModelHealth).values(providerModelsToInsert.map(({ index }) => ({ providerModelId: `model_dev_provider_${index + 1}`, updatedTime: timestamp }))).run()
     }
 
     const sampleRequests = Array.from({ length: DEVELOPMENT_REQUEST_COUNT }, (_, index) => {

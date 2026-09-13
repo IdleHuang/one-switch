@@ -2,7 +2,22 @@ export type RuntimeEnvironment = 'development' | 'production'
 
 export interface RuntimeProfile {
   environment: RuntimeEnvironment
-  userDataDirectoryName: string
+  /**
+   * 数据目录名：整份数据的落点，两种宿主形态靠它落到同一个目录里。
+   *
+   * 规则是 **`<用户主目录>/<这个名字>`**（见 `product/packaging.md` §5.5）：数据放在
+   * 用户主目录根下的隐藏目录，不放平台 appData 目录。两个原因：
+   *
+   *   1. Windows 的 `%APPDATA%` 是**漫游配置目录**。会持续增长的请求日志与正文进去以后，
+   *      在有域控的机器上会被同步到服务器——那是实打实的缺陷，不只是难看。
+ *   2. 平台 appData 目录要分三个平台各算一次，是两套宿主实现各自分叉的温床。改成主目录后
+ *      平台差异直接消失，两种形态不可能再算出两个不同的目录。
+   *
+   * 宿主不许写死这个名字的字面量，也不许自己判断平台：`path.join(os.homedir(), 这个名字)`
+   * 就是全部实现（App 侧见 `app.setPath('userData', ...)`，命令行侧见
+   * `apps/cli/source/host.ts`）。
+   */
+  dataDirectoryName: string
   proxyPort: number
   managementPort: number
   managementApiUrl: string
@@ -11,14 +26,14 @@ export interface RuntimeProfile {
 const PROFILES: Record<RuntimeEnvironment, RuntimeProfile> = {
   development: {
     environment: 'development',
-    userDataDirectoryName: 'One Switch Development',
+    dataDirectoryName: '.one-switch-development',
     proxyPort: 19300,
     managementPort: 19301,
     managementApiUrl: 'http://127.0.0.1:19301/api',
   },
   production: {
     environment: 'production',
-    userDataDirectoryName: 'One Switch',
+    dataDirectoryName: '.one-switch',
     proxyPort: 9300,
     managementPort: 9301,
     managementApiUrl: 'http://127.0.0.1:9301/api',

@@ -242,6 +242,19 @@ importers:
         specifier: ^24.13.3
         version: 24.13.3(electron-builder-squirrel-windows@24.13.3)
 
+  apps/cli:
+    dependencies:
+      '@one-switch/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@one-switch/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+    devDependencies:
+      '@one-switch/console':
+        specifier: workspace:*
+        version: link:../../packages/console
+
   packages/console:
     dependencies:
       '@one-switch/contracts':

@@ -3,16 +3,15 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closeDatabase, initDatabase } from './database'
-import { TEST_DATABASE_FILE_NAME } from './database/test-support'
+import { closeDatabases, initDatabases } from './database'
 import { updateSettings } from './database/settings-store'
 import { startServer, stopServer } from './index'
 import { getProxyServerStatus, startProxyServer, stopProxyServer } from './proxy/runtime/server'
-import type { KeychainApi } from '@common/keychain'
-import type { RuntimeProfile } from '@common/runtime-profile'
+import type { SecretStore } from '@common/secret-store'
+import { createRuntimeConfig, type RuntimeConfig } from '@common/runtime-config'
 
 const secrets = new Map<string, string>()
-const secretStore: KeychainApi = {
+const secretStore: SecretStore = {
   set: async (reference, value) => { secrets.set(reference, value) },
   get: async reference => secrets.get(reference) ?? null,
   delete: async reference => { secrets.delete(reference) },
@@ -33,7 +32,7 @@ afterEach(async () => {
 describe('server lifecycle', () => {
   it('reports the port actually bound by the proxy server', async () => {
     const proxyPort = await getAvailablePort()
-    await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+    await initDatabases(temporaryDirectory)
     await updateSettings({ listenHost: '127.0.0.1', listenPort: 9300 })
 
     try {
@@ -45,20 +44,18 @@ describe('server lifecycle', () => {
       })
     } finally {
       await stopProxyServer()
-      await closeDatabase()
+      await closeDatabases()
     }
   })
 
   it('keeps management available while the proxy is stopped and restarted', async () => {
     const [managementPort, proxyPort] = await Promise.all([getAvailablePort(), getAvailablePort()])
-    await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+    await initDatabases(temporaryDirectory)
     await updateSettings({ listenHost: '127.0.0.1', listenPort: proxyPort })
-    await closeDatabase()
+    await closeDatabases()
     await startServer({
-      dataDir: temporaryDirectory,
-      databaseFileName: TEST_DATABASE_FILE_NAME,
       secretStore,
-      runtimeProfile: createTestRuntimeProfile(proxyPort, managementPort),
+      runtimeConfig: createTestRuntimeConfig(proxyPort, managementPort),
     })
 
     const managementUrl = `http://127.0.0.1:${managementPort}/api/proxy`
@@ -109,14 +106,12 @@ describe('server lifecycle', () => {
 
   it('isolates manual selection by logical model through the management API', async () => {
     const [managementPort, proxyPort] = await Promise.all([getAvailablePort(), getAvailablePort()])
-    await initDatabase(temporaryDirectory, TEST_DATABASE_FILE_NAME)
+    await initDatabases(temporaryDirectory)
     await updateSettings({ listenHost: '127.0.0.1', listenPort: proxyPort })
-    await closeDatabase()
+    await closeDatabases()
     const runtimeOptions = {
-      dataDir: temporaryDirectory,
-      databaseFileName: TEST_DATABASE_FILE_NAME,
       secretStore,
-      runtimeProfile: createTestRuntimeProfile(proxyPort, managementPort),
+      runtimeConfig: createTestRuntimeConfig(proxyPort, managementPort),
     }
     await startServer(runtimeOptions)
     const logicalModelUrl = `http://127.0.0.1:${managementPort}/api/logical-model`
@@ -164,14 +159,13 @@ describe('server lifecycle', () => {
 
 })
 
-function createTestRuntimeProfile(proxyPort: number, managementPort: number): RuntimeProfile {
-  return {
+function createTestRuntimeConfig(proxyPort: number, managementPort: number): RuntimeConfig {
+  return createRuntimeConfig({
     environment: 'development',
-    userDataDirectoryName: 'One Switch Test',
+    dataDir: temporaryDirectory,
     proxyPort,
     managementPort,
-    managementApiUrl: `http://127.0.0.1:${managementPort}/api`,
-  }
+  })
 }
 
 async function post(url: string, body: unknown = {}): Promise<unknown> {
