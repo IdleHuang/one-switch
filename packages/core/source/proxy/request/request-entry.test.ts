@@ -874,7 +874,9 @@ describe('handleProxyRequest', () => {
     expect(JSON.parse(responseBody)).toEqual({
       success: false,
       errorCode: 'ALL_PROVIDERS_FAILED',
-      errorMessage: 'All providers failed',
+      // 上游 HTTP 失败不抛异常，`lastError` 永远是空的；状态码与原文因此必须由
+      // failover 路径自己带出来，否则客户端只会看到一句无从下手的「All providers failed」。
+      errorMessage: 'All providers failed: the last upstream responded with 503 (provider unavailable)',
     })
     expect(mocks.updateRequestContent).toHaveBeenCalledWith('content_request', expect.objectContaining({
       captureStatus: 'captured',
@@ -980,6 +982,10 @@ describe('handleProxyRequest', () => {
       captureStatus: 'partial',
       responseStatus: 200,
     }))
+    // 这次尝试的状态码是 200，失败只存在于「正文搬到一半断了」这个事实里：健康度必须被显式告知，
+    // 否则一个每次都断流的模型永远不会被冷却，下一次请求依旧会先选中它。
+    expect(mocks.markProviderModelFailure).toHaveBeenCalledWith('model_started_stream')
+    expect(mocks.markProviderFailure).not.toHaveBeenCalled()
   })
 
   it('stores the complete retry response body and upstream headers', async () => {

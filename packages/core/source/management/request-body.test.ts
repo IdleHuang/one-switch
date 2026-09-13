@@ -5,8 +5,14 @@ import { parseJsonBody } from './core/request-body'
 
 type RequestEvent = { type: 'data' | 'end' | 'error' | 'aborted'; value?: unknown }
 
-function request(events: RequestEvent[]): IncomingMessage {
-  const emitter = new EventEmitter()
+interface FakeRequest extends EventEmitter {
+  headers: Record<string, string>
+}
+
+function request(events: RequestEvent[], headers: Record<string, string> = {}): IncomingMessage {
+  const emitter = new EventEmitter() as FakeRequest
+  // 真实的 `IncomingMessage` 一定有 `headers`：断言里用它表达「客户端声明的长度」。
+  emitter.headers = headers
   queueMicrotask(() => {
     for (const item of events) emitter.emit(item.type, item.value)
   })
@@ -30,5 +36,13 @@ describe('parseJsonBody', () => {
   it('rejects aborted and errored requests only once', async () => {
     await expect(parseJsonBody(request([{ type: 'aborted' }]))).rejects.toThrow('CLIENT_REQUEST_ABORTED')
     await expect(parseJsonBody(request([{ type: 'error', value: new Error('socket failure') }, { type: 'end' }]))).rejects.toThrow('socket failure')
+  })
+
+  it('accepts a body whose declared length is far beyond any former limit', async () => {
+    // 上限是有意去掉的，这条用例锁住的就是「不设限」本身：别让它以任何形式长回来。
+    await expect(parseJsonBody(request(
+      [{ type: 'data', value: Buffer.from('{"ok":true}') }, { type: 'end' }],
+      { 'content-length': String(64 * 1024 * 1024) },
+    ))).resolves.toEqual({ ok: true })
   })
 })

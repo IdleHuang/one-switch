@@ -291,4 +291,28 @@ describe('建连与搬运的分工', () => {
     expect(started).toHaveBeenCalledTimes(1)
     expect(ended).toHaveBeenCalledTimes(1)
   })
+
+  it('keeps relaying when an observer throws', async () => {
+    // 观察者只能「看」：它的异常只能丢掉自己这一条记录。抛穿出去会变成一次搬运失败，
+    // 于是「多接一个观察者」就等价于「有概率弄挂请求」；而中途 `break` 更糟——
+    // 排在后面的观察者会因为别人失败而一起失声。
+    const seen: string[] = []
+    const throwing: Observer = {
+      id: 'throwing-observer',
+      onAttemptStart: () => { throw new Error('observer exploded') },
+      onAttemptEnd: () => { throw new Error('observer exploded') },
+    }
+    const trailing: Observer = {
+      id: 'trailing-observer',
+      onAttemptStart: () => seen.push('start'),
+      onAttemptEnd: () => seen.push('end'),
+    }
+    const { started, sink } = relay({ frames: [HEAD, END], observers: [throwing, trailing] })
+
+    const result = await started
+
+    expect(result.ended).toBe(true)
+    expect(sink.frames.map(frame => frame.kind)).toEqual(['head', 'end'])
+    expect(seen).toEqual(['start', 'end'])
+  })
 })

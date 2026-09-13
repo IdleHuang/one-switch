@@ -13,11 +13,11 @@
  */
 
 import { existsSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { createRuntimeConfig } from '@common/runtime-config'
 import type { RuntimeConfig } from '@common/runtime-config'
 import type { ServerEndpoints } from '@server/index'
+import { InstanceLockError } from '@server/runtime/instance-lock'
 import { delay } from '../async'
 import { describeError } from '../errors'
 import { cliTranslator, startCliLanguageSync } from '../native-i18n'
@@ -29,7 +29,6 @@ import {
   isLoopbackHost,
   resolveDataDirectory,
 } from '../host'
-import { acquireInstanceLock, releaseInstanceLock } from '../instance-lock'
 import {
   isProcessAlive,
   readRuntimeState,
@@ -68,35 +67,16 @@ export async function runStart(values: CliArguments): Promise<number> {
     return 1
   }
 
-  // 单实例：同一个数据目录同时跑两个，后启动的那份会覆盖 `runtime.json`，
-  // 先启动的从此「无主」——停不掉，却还占着端口和同一对 SQLite 文件。
-  // 端口冲突只能挡住「沿用默认端口」的那一半情况，`--proxy-port` 一换就绕过去了。
-  const lock = await acquireInstanceLock(dataDir)
-  if (!lock.ok) {
-    if (lock.reason === 'held') {
-      console.error(t('native.cli.error.alreadyRunning', { pid: lock.holder.pid, dataDir }))
-    } else {
-      // 读不出持有者、又还没过宽限期：可能是另一个刚启动的进程正在写锁，
-      // 也可能是磁盘上的半截文件。两种情况都不该硬闯。
-      console.error(t('native.cli.error.lockUnknown', { path: lock.filePath }))
-    }
-    console.error(t('native.cli.error.alreadyRunningHint'))
-    return 1
-  }
-
-  const releaseLockQuietly = async (): Promise<void> => {
-    try {
-      await releaseInstanceLock(dataDir)
-    } catch (error) {
-      console.error('[cli] failed to release the instance lock', error)
-    }
-  }
+  // 单实例由 core 负责：数据目录是「一个实例」的边界，与「是命令行还是桌面端把它起来的」
+  // 无关（桌面端双击两次、或者「桌面端在跑 + 命令行指定另一个端口启动」都算双实例）。
+  // 拿不到锁时 `startServer` 会抛 `InstanceLockError`，在下面的 catch 里翻译成人话。
 
   /**
-   * 收尾时「别把现场弄脏」：拿掉运行时文件与实例锁。
+   * 收尾时拿掉运行时文件。
    *
-   * 不包含优雅停机——崩溃路径用得上它（那时没什么可优雅停的），而正常路径已经在
-   * `shutdown` 里停完服务了。两边共用一份，是为了保证两个文件在任何退出路径上都被碰过。
+   * 不碰实例锁：那归 core（`stopServer` → `stopResources()` 会释放它）。崩溃路径
+   * （`onFatal`）跑不到这一步，但那时留下的锁会被存活判定认出来，下一次 `start`
+   * 取锁时就地接管——两份记录不必由同一个进程维护，也没别人该去编辑它。
    */
   const cleanupState = async (): Promise<void> => {
     try {
@@ -104,11 +84,10 @@ export async function runStart(values: CliArguments): Promise<number> {
     } catch (error) {
       console.error('[cli] failed to remove the runtime file', error)
     }
-    await releaseLockQuietly()
   }
 
-  // 崩溃兜底：正常路径的收尾（`shutdown`）走不到时，至少别把 `runtime.json` 与实例锁留在磁盘上。
-  // 它们会让下一次启动看到假状态，甚至直接启动失败。
+  // 崩溃兜底：正常路径的收尾（`shutdown`）走不到时，至少别把 `runtime.json` 留在磁盘上。
+  // 它会让下一次启动看到假状态，也会让 `stop` 去等一个永远不会消失的进程。
   const onFatal = (kind: string) => (error: unknown): void => {
     console.error(`[cli] ${kind}`, error)
     // 日志先同步出去，再做异步清理。清理失败也必须退，否则留下一个「既没有输出、
@@ -150,9 +129,6 @@ export async function runStart(values: CliArguments): Promise<number> {
     webRoot,
   })
 
-  /** 每次启动随机；随运行时文件落盘，`stop` 用它证明「是本机的同一个人」。 */
-  const shutdownToken = randomBytes(32).toString('base64url')
-
   let finish: (() => void) | null = null
   const stopped = new Promise<void>(resolve => {
     finish = resolve
@@ -166,8 +142,12 @@ export async function runStart(values: CliArguments): Promise<number> {
     stopping = true
     stopLanguageSync?.()
 
+    // 落败的那个 promise 仍然会拒绝（`race` 只转发已 settled 的那个）。不接住它，
+    // 就会变成一个「未处理拒绝」撞上崩溃兜底，把已经退干净的进程改成退出码 1。
+    const stoppingServer = stopServer()
+    stoppingServer.catch(() => undefined)
     try {
-      await Promise.race([stopServer(), delay(SHUTDOWN_TIMEOUT_MILLISECONDS)])
+      await Promise.race([stoppingServer, delay(SHUTDOWN_TIMEOUT_MILLISECONDS)])
     } catch (error) {
       // 已经决定要退出了，收尾失败只留诊断日志，不改变退出码——
       // 退出码要表达的是「服务跑得怎么样」，这里服务已经停了一半。
@@ -183,18 +163,31 @@ export async function runStart(values: CliArguments): Promise<number> {
       runtimeConfig,
       secretStore: new EncryptedFileSecretStore(dataDir),
       // 桌面形态不传：同一个进程自己说了算。命令行必须传，`stop` 才能优雅停掉它。
-      shutdown: { token: shutdownToken, onRequest: () => void shutdown() },
+      // token 不用在这里给——凭证是 core 的实例身份的一部分（`runtime-identity.ts`），
+      // 这里只是把它的值转发给 `stop`。
+      shutdown: { onRequest: () => void shutdown() },
     })
   } catch (error) {
+    if (error instanceof InstanceLockError) {
+      // 「已经在跑」不是启动失败：数据目录已经被另一个实例认领了（见 core 的 `instance-lock.ts`）。
+      if (error.holder !== null) {
+        console.error(t('native.cli.error.alreadyRunning', { pid: error.holder.pid, dataDir }))
+      } else {
+        // 读不出持有者、又还没过宽限期：可能是另一个刚启动的进程正在写锁，
+        // 也可能是磁盘上的半截文件。两种情况都不该硬闯。
+        console.error(t('native.cli.error.lockUnknown', { path: error.filePath }))
+      }
+      console.error(t('native.cli.error.alreadyRunningHint'))
+      return 1
+    }
     if (isAddressInUse(error)) {
       console.error(t('native.cli.error.portInUse', { address: inUseAddress(error, runtimeConfig) }))
       console.error(t('native.cli.error.portInUseHint'))
     } else {
       console.error(t('native.cli.error.startFailed', { message: describeError(error) }))
     }
-    // 服务没起来，但这个数据目录的「有人占了」的声明必须收回，
-    // 否则用户在修完问题（比如换个端口）之后会被自己上一次的失败拦住。
-    await releaseLockQuietly()
+    // 失败路径的锁由 core 自己释放（`ServerRuntime.start` 的 catch 会走 `stopResources`），
+    // 这里不插手：那是它的声明，该由它收回。
     return 1
   }
 
@@ -207,7 +200,7 @@ export async function runStart(values: CliArguments): Promise<number> {
     proxyHost: endpoints.proxyHost,
     proxyPort: endpoints.proxyPort,
     webUrl: endpoints.webRoot === null ? null : formatUrl(endpoints.managementHost, endpoints.managementPort),
-    shutdownToken,
+    shutdownToken: endpoints.instanceToken,
     startedAt: new Date().toISOString(),
   }
 

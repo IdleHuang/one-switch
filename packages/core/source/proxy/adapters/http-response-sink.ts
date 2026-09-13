@@ -82,7 +82,7 @@ class HttpFrameSink implements HttpResponseSink {
     return this.finished
   }
 
-  write(frame: Frame): void {
+  async write(frame: Frame): Promise<void> {
     if (this.finished || this.discarded) return
     if (frame.kind === 'head') {
       this.head = frame
@@ -91,8 +91,12 @@ class HttpFrameSink implements HttpResponseSink {
     }
     if (frame.kind === 'data') {
       const text = frame.body.toString('utf8')
-      if (this.options.transport === 'http-stream') this.writeDownstream(text)
-      else this.buffered.push(text)
+      if (this.options.transport !== 'http-stream') {
+        this.buffered.push(text)
+        return
+      }
+      const pending = this.writeDownstream(text)
+      if (pending) await pending
       return
     }
     if (frame.kind === 'error') {
@@ -101,7 +105,9 @@ class HttpFrameSink implements HttpResponseSink {
       this.finished = true
       return
     }
-    this.finish()
+    // 没有背压时收尾是**同步**完成的：出口的调用方在同一轮里就能看到响应已结束。
+    const pending = this.finish()
+    if (pending) await pending
   }
 
   discard(): void {
@@ -127,7 +133,11 @@ class HttpFrameSink implements HttpResponseSink {
     sink.start(this.head.status, this.head.headers)
   }
 
-  private finish(): void {
+  /**
+   * 收尾。只有真的撞上背压时才返回 Promise（见 `writeDownstream`）：
+   * 平白多一次微任务会让「写完了没有」在同一个 tick 里问不出答案。
+   */
+  private finish(): void | Promise<void> {
     this.finished = true
     const head = this.head
     if (!head || this.discarded) return
@@ -142,14 +152,33 @@ class HttpFrameSink implements HttpResponseSink {
     this.bufferedWritten = body || null
     if (sink.writableEnded) return
     if (!sink.headersSent) sink.start(head.status, head.headers)
-    if (body) this.writeDownstream(body)
-    sink.end()
+    if (!body) {
+      sink.end()
+      return
+    }
+    const pending = this.writeDownstream(body)
+    if (!pending) {
+      sink.end()
+      return
+    }
+    return pending.then(() => {
+      if (!sink.writableEnded) sink.end()
+    })
   }
 
-  private writeDownstream(chunk: string): void {
+  /**
+   * 写一块正文；客户端收不走时返回「等它收得动」那件事，否则返回 undefined（同步完成）。
+   *
+   * 客户端收不走时必须等：继续把上游的字节往内核缓冲区里塞，等于把「客户端有多慢」
+   * 换算成「我们能占多少内存」。等待期间管道不再拉下一帧，上游随之被暂停（`FrameQueue`）。
+   */
+  private writeDownstream(chunk: string): void | Promise<void> {
+    const sink = this.options.response
     // 已经收尾的响应不能再写；此时连「客户端视角」也不该记账，因为它并没有收到。
-    if (this.options.response.writableEnded) return
+    if (sink.writableEnded) return
     if (this.options.captureEnabled) this.captured.push(chunk)
-    this.options.response.write(chunk)
+    const accepted = sink.write(chunk)
+    if (accepted === false && sink.drained) return sink.drained()
+    return undefined
   }
 }

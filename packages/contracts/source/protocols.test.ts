@@ -24,6 +24,14 @@ describe('createProtocolAuthHeaders', () => {
     })
   })
 
+  it('keeps the protocol fixed headers alongside a custom authentication header', () => {
+    // 认证头只决定密钥放哪，协议本身要求的固定头（Anthropic 的版本头）不能跟着一起消失。
+    expect(createProtocolAuthHeaders('anthropic-messages', 'secret', 'X-Custom-Key')).toEqual({
+      'X-Custom-Key': 'secret',
+      'anthropic-version': '2023-06-01',
+    })
+  })
+
   it('omits auth headers entirely when the API key is absent (local/test clusters)', () => {
     expect(createProtocolAuthHeaders('openai-completions', null, null)).toEqual({})
     expect(createProtocolAuthHeaders('openai-responses', null, null)).toEqual({})

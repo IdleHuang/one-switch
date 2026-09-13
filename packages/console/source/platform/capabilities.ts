@@ -37,7 +37,7 @@ function detectCapabilities(): PlatformCapabilities {
       os: normalizeOs(electronApi.platform),
       // `?? null`：老版本的 preload 可能没暴露 updater，缺能力不代表崩。
       updater: electronApi.updater ?? null,
-      openExternal: url => electronApi.sendMessage('open-external', url),
+      openExternal: url => electronApi.openExternal(url),
     }
   }
   return {

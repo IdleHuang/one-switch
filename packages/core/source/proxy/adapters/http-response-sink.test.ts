@@ -112,4 +112,64 @@ describe('http response sink', () => {
     sink.write(data('data: one\n\n'))
     expect(sink.partialDownstreamBody()).toBe('data: one\n\n')
   })
+
+  it('waits for the client to drain before the streaming write is considered done', async () => {
+    // 出口的 `write` 只有在客户端收得下时才同步完成：收不下就必须挂住，内核据此停止拉下一帧，
+    // 上游随之被暂停。少了这一步，慢客户端会被换算成无界的进程内存。
+    const response = new BackpressuredResponse()
+    const sink = createHttpResponseSink({ response, transport: 'http-stream', captureEnabled: true })
+    sink.write(SSE_HEAD)
+
+    let done = false
+    const pending = Promise.resolve(sink.write(data('data: one\n\n'))).then(() => { done = true })
+    expect(response.written).toEqual(['data: one\n\n'])
+    await Promise.resolve()
+    expect(done).toBe(false)
+
+    response.drain()
+    await pending
+
+    expect(done).toBe(true)
+    const second = sink.write(data('data: two\n\n'))
+    expect(response.written).toEqual(['data: one\n\n', 'data: two\n\n'])
+    response.drain()
+    await second
+  })
+
+  it('ends the buffered response only after the client drained the whole body', async () => {
+    const response = new BackpressuredResponse()
+    const sink = createHttpResponseSink({ response, transport: 'http', captureEnabled: true })
+    sink.write(JSON_HEAD)
+    sink.write(data('{"ok":true}'))
+
+    const pending = sink.write(END)
+    // 正文已经写进去了，但收尾必须等客户端收走——否则「写完」只是写进了内核缓冲区。
+    expect(response.writableEnded).toBe(false)
+    response.drain()
+    await pending
+
+    expect(response.writableEnded).toBe(true)
+    expect(response.written).toEqual(['{"ok":true}'])
+  })
 })
+
+/** 每次写入都报告「客户端收不动」的出口，直到测试主动放行。 */
+class BackpressuredResponse extends BufferedProxyResponse {
+  readonly written: string[] = []
+  private release: (() => void) | null = null
+
+  override write(chunk: string): boolean {
+    this.written.push(chunk)
+    return false
+  }
+
+  drained(): Promise<void> {
+    return new Promise(resolve => { this.release = resolve })
+  }
+
+  drain(): void {
+    const release = this.release
+    this.release = null
+    release?.()
+  }
+}

@@ -192,7 +192,7 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
     let statusCode = 502
     let disposition: UpstreamStatusDisposition = 'terminal'
     let upstreamTransport: TransportKind | null = null
-    /** 客户端跳要求的形态没有被上游跳兼现（要 `http-stream` 却回了非 SSE 的 2xx）。 */
+    /** 客户端跳要求的形态没有被上游跳兼现（两边对「是不是增量」的说法不一致）。 */
     let transportMismatch = false
     let upstreamRequestId: string | null = null
     const relay = await relayAttempt({
@@ -211,13 +211,18 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
         statusCode = head.status
         upstreamTransport = isEventStreamResponse(head.headers) ? 'http-stream' : 'http'
         disposition = classifyUpstreamStatus(statusCode)
-        // 期望与事实的落差：客户端跳要求增量交付，上游跳却回了一个非 SSE 的 2xx。
+        // 期望与事实的落差：两边对「这份响应是不是增量交付」的说法不一致。
         //
-        // 代理只做忠诚转发：既不替上游补做形态的转换，也不把整包 JSON 硬塞进流式响应——
-        // 那种「看起来能用」的响应只是把上游违约藏起来，客户端拿到的是一个 SSE 语义下的 JSON
-        // 字节流，而日志里看不出任何异常（§1.2）。因此它不是成功，而是一次失败：
+        // 两个方向都得判：要增量却收到整包，以及只要一份 JSON 却收到 SSE 文本。后者的客户端
+        // 会拿一份 SSE 文本去解析 JSON，失败点落在客户端里，而日志上看不出任何异常——
+        // 这比失败更糟，因为它没法被归因。
+        //
+        // 代理只做忠诚转发：既不替上游补做形态的转换，也不把整包 JSON 硬塞进流式响应。
+        // 那种「看起来能用」的响应只是把上游违约藏起来（§1.2）。因此它不是成功，而是一次失败：
         // 按切换策略处理，让下一个候选来接。
-        transportMismatch = disposition === 'success' && context.transport === 'http-stream' && upstreamTransport !== 'http-stream'
+        // （`'websocket'` 到不了这里：规划器不会产出 WS 候选，见 `resolveTransportImplementation`。）
+        transportMismatch = disposition === 'success'
+          && (context.transport === 'http-stream') !== (upstreamTransport === 'http-stream')
         if (transportMismatch) {
           disposition = 'failover'
           console.warn(`[proxy] transport mismatch requestId=${requestId} attempt=${attemptIndex} providerModelId=${target.providerModelId} transport=${context.transport} upstreamTransport=${upstreamTransport} upstreamContentType=${String(head.headers['content-type'] ?? '')}`)
@@ -250,6 +255,9 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
       disposition,
       upstreamTransport,
       transportMismatch,
+      // 只有「本来要交付的成功尝试在搬运途中断掉」才算流被打断。其余情况下失败的事实
+      // 已经在状态码里了，再造一个事实只会让健康度分类两处打架。
+      streamInterrupted: failure !== null && routing.successful,
       upstreamRequestId,
       durationMilliseconds,
       upstreamProtocol: adapter.kind === 'conversion' ? endpointProtocol : null,

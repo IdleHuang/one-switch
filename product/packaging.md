@@ -401,13 +401,14 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 - 启动后打印访问地址、代理地址与数据目录，方便用户直接复制。`--no-web` 时打印同样的块，把「控制台」那一行换成「管理服务」地址、并补一行说明控制台托管已关闭——布局不因开关而变。
 - CLI 依赖 `node:sqlite`，启动时做能力探测；不可用时给出明确的 Node 版本升级提示后退出，不做降级。这条能力探测必须是动态 `import()`：静态引入 `core` 会让旧 Node 在解析阶段就报「不认识的模块」，用户看到的会是一段与 CLI 无关的堆栈，而不是那句升级提示。
 - 退出码语义固定为：`0` 成功（包括「本来就没在跑」）、`1` 运行期失败、`2` 用法错误。脚本据此能区分「命令写错了」与「跑起来但出错了」。
-- **同一数据目录只有一个实例**。`start` 之前先创建数据目录下的 `instance.lock`（`open(..., 'wx')` 原子创建，内容是一份 `{pid, startedAt}` 的声明）。第二个 `start` 会被拒绝、给出提示并以退出码 `1` 退出，而不是覆盖 `runtime.json`——覆盖会让先启动的进程**失去身份**：`stop` 再也找不到它，它却还占着端口、开着同一个 SQLite 文件。
+- **同一数据目录只有一个实例**。互斥是 core 的**基本能力**（`packages/core/source/runtime/instance-lock.ts`）：`startServer` 在绑定端口**之前**取锁，拿不到就抛 `InstanceLockError`，CLI 在 `start` 里把它翻译成人话并以退出码 `1` 退出，而不是覆盖 `runtime.json`——覆盖会让先启动的进程**失去身份**：`stop` 再也找不到它，它却还占着端口、开着同一个 SQLite 文件。
   - 端口冲突只能挡住「沿用默认端口」的那一半情况，`--proxy-port` 一换就绕过去了；`runtime.json` 也挡不住，因为它是**监听成功之后**才写的，两个进程在写它之前有一段谁都看不见的空窗。
-  - 锁不长期持有文件句柄：Windows 上 `fs` 的默认共享模式允许别的进程删掉它，持有句柄并不构成强制锁。所以残留靠 pid 存活判断识别（与运行时文件同一套办法），`stop` 会顺手清掉持有者已死的锁。
+  - 锁文件是数据目录下的 `instance.lock`，内容是一份 `{pid, startedAt, heartbeatAt}` 的声明；由 `startInstanceLockHeartbeat` 每 5 s 续写心跳。判定持有者是否还活着要**同时**看 pid 还在不在与心跳新不新鲜（心跳超过 6 个周期即视为旧），只判 pid 会把被操作系统复用的 pid 当成活实例。
+  - 锁不长期持有文件句柄：Windows 上 `fs` 的默认共享模式允许别的进程删掉它，持有句柄并不构成强制锁。所以残留靠上面的存活判定识别，而且清算**只发生在取锁那一刻**——`acquireInstanceLock` 读到持有者已死（或读不出持有者、又过了宽限期）就地清掉重试。宿主不参与：`stop` 不碰锁文件，`start` 也不预清，谁都不会在别人正拿着锁时把它删掉。
   - 读到「锁文件存在但内容读不出」时不能立刻当残留删掉：创建与写入之间必然有一瞬是空文件，把这一瞬当成残留会让两个进程同时认为自己拿到了锁。按 mtime 给 5 s 宽限，超过它才是上次崩溃留下的半截文件。
-- **崩溃也要留下干净的现场**。`uncaughtException` / `unhandledRejection` 统一走一次清理（删 `runtime.json` 与自己的锁、打印一条 `[cli]` 前缀的说明）后以退出码 `1` 结束，并挂一个 5 s 的兜底定时器防止清理本身卡死；清理函数只删「持有者是自己」的文件，不会误伤别人的现场。少了这一段，崩溃一次就会留下「`status` 说在跑、`stop` 停不掉、`start` 又起不来」的三重假象。
+- **崩溃也要留下干净的现场**。`uncaughtException` / `unhandledRejection` 统一走一次清理（删掉自己写的 `runtime.json`、打印一条 `[cli]` 前缀的说明）后以退出码 `1` 结束，并挂一个 5 s 的兜底定时器防止清理本身卡死；实例锁不归这里管——它由上面那套持有者判定接手，所以清理函数只删自己的文件，不会误伤别人的现场。少了这一段，崩溃一次就会留下「`status` 说在跑、`stop` 停不掉、`start` 又起不来」的三重假象。
 - **`status --json` 与文本输出同源**。两者都由同一份 `InstanceReport` 渲染（`status-report.ts`），字段顺序固定为 `state` / `cliVersion` / `instanceVersion` / `dataDir` / `pid` / `startedAt` / `management` / `proxy` / `consoleUrl` / `staleRuntimeFile` / `portListening`，未知值一律 `null`，不出现给人看的占位符 `—`（脚本拿到 `"—"` 会当成字符串值用下去）。端点写成 `{host, port, url}`：`url` 是**连得过去**的地址，与 `host` 可能不同——`0.0.0.0` 是监听地址，不是可连接地址。
-- **非回环监听时说清楚代价**。启动时若监听地址不是本机回环，往 stderr 打两行告警（管理 API 无鉴权，局域网内任何人可读写）；走 stderr 是为了不让它混进 `--json` 的 stdout。
+- **非回环监听时说清楚代价**。启动时若监听地址不是本机回环，往 stderr 打两行告警（代理端口不带鉴权，局域网内任何人可读写）；走 stderr 是为了不让它混进 `--json` 的 stdout，而且告警只提**代理**端口——管理接口本来就有实例 Token，不该拿一句模糊的「无鉴权」吓人。
 - 诊断信息（失效的运行时文件、端口未被监听、CLI 与实例版本不一致）一律走 stderr 且保持英文：它们面向的是日志与排查，不是终端里的用户，`--json` 的 stdout 必须可以原样喂给解析器。
 - 冒烟验证由 `pnpm smoke:cli` 承担（`apps/cli/scripts/smoke.mjs`，9 步、对**构建产物**起真实子进程）：启动并校验横幅不泄露通配地址、管理 API 与 `GET /`、`status --json` 的运行中形态与文本 9 行布局、第二个实例被拒且第一个存活、`stop` 后端口释放与文件清理、伪造的死 pid 运行时文件被识别为「未运行」、`--no-web` 下 `GET /` 为 `404` 而 API 照常、以及各用法错误的退出码。静态检查全绿不等于 CLI 可用——它写文件、占端口、起子进程，这些只有真跑才会暴露。
 
@@ -422,7 +423,7 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 | `RuntimeConfig` | 一致 | 同一份 `createRuntimeConfig`；命令行只多传端口与数据目录的覆盖值 |
 | 代理引擎与业务 | 一致 | 同一份 `packages/core`，命令行不写业务逻辑（包边界守卫强制） |
 | 设置与日志 | 一致 | 同一对 SQLite 文件（配置库 + 数据库），没有第二份配置 |
-| 单实例 | 一致（机制不同） | 桌面形态靠端口冲突在启动时报错退出；命令行靠数据目录下的 `instance.lock`，换过端口也拦得住 |
+| 单实例 | 一致（同一个 core 能力） | 两边都由 core 的 `runtime/instance-lock.ts` 在绑定端口前取锁；区别只在于桌面形态还多一层操作系统级的 `app.requestSingleInstanceLock()`，第二次启动会唤醒已有窗口而不是报错 |
 | 密钥存储 | 能力差异 | 桌面形态有系统钥匙串（`safeStorage`），命令行只能文件加密，文件名因此分开（§5.1） |
 | 系统代理解析 | 能力差异 | 桌面形态用 `session.resolveProxy`（OS/Chromium）；命令行暂时不注入解析器，`system` 模式等价直连（见下） |
 | 控制台托管 | 形态差异 | 桌面形态用窗口 `loadFile`；命令行没有窗口，只能由管理服务托管（`--web`，默认开） |
@@ -497,8 +498,8 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 
 | 项 | 内容 |
 | --- | --- |
-| 单实例互斥 | 新增 `instance-lock.ts`，`start` 先取锁；第二个实例被拒（退出码 `1`）而不是覆盖 `runtime.json`；`stop` 顺手清理持有者已死的残留锁 |
-| 崩溃兜底 | `uncaughtException` / `unhandledRejection` → 清理 `runtime.json` 与自己的锁 → 退出码 `1`，另有 5 s 强制兜底 |
+| 单实例互斥 | 新增 `instance-lock.ts`，`start` 先取锁；第二个实例被拒（退出码 `1`）而不是覆盖 `runtime.json`（残留锁当时由 `stop` 顺手清理，S2.4 已删掉那一手，见下） |
+| 崩溃兜底 | `uncaughtException` / `unhandledRejection` → 清理 `runtime.json` → 退出码 `1`，另有 5 s 强制兜底 |
 | 机器可读状态 | `status --json`；文本与 JSON 同源于 `status-report.ts` 的 `InstanceReport`，从而不可能互相矛盾 |
 | 诊断 | 端口未被监听、CLI 与实例版本漂移、失效运行时文件，一律英文走 stderr |
 | 安全告警 | 非回环监听时提示管理 API 无鉴权、局域网内可读写 |
@@ -539,6 +540,29 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 验收（实测）：`pnpm typecheck` / `pnpm lint` / `pnpm test`（116 文件 / 1210 测试）/ `pnpm build` / `pnpm smoke:cli` 全绿；无参启动一次真实 CLI 产物，`~/.one-switch` 下确实同时出现 `one-switch-config-v1.db` 与 `one-switch-data-v1.db`（且不再产生任何单个 `one-switch-v<n>.db`），`stop` 后同两个文件依旧 ✓。收尾时删掉了兼容/历史相关的 2 个用例（「拒绝不受支持的库」），故从 1212 降到 1210。
 
 两处「看代码看不出来」的地方值得记下来。一是 `defaultDataDirectory()` 里那个小写常量，注释写的是「Linux 按 XDG 惯例用小写」——**它读起来像一条刻意的决定**，而实际上它与桌面形态的 `app.getPath('appData') + profile.userDataDirectoryName` 是两条独立实现，只有 Windows 与 macOS 恰好撞对。二是两个 `secret-store` 实现写同名文件这件事，旧文档明确写了「共用数据目录时两张表各自存在，互不覆盖」——一条**写错的断言比没有文档更危险**，它会让后来的人跳过核对。两处都不是静态检查能发现的：前者只在 Linux 上显形，后者只在两个形态真的去读同一份数据时才炸。
+
+### S2.4 宿主与实例身份收口 —— 已完成
+
+范围：一次横向收口。触发点是「审计里那些**看起来像刻意设计**的东西」——实例互斥只写在 CLI 里、管理接口的 token 只在关停那一条路径上校验、跨域头恰好没开放 token 头。三条都不是空的，但都只在某一个宿主的某一条路径上成立，换个宿主或换条路径就漏。这一轮把它们变成 core 的默认行为，并顺手修掉代理与前端在同一轮审计里暴露的问题。
+
+| 项 | 内容 |
+| --- | --- |
+| 实例互斥上收 | `instance-lock.ts` 从 `apps/cli` 移到 `packages/core/source/runtime/`，改由 `startServer` 在绑定端口前取锁（§6「同一数据目录只有一个实例」）。CLI 与桌面形态共用同一个实现，测例随之移到 core；宿主与锁彻底解耦——`stop` 曾经顺手清的残留锁已删除（接管只发生在取锁那一刻，`clearStaleInstanceLock` 随之消失），`start` 只认留下的 `InstanceLockError` 并把它翻成本地文案 |
+| 新增存活语义 | 锁声明加 `heartbeatAt`，由 `startInstanceLockHeartbeat` 每 5 s 续写；持有者判定改为「pid 活着**且**心跳新鲜」，修掉 pid 被复用后把死实例当活实例 |
+| 实例身份 | 新增 `runtime/runtime-identity.ts`：每次启动生成 32 字节随机 Token（只在内存里），`/api/*` 一律要求 `x-one-switch-token` 且常量时间比对（见 [security-privacy.md](./security-privacy.md) 的「访问控制」） |
+| 统一守卫 | `management/core/request-guards.ts` 统一处理鉴权与跨域；CORS 只回显已识别的本地来源，且允许头里不含 token 头 |
+| 页面注入 | 桌面形态由 preload 把 `{apiBase, token}` 注入 `window.__ONE_SWITCH__`；命令行形态由 core 托管 `index.html` 时注入，静态资源一律 `no-store` + `nosniff` |
+| 请求体上限 | **不设限**：管理接口（`management/core/request-body.ts`）与代理入口（`proxy/request/request-entry.ts`）都完整读取正文。两道闸门都拆了——管理接口的守卫在解析正文前就验凭证，代理是本地工具、不做资源消耗攻击假设（见 [security-privacy.md](./security-privacy.md)） |
+| 宿主收尾 | 桌面形态补上 `app.requestSingleInstanceLock()`、异步 `before-quit`（5 s 兜底）、隐藏启动与不再致命的 `unhandledRejection` |
+| 代理归因 | 失败归类拆出「供应商级 / 模型级 / 不记」三档；流被中途截断、以及**响应形态与请求协议不符**（双向判定）都归到模型级，耗尽时把最后一次上游响应摘要写进错误 |
+| 代理稳健性 | 观察者逐个 try/catch（一个观察者抛异常不再带走整次转发）；下游背压时等 `drain` 再算写完；剥离 `accept-encoding`（链路上没有任何解压，协商压缩只会让正文读不了）；自定义鉴权头保留协议固定头 |
+| 控制台 | 拆开撞车的 `['provider-models']` 查询键、补上拖拽监听器卸载清理、重写规则页的加载失败与开关回滚、出站代理探测加客户端超时、`?? []`/`?? {}` 换成稳定空值、切换筛选时收起展开行 |
+
+验收（实测）：`pnpm typecheck` / `pnpm lint`（代理层 48 文件、数据库边界 146 文件、包边界 270 文件）/ `pnpm test`（116 文件 / 1231 测试）/ `pnpm build:cli` / `pnpm smoke:cli`（9/9）全绿。收尾时删掉了 4 条用例（管理接口的两条限长、`clearStaleInstanceLock` 的两条），另补 1 条「声明 64 MiB 也照样解析」把「不设限」钉住，故从 1234 降到 1231。
+
+冒烟脚本在这一轮之前已经**悄悄失效**，而它那几天没跑：`/api/*` 加实例 Token 校验之后，脚本没带头，卡在第 2 步的 `403` 上。它停在那里，就没人发现 `status` 用的是同一个姿势探活——`status --json` 从此只可能报 `unresponsive`，因为它的探活请求也不带 Token，`403` 被读成「进程在、服务不答应」。两处都在这一轮修掉：脚本从运行时文件带上 Token，并新增两条断言（错 Token 必须 `403`、崩溃残留的 `instance.lock` 会被下一次 `start` 接管）；`status` 从运行时文件带上 Token。教训是：**一个停住的冒烟脚本比没有更危险**，它会让后续每一轮都默认「那一层已经验过了」。
+
+这一轮的教训只有一条，但值得单独写下来：**「读起来像刻意决定」的代码最难发现**。上面三处都是同一种形状——真正的约束写在调用方而不是被调用方，于是补第二个调用方（第二个宿主、第二条关停路径、第二个页面）时就悄悄失效了。判断标准因此不是「这行代码有没有注释」，而是「这个保证写在谁的边界上」。
 
 ### S3 App 回归
 

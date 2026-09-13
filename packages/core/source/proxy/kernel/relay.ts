@@ -85,7 +85,7 @@ export interface RelayAttemptResult extends FramePipeResult {
  * 101 就再也发不出这个信号），那种情况下调用方必须先自己建连。搬运本身两者共用同一份实现。
  */
 export async function relayAttempt(input: RelayAttemptInput): Promise<RelayAttemptResult> {
-  for (const observer of input.observers) observer.onAttemptStart?.(input.exchange, input.attempt, input.target)
+  notifyObservers(input.observers, observer => observer.onAttemptStart?.(input.exchange, input.attempt, input.target))
 
   const connection = await input.transport.connect(input.target, input.request, input.attempt)
   return runRelay({ ...input, connection })
@@ -93,8 +93,25 @@ export async function relayAttempt(input: RelayAttemptInput): Promise<RelayAttem
 
 /** 中继一个调用方已经建好的上游连接。什么时候该用它见 `relayAttempt`。 */
 export async function relayConnected(input: RelayConnectedInput): Promise<RelayAttemptResult> {
-  for (const observer of input.observers) observer.onAttemptStart?.(input.exchange, input.attempt, input.target)
+  notifyObservers(input.observers, observer => observer.onAttemptStart?.(input.exchange, input.attempt, input.target))
   return runRelay(input)
+}
+
+/**
+ * 通知所有观察者。
+ *
+ * 与 `frame-pipe` 里那份实现是同一条不变式：观察者只能「看」，它的异常只能丢掉自己这一条记录。
+ * 这里必须**逐个**兜住——一个观察者抛错就中断循环，等于让排在它后面的观察者因为别人失败而失声，
+ * 而抛穿出去更糟：一次开关的开场/收尾就把这次尝试弄成失败。
+ */
+function notifyObservers(observers: readonly Observer[], notify: (observer: Observer) => void): void {
+  for (const observer of observers) {
+    try {
+      notify(observer)
+    } catch (error) {
+      console.warn(`[proxy] observer failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
 }
 
 /**
@@ -166,7 +183,7 @@ async function runRelay(input: RelayConnectedInput): Promise<RelayAttemptResult>
     status: result.head?.status ?? null,
     durationMilliseconds: Date.now() - input.startedAt,
   }
-  for (const observer of input.observers) observer.onAttemptEnd?.(input.exchange, input.attempt, outcome)
+  notifyObservers(input.observers, observer => observer.onAttemptEnd?.(input.exchange, input.attempt, outcome))
   console.debug(`[proxy] attempt relayed requestId=${input.exchange.requestId} attempt=${input.attempt.index} endpointId=${input.attempt.endpointId} transport=${input.exchange.transport} status=${outcome.status ?? 'none'} frames=${result.frameCount} bytes=${result.byteCount} duration=${outcome.durationMilliseconds}ms ended=${result.ended} stopped=${result.stopped}${reverse === null ? '' : ` inboundFrames=${reverse.frameCount} inboundBytes=${reverse.byteCount} inboundStopped=${reverse.stopped}`}`)
   return { ...result, inbound: reverse, firstEnded }
 }

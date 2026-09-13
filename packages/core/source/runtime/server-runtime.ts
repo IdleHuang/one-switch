@@ -11,6 +11,14 @@ import { configureShutdownHandshake, type ShutdownHandshake } from '../managemen
 import { startManagementServer, stopManagementServer } from '../management/server'
 import { resetManualModels } from '../proxy/routing/manual-routing'
 import { startProxyServer, stopProxyServer } from '../proxy/runtime/server'
+import {
+  acquireInstanceLock,
+  InstanceLockError,
+  lockFilePath,
+  startInstanceLockHeartbeat,
+  type InstanceLock,
+} from './instance-lock'
+import { clearRuntimeIdentity, createRuntimeIdentity } from './runtime-identity'
 
 export interface ServerRuntimeOptions {
   runtimeConfig: RuntimeConfig
@@ -32,12 +40,21 @@ export interface ServerEndpoints {
   proxyPort: number
   /** 托管控制台时的静态产物根目录；没托管为 `null`。 */
   webRoot: string | null
+  /**
+   * 本次运行的实例 token。
+   *
+   * 宿主必须把它交给自己的前端（桌面形态经 preload / 命令行形态写进运行时文件），
+   * 否则控制台的每一个请求都会被守卫拒掉（见 `./runtime-identity.ts`）。
+   */
+  instanceToken: string
 }
 
 export class ServerRuntime {
   private state: 'created' | 'starting' | 'running' | 'stopping' | 'stopped' = 'created'
   private managementServer: Server | null = null
   private endpoints: ServerEndpoints | null = null
+  private instanceLock: InstanceLock | null = null
+  private stopLockHeartbeat: (() => void) | null = null
 
   constructor(private readonly options: ServerRuntimeOptions) {}
 
@@ -63,6 +80,12 @@ export class ServerRuntime {
       configureSettingsDefaults({ listenHost: config.proxyHost, listenPort: config.proxyPort })
       configureShutdownHandshake(this.options.shutdown ?? null)
       installLogCapture()
+      // 单实例必须排在数据库之前：两个进程同时打开同一对 SQLite 文件是这套架构里
+      // 最难查的一类损坏，而“谁先认领数据目录”跟启动方式无关，所以它是 core 的能力
+      // 而不是某个宿主的（见 `./instance-lock.ts`）。
+      await this.acquireInstanceLock(config.dataDir)
+      // token 必须在监听之前就位：守卫对没有身份的请求是拒绝的（fail closed）。
+      const identity = createRuntimeIdentity()
       await initDatabases(config.dataDir)
       const outboundConnector = createOutboundConnector(getSettings, this.options.systemProxyResolver)
       await outboundConnector.initialize()
@@ -86,6 +109,7 @@ export class ServerRuntime {
         proxyHost: settings.listenHost,
         proxyPort: settings.listenPort,
         webRoot,
+        instanceToken: identity.token,
       }
       this.state = 'running'
       console.info(`[runtime] start completed state=${this.state}`)
@@ -131,9 +155,43 @@ export class ServerRuntime {
     await closeDatabases()
     this.managementServer = null
     this.endpoints = null
+    await this.releaseInstanceLock()
+    clearRuntimeIdentity()
 
     const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
     if (failure) throw failure.reason
     console.info('[runtime] resources stopped')
+  }
+
+  private async acquireInstanceLock(dataDir: string): Promise<void> {
+    const result = await acquireInstanceLock(dataDir)
+    if (!result.ok) {
+      console.error(`[runtime] instance lock refused reason=${result.reason} dataDir=${dataDir}`)
+      throw result.reason === 'held'
+        ? new InstanceLockError(result.holder, lockFilePath(dataDir))
+        : new InstanceLockError(null, result.filePath)
+    }
+    this.instanceLock = result.lock
+    this.stopLockHeartbeat = startInstanceLockHeartbeat(dataDir)
+    console.info(`[runtime] instance lock acquired dataDir=${dataDir}`)
+  }
+
+  /**
+   * 只释放**自己拿到**的锁。
+   *
+   * 不能无条件地“清掉锁文件”：启动失败可能是“别人正拿着锁”，那时删掉它等于人为
+   * 打开双实例的口子（`releaseInstanceLock` 对“读不出持有者”的锁是会删的）。
+   */
+  private async releaseInstanceLock(): Promise<void> {
+    this.stopLockHeartbeat?.()
+    this.stopLockHeartbeat = null
+    const lock = this.instanceLock
+    this.instanceLock = null
+    if (!lock) return
+    try {
+      await lock.release()
+    } catch (error) {
+      console.error('[runtime] failed to release the instance lock', error)
+    }
   }
 }

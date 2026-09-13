@@ -1,7 +1,7 @@
 /**
  * 运行时状态文件。
  *
- * `stop` / `status` 是**另一个进程**，它们要知道服务在哪儿、pid 是多少、优雅退出的 token
+ * `stop` / `status` 是**另一个进程**，它们要知道服务在哪儿、pid 是多少、管理 API 的 token
  * 是什么，只能靠磁盘上的这份快照。桌面形态不需要它：那是进程内状态，落盘只会多一份要维护的副本。
  *
  * 读取方一律把「读不出来」当成「没有实例在跑」——文件可能被手工删掉、写坏，也可能是更早的
@@ -26,7 +26,12 @@ export interface RuntimeFileState {
   proxyPort: number
   /** 托管控制台时的访问地址；`--no-web` 时为 `null`。 */
   webUrl: string | null
-  /** 优雅退出握手的 token，见 core 的 `management/core/shutdown-handshake.ts`。 */
+  /**
+   * 本次运行的实例 token（见 core 的 `runtime/runtime-identity.ts`）。
+   *
+   * 它是管理 API 的**唯一**凭证：`stop` 用它请求优雅退出，控制台用它请求其余接口。
+   * 落盘权限 0600，`stop` / `status` 之外的东西读到它就等于拿到了本机管理面。
+   */
   shutdownToken: string
   /** ISO 8601。 */
   startedAt: string

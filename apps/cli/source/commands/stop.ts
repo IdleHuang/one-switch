@@ -10,7 +10,6 @@ import { describeError } from '../errors'
 import { cliTranslator } from '../native-i18n'
 import { resolveDataDirectory } from '../host'
 import { callManagementApi } from '../management-client'
-import { clearStaleInstanceLock } from '../instance-lock'
 import { isProcessAlive, readRuntimeState, removeRuntimeState, runtimeFilePath } from '../runtime-state'
 import type { CliArguments } from '../options'
 
@@ -25,20 +24,9 @@ export async function runStop(values: CliArguments): Promise<number> {
   const filePath = runtimeFilePath(dataDir)
   const state = await readRuntimeState(dataDir)
 
-  /**
-   * 连带清掉已经没有持有者的实例锁。
-   *
-   * 运行时文件与实例锁是「同一个实例」的两种记录：残留往往是两份一起留下，
-   * 清一份留一份，下一次 `start` 就会在锁那道门上被自己上一次的崩溃拦住。
-   * 内部只删「pid 已死」的锁，所以不会误伤真在跑的实例。
-   */
-  const clearStaleLock = async (): Promise<void> => {
-    try {
-      await clearStaleInstanceLock(dataDir)
-    } catch (error) {
-      console.error('[cli] failed to clear the stale instance lock', error)
-    }
-  }
+  // 这里不碰实例锁：锁是 core 的声明（`runtime/instance-lock.ts`），宿主没有理由去
+  // 编辑它。上次崩溃留下的锁会被持有者判定识破（pid 已死、或心跳早停），下一次
+  // `start` 自己会接管——宿主多插一手，只会多出一条「谁该清它」的规矩。
 
   if (!state) {
     // 正常状态：从没启动过，或者上一次已经干净退出。
@@ -55,7 +43,6 @@ export async function runStop(values: CliArguments): Promise<number> {
       console.error(t('native.cli.stop.failed', { message: describeError(error) }))
       return 1
     }
-    await clearStaleLock()
     console.log(t('native.cli.stop.stale', { path: filePath }))
     return 0
   }
@@ -72,8 +59,8 @@ export async function runStop(values: CliArguments): Promise<number> {
   // 于是「已经停了」会被误报成「没人应答」。统一等进程真的消失——它对两种情况都成立。
   const exited = await waitFor(() => !isProcessAlive(state.pid), SHUTDOWN_TIMEOUT_MILLISECONDS)
   if (exited) {
-    // 对端自己会释放锁；这里再确认一次，是因为它可能在收尾途中崩掉。
-    await clearStaleLock()
+    // 锁由对端自己释放；万一它在收尾途中崩掉，留下的锁也会被判成残留并被下一次
+    // `start` 接管（见上面那段）。
     console.log(t('native.cli.stop.done'))
     return 0
   }

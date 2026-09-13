@@ -23,7 +23,7 @@ export interface ManagementCallOptions {
   /** 以 `/api` 开头，例如 `/api/proxy/status`。 */
   path: string
   body?: unknown
-  /** 优雅退出握手的 token，放在 `x-one-switch-token` 头里（见 core 的 shutdown-handshake）。 */
+  /** 实例 token，放在 `x-one-switch-token` 头里（见 core 的 `runtime/runtime-identity.ts`）。 */
   token?: string
   timeoutMilliseconds?: number
 }

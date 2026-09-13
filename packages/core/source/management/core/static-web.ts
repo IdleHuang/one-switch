@@ -51,9 +51,37 @@ export interface StaticWebHost {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>
 }
 
-export function createStaticWebHost(webRoot: string): StaticWebHost {
+export interface StaticWebHostOptions {
+  /**
+   * 本次运行的实例 token。
+   *
+   * 托管在这里的控制台与 API 同源，但它仍然必须带上凭证（见 `./request-guards.ts`）。
+   * 注入是唯一的送达方式：直直写进 HTML 里的 `window.__ONE_SWITCH__`，而它是不能被
+   * 跨源页面读到的（对方拿不到脚本里的字串，只能拿自己的请求）。
+   */
+  token: string
+}
+
+export function createStaticWebHost(webRoot: string, options: StaticWebHostOptions): StaticWebHost {
   const root = path.resolve(webRoot)
   const indexFile = path.join(root, 'index.html')
+  // 入口 HTML 很小，但每次导航（刷新页面、换路由）都会要它。按 mtime 缓存：
+  // 写好了产物又重启进程的情况不归这里管，而同一进程里它不会变。
+  let injected: { mtimeMs: number; html: string } | null = null
+
+  const indexHtml = (): string | null => {
+    const stat = statOrNull(indexFile)
+    if (!stat?.isFile()) return null
+    if (injected !== null && injected.mtimeMs === stat.mtimeMs) return injected.html
+    try {
+      const html = injectRuntimeConfig(fs.readFileSync(indexFile, 'utf8'), options.token)
+      injected = { mtimeMs: stat.mtimeMs, html }
+      return html
+    } catch (error) {
+      console.error(`[static-web] failed to inject runtime config file=${indexFile}`, error)
+      return null
+    }
+  }
 
   return {
     root,
@@ -69,6 +97,13 @@ export function createStaticWebHost(webRoot: string): StaticWebHost {
       if (pathname === '/api' || pathname.startsWith('/api/')) return false
 
       const file = locateFile(root, pathname)
+      if (file === indexFile) {
+        const html = indexHtml()
+        if (html !== null) {
+          sendText(res, html, 'text/html; charset=utf-8', method === 'HEAD')
+          return true
+        }
+      }
       if (file) {
         await sendFile(res, file, method === 'HEAD')
         return true
@@ -81,10 +116,34 @@ export function createStaticWebHost(webRoot: string): StaticWebHost {
       }
 
       // 前端路由（`/runtime-settings` 这类）由前端自己处理，交给 index.html。
+      const html = indexHtml()
+      if (html !== null) {
+        sendText(res, html, 'text/html; charset=utf-8', method === 'HEAD')
+        return true
+      }
       await sendFile(res, indexFile, method === 'HEAD')
       return true
     },
   }
+}
+
+/**
+ * 把运行时信息写进入口 HTML 的 `<head>` 里。
+ *
+ * 必须在任何 module 脚本之前生效：控制台的第一个请求就可能带上凭证，晚一步就是 403。
+ * `<head>` 开头是 HTML 里唯一能保证「比所有脚本都早」的位置。
+ *
+ * 没有 `<head>`（产物被人改过）时**不注入也不报错**：页面照样能打开，只是所有 API
+ * 调用会得到 403“没有访问权限”——那是实话，比抛一个看不懂的解析错误好。
+ */
+function injectRuntimeConfig(html: string, token: string): string {
+  const bootstrap = `<script>window.__ONE_SWITCH__=${escapeForScript(JSON.stringify({ token }))}<\/script>`
+  return html.replace(/<head([^>]*)>/i, match => `${match}${bootstrap}`)
+}
+
+/** `</script>` 与 `<!--` 能在字符串里提前结束脚本块，把 `\u003c` 换进去就安全了。 */
+function escapeForScript(json: string): string {
+  return json.replace(/</g, '\\u003c')
 }
 
 /** 取 URL 的 pathname 并解码；解码失败说明 URL 本身是坏的，返回 `null`。 */
@@ -155,6 +214,27 @@ async function sendFile(res: ServerResponse, file: string, headOnly: boolean): P
     stream.on('end', resolve)
     stream.pipe(res)
   })
+}
+
+/**
+ * 发一段内存里的文本。
+ *
+ * 单独一条路径（而不是把注入结果写成临时文件再 `sendFile`）：入口 HTML 是**动态**的，
+ * `Content-Length` 必须按注入后的字节数算，而注入后的大小每次启动都不同。
+ */
+function sendText(res: ServerResponse, body: string, contentType: string, headOnly: boolean): void {
+  const bytes = Buffer.from(body, 'utf8')
+  res.statusCode = 200
+  res.setHeader('Content-Type', contentType)
+  res.setHeader('Content-Length', String(bytes.byteLength))
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  // 入口 HTML 里带着每次启动都变的 token，绝不能被任何一层缓存下来。
+  res.setHeader('Cache-Control', 'no-store')
+  if (headOnly) {
+    res.end()
+    return
+  }
+  res.end(bytes)
 }
 
 function isHashedAsset(file: string): boolean {

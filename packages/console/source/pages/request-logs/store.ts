@@ -26,5 +26,7 @@ export const useRequestLogsUiStore = create<RequestLogsUiState>((set) => ({
   filter: initialFilter,
   setPage: (page) => set({ page }),
   setExpandedId: (expandedId) => set({ expandedId }),
-  setFilter: (filter) => set((state) => ({ page: 1, filter: { ...state.filter, ...filter } })),
+  // 改筛选条件就回第一页，并且把展开的详情收起来：
+  // 留着的话详情里讲的是一条已经被新条件筛掉的日志，表格和详情会各说各话。
+  setFilter: (filter) => set((state) => ({ page: 1, expandedId: null, filter: { ...state.filter, ...filter } })),
 }))

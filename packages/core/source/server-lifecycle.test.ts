@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeDatabases, initDatabases } from './database'
 import { updateSettings } from './database/settings-store'
 import { startServer, stopServer } from './index'
+import type { StartServerOptions } from './index'
 import { getProxyServerStatus, startProxyServer, stopProxyServer } from './proxy/runtime/server'
 import type { SecretStore } from '@common/secret-store'
 import { createRuntimeConfig, type RuntimeConfig } from '@common/runtime-config'
@@ -18,6 +19,18 @@ const secretStore: SecretStore = {
 }
 
 let temporaryDirectory: string
+/**
+ * 本次启动的实例 token。
+ *
+ * 管理 API 的**每个**请求都要带它（见 core 的 `runtime/runtime-identity.ts`），
+ * 所以启动后必须把它接下来——每次 `start()` 都会换一个新的。
+ */
+let instanceToken = ''
+
+async function startTestServer(options: StartServerOptions): Promise<void> {
+  const endpoints = await startServer(options)
+  instanceToken = endpoints.instanceToken
+}
 
 beforeEach(() => {
   secrets.clear()
@@ -53,7 +66,7 @@ describe('server lifecycle', () => {
     await initDatabases(temporaryDirectory)
     await updateSettings({ listenHost: '127.0.0.1', listenPort: proxyPort })
     await closeDatabases()
-    await startServer({
+    await startTestServer({
       secretStore,
       runtimeConfig: createTestRuntimeConfig(proxyPort, managementPort),
     })
@@ -113,7 +126,7 @@ describe('server lifecycle', () => {
       secretStore,
       runtimeConfig: createTestRuntimeConfig(proxyPort, managementPort),
     }
-    await startServer(runtimeOptions)
+    await startTestServer(runtimeOptions)
     const logicalModelUrl = `http://127.0.0.1:${managementPort}/api/logical-model`
 
     expect(await post(`${logicalModelUrl}/switch`, { logicalModelId: 'default', modelId: 'model_auto' })).toMatchObject({
@@ -146,7 +159,7 @@ describe('server lifecycle', () => {
     })
 
     await stopServer()
-    await startServer(runtimeOptions)
+    await startTestServer(runtimeOptions)
     expect(await post(`${logicalModelUrl}/status`, { logicalModelId: 'default' })).toMatchObject({
       success: true,
       data: { logicalModelId: 'default', manualModelId: null },
@@ -171,7 +184,11 @@ function createTestRuntimeConfig(proxyPort: number, managementPort: number): Run
 async function post(url: string, body: unknown = {}): Promise<unknown> {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Connection: 'close' },
+    headers: {
+      'Content-Type': 'application/json',
+      Connection: 'close',
+      'x-one-switch-token': instanceToken,
+    },
     body: JSON.stringify(body),
   })
   return response.json()

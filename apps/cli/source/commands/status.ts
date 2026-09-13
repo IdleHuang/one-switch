@@ -58,10 +58,13 @@ export async function runStatus(values: CliArguments): Promise<number> {
 
     // 探一次就够：它同时回答「管理服务活着吗」与「代理现在在哪个地址」。
     // 代理实际生效的地址来自设置，可能与运行时文件里记的不同（用户在界面上改过）。
+    // 必须带上实例 Token：`/api/*` 一律校验（见 core 的 `management/core/request-guards.ts`），
+    // 不带就是 403，而 403 会被读成「进程活着但服务不答应」，于是真的实例永远报 unresponsive。
     const probe = await callManagementApi({
       host: state.managementHost,
       port: state.managementPort,
       path: '/api/proxy/status',
+      token: state.shutdownToken,
     })
 
     if (probe.ok) {

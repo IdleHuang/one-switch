@@ -27,8 +27,10 @@ export interface AttemptConclusionInput {
   readonly disposition: UpstreamStatusDisposition
   /** 上游跳实际是什么形态。**纯上游事实**，与客户端跳的要求无关。 */
   readonly upstreamTransport: TransportKind | null
-  /** 上游跳没有兼现客户端跳要求的形态（2xx 但要 `http-stream` 却回了非 SSE）。 */
+  /** 上游跳没有兼现客户端跳要求的形态（2xx 但要 `http-stream` 却回了非 SSE，或反之）。 */
   readonly transportMismatch: boolean
+  /** 上游回了 2xx，正文却只搬了一半就断了（失败的事实不在状态码里）。 */
+  readonly streamInterrupted: boolean
   readonly upstreamRequestId: string | null
   readonly durationMilliseconds: number
   /** 真正发往上游的协议；只有发生了协议转换时非空。 */
@@ -104,6 +106,7 @@ export async function concludeInterruptedAttempt(input: InterruptedAttemptInput)
     durationMilliseconds: input.durationMilliseconds,
     upstreamRequestId: input.upstreamRequestId,
     upstreamResponseBody: partialBody,
+    streamInterrupted: input.streamInterrupted,
     clientResponse: {
       captureStatus: 'partial',
       responseHeaders: serializeSentResponseHeaders(input.response),

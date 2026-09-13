@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import http from 'node:http'
+import net from 'node:net'
 import type { AttemptView, ExchangeView, Frame, UpstreamTarget } from '@server/proxy/contracts'
 import { IDLE_TIMEOUT_MESSAGE, createHttpTransport } from './http'
 
@@ -121,6 +122,30 @@ describe('http transport', () => {
       expect(failure.kind).toBe('error')
       expect(failure.error.message).toBe(IDLE_TIMEOUT_MESSAGE)
     })
+  })
+
+  it('ends with an error frame when the upstream drops the connection mid-body', async () => {
+    // 上游声明了 `content-length` 却只发一半就掐连接：此时 `end` 与 `error` 都不会来。
+    // 不按 `close` 收尾，帧序列就永远等不到终止帧，消费者会一直挂到客户端自己放弃。
+    // 用裸 TCP 服务端手写这半条响应，才能精确摆出「头 + 半截正文 + 撤连接」这个时序。
+    const server = net.createServer(socket => {
+      socket.on('error', () => {})
+      socket.once('data', () => {
+        socket.write('HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 1000\r\n\r\ndata: one\n\n')
+        setTimeout(() => socket.destroy(), 20)
+      })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not start')
+
+    try {
+      const connection = await transportWith(0).connect(createTarget(`http://127.0.0.1:${address.port}/v1/chat/completions`), createExchange('payload'), ATTEMPT)
+      const frames = await collect(connection.frames)
+      expect(frames[frames.length - 1]).toMatchObject({ kind: 'error' })
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
   })
 
   it('ends the frame sequence when the connection is aborted', async () => {

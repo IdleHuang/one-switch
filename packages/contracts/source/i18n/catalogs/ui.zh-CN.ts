@@ -255,7 +255,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'requestLogs.table.emptyAll.description': '代理收到请求后会在这里留下记录。',
   'requestLogs.attempt.noResponse': '未收到响应',
   'requestLogs.attempt.retryable': '可重试',
-  'requestLogs.attempt.transportMismatch': '未按增量返回',
+  'requestLogs.attempt.transportMismatch': '响应形态不符',
   'requestLogs.attempt.firstToken': '首字 {value}',
   'requestLogs.attempt.converted': '转为 {protocol}',
   'requestLogs.attempt.label': '尝试 {index}',
@@ -1240,6 +1240,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'settings.outboundProxy.testDescription': '用当前配置请求一次轻量地址，验证代理是否可用',
   'settings.outboundProxy.testTargetAria': '连接测试地址',
   'settings.outboundProxy.testSuccess': '连接成功，HTTP {status}，耗时 {duration} ms',
+  'settings.outboundProxy.testTimeout': '测试超时未返回，代理或探测目标可能被挂住了',
 
   // 故障转移
   'settings.failover.title': '故障转移',

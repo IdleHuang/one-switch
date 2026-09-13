@@ -1,5 +1,5 @@
 import type { Protocol } from '@common/schemas'
-import type { HealthFailureScope, UpstreamStatusDisposition } from '@server/proxy/response/response'
+import type { HealthFailureHints, HealthFailureScope, UpstreamStatusDisposition } from '@server/proxy/response/response'
 import { classifyHealthFailure } from '@server/proxy/response/response'
 import { markProviderFailure, markProviderModelFailure } from '@server/proxy/upstream/health'
 import { serializeCapturedHeaders } from '@server/proxy/response/headers'
@@ -36,11 +36,18 @@ export interface AttemptOutcome {
    */
   upstreamResponseBody?: string | null
   /**
-   * 这次尝试的失败是不是「上游跳没兼现客户端跳要求的形态」（2xx 但要 `http-stream` 却回了非 SSE）。
+   * 这次尝试的失败是不是「上游跳没兼现客户端跳要求的形态」（要 `http-stream` 却回了非 SSE，或反之）。
    *
    * 健康度分类需要它：这种失败的状态码是 `200`，按状态码分类只会得到 `'none'`（§1.2）。
    */
   transportMismatch?: boolean
+  /**
+   * 上游已经回了 2xx，正文却只搬了一半就断了。
+   *
+   * 与 `transportMismatch` 同理：失败的事实不在状态码里，健康度分类必须被告知，
+   * 否则这个每次都断流的模型永远不会被冷却。
+   */
+  streamInterrupted?: boolean
   /**
    * 客户端视角的最终响应；仅当响应真正写出客户端时存在。
    * failover 中途放弃、请求改写被拒等场景下为 `undefined`。
@@ -89,9 +96,18 @@ export function toRequestContentOutcome(outcome: AttemptOutcome): RequestContent
 }
 
 /** 记录健康度失败，并返回这次失败影响到哪一层（供应商还是单个模型）。 */
-export async function recordHealthFailure(target: UpstreamTarget, statusCode: number | null, responseBody?: string | null, transportMismatch = false): Promise<HealthFailureScope> {
-  const scope = classifyHealthFailure({ statusCode, responseBody, transportMismatch })
+export async function recordHealthFailure(target: UpstreamTarget, statusCode: number | null, hints: HealthFailureHints = {}): Promise<HealthFailureScope> {
+  const scope = classifyHealthFailure({ statusCode, ...hints })
   if (scope === 'provider') await markProviderFailure(target.providerId)
   if (scope === 'provider-model') await markProviderModelFailure(target.providerModelId)
   return scope
+}
+
+/** 从一次尝试的结果里取出「状态码之外的失败事实」，供健康度分类使用。 */
+export function healthFailureHints(outcome: AttemptOutcome): HealthFailureHints {
+  return {
+    responseBody: outcome.upstreamResponseBody,
+    transportMismatch: outcome.transportMismatch,
+    streamInterrupted: outcome.streamInterrupted,
+  }
 }

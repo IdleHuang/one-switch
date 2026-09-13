@@ -30,7 +30,11 @@ export class AutoLaunchManager {
     try {
       app.setLoginItemSettings({
         openAtLogin: enabled,
-        openAsHidden: true, // 开机时隐藏启动，只显示托盘
+        // macOS 用它表达「登录后静默启动」，主进程读 `app.wasOpenedAsHidden`。
+        openAsHidden: true,
+        // Windows 不认 `openAsHidden`，只能靠启动参数；主进程读 `--hidden`
+        //（见 `index.ts` 里的 `startHidden`）。Linux 的登录项由打包产物生成，同样按参数传。
+        args: ['--hidden'],
       })
       this.currentValue = enabled
       console.info(`[auto-launch] state updated enabled=${enabled}`)

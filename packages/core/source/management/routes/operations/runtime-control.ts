@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 import { getSettings } from '@server/database/settings-store'
 import { listProviderHealth, listProviderModelHealth } from '@server/database/health-store'
@@ -76,20 +75,14 @@ async function handleProxyRestart(_req: IncomingMessage, res: ServerResponse): P
 /**
  * 请求宿主优雅退出。
  *
- * 端点只在宿主显式配置了握手时存在（CLI 会配，桌面形态不会），token 每次启动随机并写在
- * 数据目录的运行时文件里——见 `../../core/shutdown-handshake.ts` 的说明。
+ * 端点只在宿主显式配置了握手时存在（CLI 会配，桌面形态不会）。**凭证不在这里校验**：
+ * 所有 `/api/*` 都在 `../../core/request-guards.ts` 里统一要求实例 token，这里只回答
+ * 「本次宿主允许被停掉吗」。
  */
-function handleRuntimeShutdown(req: IncomingMessage, res: ServerResponse): void {
+function handleRuntimeShutdown(_req: IncomingMessage, res: ServerResponse): void {
   const handshake = getShutdownHandshake()
   if (!handshake) {
     sendError(res, 'RESOURCE_NOT_FOUND', 'Runtime shutdown endpoint is not enabled', 404)
-    return
-  }
-
-  const provided = readShutdownToken(req)
-  if (!provided || !matchesSecret(provided, handshake.token)) {
-    console.warn('[management] runtime shutdown rejected reason=invalid-token')
-    sendError(res, 'FORBIDDEN', 'Invalid shutdown token', 403)
     return
   }
 
@@ -97,18 +90,4 @@ function handleRuntimeShutdown(req: IncomingMessage, res: ServerResponse): void 
   // 先把响应写回去再触发停止：宿主一收尾就会关掉监听，不能让自己的响应被一起掐掉。
   res.once('finish', () => handshake.onRequest())
   sendSuccess(res, { stopping: true })
-}
-
-function readShutdownToken(req: IncomingMessage): string | null {
-  const header = req.headers['x-one-switch-token']
-  if (Array.isArray(header)) return header[0] ?? null
-  return header ?? null
-}
-
-/** 定长比较，避免用比较耗时泄漏 token。 */
-function matchesSecret(provided: string, expected: string): boolean {
-  const providedBytes = Buffer.from(provided)
-  const expectedBytes = Buffer.from(expected)
-  if (providedBytes.length !== expectedBytes.length) return false
-  return timingSafeEqual(providedBytes, expectedBytes)
 }
