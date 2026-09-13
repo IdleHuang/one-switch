@@ -180,7 +180,7 @@ Input ─▶ 协议发现 ─▶ Condition（request.body.model in logicalModels
 
 这两条契约都不是靠自觉，而是有回归用例兜着（`pages/router/field-hints.test.ts` 的「内置策略 × 字段候选表」）：用例把每个预设节点真正读的路径抽出来（条件字段与比较字段、变量取值、遍历来源、脚本里的 `get('…')`、提示词里的 `${…}`），要求它必须出现在**该节点自己的候选表**里，候选表口径与面板共用同一份实现（`pages/router/panel/field-candidates.ts`）。图「能跑」和「改得动」是两件事：payload 里本来就有整个请求体，读一条没人声明过的路径照样算得出结果，但用户在脚本编辑器里补全不出来、在条件下拉里选不到，这张图就是死的。同一组用例还有一条「只在某一种协议里存在的请求体字段，预设必须按 `route.protocol` 取舍」：像 `messages` / `input` / `system` / `instructions` 这种只在部分协议里存在的字段，预设只要读了其中一个，就必须显式引用 `route.protocol` 来取舍（`model` / `tools` 这种每种协议都有的不受约束）。
 
-内置脚本预设里那段代码是真的会被跑一遍再断���的（`packages/core/source/proxy/capabilities/script-sandbox.test.ts`）：引擎侧的脚本节点测试都注入假 `runScript`、只能比对代码文本，少了一层就逼不出「换个协议就读错字段」；沙箱本身只依赖 `node:vm`，所以能脱离代理执行栈单独跑。
+内置脚本预设里那段代码是真的会被跑一遍再断言的（`packages/core/source/proxy/capabilities/script-sandbox.test.ts`）：引擎侧的脚本节点测试都注入假 `runScript`、只能比对代码文本，少了一层就逼不出「换个协议就读错字段」；沙箱本身只依赖 `node:vm`，所以能脱离代理执行栈单独跑。
 
 `ua-source-routing` 用一套「循环体写落点、迭代节点只判定命中」的拼法：
 

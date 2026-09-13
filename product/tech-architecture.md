@@ -234,7 +234,7 @@ React 18 + TypeScript + shadcn/ui + Tailwind。页面通过 `packages/console/so
 - ad-hoc 签名只保证应用包内部完整性，不提供开发者身份信任，也不能提交 Apple 公证
 - GitHub Release 必须附带 DMG 的 SHA-256 文件和“隐私与安全 > 仍要打开”的首次安装说明
 - 未来购买 Apple Developer Program 后，替换为 Developer ID Application 签名和 Apple notarization；不得把免费 Apple Development 证书用于公网分发
-- 自动更新已实现：`apps/app/source/updater.ts` 使用 `electron-updater`，支持检查、手动下载、进度、安装和状态广播；生产环境启动后静默检查，开发环境无更新元���据时显示友好状态。
+- 自动更新已实现：`apps/app/source/updater.ts` 使用 `electron-updater` ，支持检查、手动下载、进度、安装和状态广播；生产环境启动后静默检查，开发环境无更新元数据时显示友好状态。
 - 无正式 Developer ID 签名阶段，自动更新明确关闭 macOS 更新包发行者签名校验，下载完整性依赖更新元数据中的 SHA-512。这是当前发布方式的预期取舍；启用正式签名和 Apple notarization 后必须恢复签名校验。
 
 ## 开发流程
