@@ -23,7 +23,7 @@ const main = async () => {
     // `release.yml` 里那行 `git add` 管——那是这条链路上唯一不是代码的清单。
     // 放在这里而不是单开一个 job：漏提交一份，下一次 CI 就是红的，
     // 不必等发布之后靠人回头读一遍仓库（来龙去脉见 product/packaging.md §5.8）。
-    await run(process.execPath, ['apps/app/scripts/version.mjs', '--check'], { cwd: repositoryRoot })
+    await run(process.execPath, ['packages/toolkit/scripts/version.mjs', '--check'], { cwd: repositoryRoot })
     log.success('Lint passed')
   } catch (error) {
     log.error('Lint failed')

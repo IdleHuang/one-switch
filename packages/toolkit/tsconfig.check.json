@@ -1,0 +1,43 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    // 增量信息写在 `node_modules/.cache` 下：CI 把这个目录缓存到 lint / typecheck 各自的
+    // job 名下，本地跑也不会在仓库根留下文件。本机实测约 17s → 7s。
+    // tsc 自己按文件内容与选项校验增量信息，命中的前提是「这些文件上次已检查过且无误」，
+    // 上一次带错误时它会整份重查，所以不会把新问题藏起来。
+    //
+    // 路径相对**本文件**解析，所以要从包里看出去。
+    "incremental": true,
+    "tsBuildInfoFile": "../../node_modules/.cache/tsconfig.check.tsbuildinfo"
+  },
+  // 一次覆盖全部包：五棵 `source` 树与「不该被业务代码 import、但必须单独成立」的构建/测试/
+  // drizzle 配置文件都放在同一个程序里。逐包做类型检查需要每个包自己声明 paths，收益不大，
+  // 反而多出几个会腐烂的配置（见 `scripts/typecheck.mjs`）。
+  //
+  // 住在 toolkit 而不是仓库根：唯一消费方就是同目录下的 `scripts/typecheck.mjs`，而 `tsc` 接受
+  // 显式的 `-p`，没有哪个工具非要它长在根目录。根目录只留「工具约定必须在那里找到」的文件
+  // （`pnpm-workspace.yaml`、`turbo.json`、被各包 `extends` 的 `tsconfig.json`、
+  // `eslint.config.js`），以及这份配置的 `extends` 目标。
+  //
+  // 下面每条都相对**本文件**解析，所以要从包里看出去。
+  "include": [
+    "../../packages/contracts/source/**/*.ts",
+    "../../packages/core/source/**/*.ts",
+    "../../packages/console/source/**/*.ts",
+    "../../packages/console/source/**/*.tsx",
+    "../../apps/app/source/**/*.ts",
+    "../../apps/cli/source/**/*.ts",
+    "../../packages/console/vite.config.ts",
+    "../../packages/core/drizzle.config.config.ts",
+    "../../packages/core/drizzle.config.data.ts",
+    "../../apps/app/vite.config.ts",
+    "../../apps/app/vite.preload.config.ts",
+    "../../apps/app/vite.shared.ts",
+    "../../apps/cli/vite.config.ts",
+    "vitest.config.ts",
+    "../../packages/console/scripts/vitest.setup.ts"
+  ],
+  "references": []
+}

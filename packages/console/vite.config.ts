@@ -8,9 +8,9 @@ import packageJson from '../../package.json' with { type: 'json' }
 // 渲染层只能异步走 updater IPC 拿 `currentVersion`，而 `dev:preview` 与单测里根本没有 Electron，
 // 所以版本号在构建期取一次、`define` 成字面量注入。
 //
-// 取的是**仓库根**的 `package.json`：那是唯一的发布版本权威（`apps/app/scripts/version.mjs` 负责把
-// 同一个版本号写进全部 workspace manifest）。声明见 `source/vite-env.d.ts`，
-// 测试侧的同一份注入见仓库根的 `vitest.config.ts`。
+// 取的是**仓库根**的 `package.json`：那是唯一的发布版本权威（`packages/toolkit/scripts/version.mjs`
+// 负责把同一个版本号写进全部 workspace manifest）。声明见 `source/vite-env.d.ts`，
+// 测试侧的同一份注入见 `packages/toolkit/vitest.config.ts`。
 const appVersion = packageJson.version
 
 // 渲染层是纯静态产物：不导入 `@server/*`，也不认识 `electron`。

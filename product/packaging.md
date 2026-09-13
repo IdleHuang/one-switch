@@ -146,7 +146,7 @@ S0 只做目录平移与配置同步，不含逻辑改写。实际执行结果�
 
 与 §4.1 目标态只剩一处差异，属于刻意延后：`apps/app/source` 保持平铺一层（`index.ts` / `preload.ts` / `tray-*.ts` / `updater.ts` …），不拆 `main/` 与 `preload/`。拆目录会同时改变 Vite 入口、`__dirname` 推导与 preload 相对路径，与「平移零行为风险」冲突，留到 S3。
 
-**别名沿用旧名，只重指目标**（本阶段最关键的取舍）：`@common/*` → `packages/contracts/source`，`@server/*` → `packages/core/source`，`@/*` → `packages/console/source`，`@render/*` → `packages/console`。别名定义分散在三处（`packages/console/vite.config.ts`、`apps/app/vite.shared.ts`、`vitest.config.ts`），改路径必须三处同步，否则会出现「测试能过、构建能过、跑起来才炸」的分裂状态。
+**别名沿用旧名，只重指目标**（本阶段最关键的取舍）：`@common/*` → `packages/contracts/source`，`@server/*` → `packages/core/source`，`@/*` → `packages/console/source`，`@render/*` → `packages/console`。别名定义分散在三处（`packages/console/vite.config.ts`、`apps/app/vite.shared.ts`、`packages/toolkit/vitest.config.ts`），改路径必须三处同步，否则会出现「测试能过、构建能过、跑起来才炸」的分裂状态。
 
 理由：包内引用约 866 处、跨包引用约 316 处，一次性重写所有 specifier 既无法用类型检查分批验证，也无法在 `moduleResolution: bundler` + 纯源码（无构建产物）的工作区里靠包的 `exports` 字段解析。别名间接层是等价的替代，而且它本身就是后续「按包独立构建」的接缝。真正的 specifier 迁移放到各包开始产出构建产物时再做，届时是机械替换，可验证。
 
@@ -154,7 +154,11 @@ S0 只做目录平移与配置同步，不含逻辑改写。实际执行结果�
 
 ### 4.3 根级资产的最终归属
 
-S0 之后根目录只保留工作区级配置（`pnpm-workspace.yaml`、`turbo.json`、`tsconfig*.json`、`vitest.config.ts`、`eslint.config.js`、`package.json`）与 `product/`、`release/`。原先分散在根目录的资产（包括脚本）按「谁用谁持有」搬进了各自的包：
+S0 之后根目录只保留工作区级配置（`pnpm-workspace.yaml`、`turbo.json`、`tsconfig.json` / `tsconfig.base.json`、`eslint.config.js`、`package.json`）与 `product/`、`release/`。
+
+后来按同一条原则又搬走两份：`vitest.config.ts` 与 `tsconfig.check.json` 的唯一消费方分别是 `packages/toolkit/scripts/test.mjs` 与 `typecheck.mjs`，而 `vitest` 接受 `--config`、`tsc` 接受 `-p`，没有任何工具约定非要它们在根目录，于是两份都住进 `packages/toolkit`（见 §5.8）。反过来，**留在根目录的都不是残留**：`pnpm-workspace.yaml` 决定 workspace 成员，`turbo.json` 由 turbo 在根查找，`tsconfig.json` 是各包 `extends` 的目标，`eslint.config.js` 由 `eslint .` 从 cwd 向上找——把它们搬走才是破坏约定。
+
+原先分散在根目录的资产（包括脚本）按「谁用谁持有」搬进了各自的包：
 
 | 资产 | 现在的位置 | 引用方式 |
 | --- | --- | --- |
@@ -163,7 +167,7 @@ S0 之后根目录只保留工作区级配置（`pnpm-workspace.yaml`、`turbo.j
 | Electron 与 electron-builder | `apps/app/package.json` 的 devDependencies | 宿主包自己声明。electron-builder 只在 `<projectDir>/node_modules` 里找 Electron（见坑 4），把依赖留在仓库根等于「开发全通、只在打包时失败」 |
 | 控制台静态资源 | `packages/console/public/` | Vite 的 `publicDir`，随渲染层构建拷贝进 `packages/console/dist` |
 | 各包脚本 | `apps/app/scripts/`、`packages/core/scripts/`、`packages/console/scripts/` | 根 `package.json` 的 scripts 指向包内路径（`apps/app/scripts/{build,dev,version}.mjs`、`packages/core/scripts/{db,check-proxy-layers}.mjs`、`packages/console/scripts/{eslint-plugin-i18n.mjs,vitest.setup.ts}`） |
-| 跨包脚本 | `packages/toolkit/scripts/` | 私有工作区包（`@one-switch/toolkit`，无运行时代码）：任务编排（lint / test / typecheck）、包边界守卫与脚本运行库。它们不属于任何单一业务包，所以独立成包而不是堆在根目录 |
+| 跨包脚本 | `packages/toolkit/scripts/` | 私有工作区包（`@one-switch/toolkit`，无运行时代码）：任务编排（lint / test / typecheck）、版本写入与校验、包边界守卫与脚本运行库。它们不属于任何单一业务包，所以独立成包而不是堆在根目录。同样只被这些脚本读取的 `vitest.config.ts` 与 `tsconfig.check.json` 也住在这里 |
 | 打包产物 | `release/<version>/` | 仍在仓库根：它是构建**输出**，不属于任何包的源码 |
 
 搬运时的四个坑：
@@ -340,9 +344,9 @@ CLI 的 native 层需要一套独立文案（启动横幅、端口占用、数�
 - `dev` 标记为 `cache: false` + `persistent: true`：turbo 并行拉起而不等待依赖，跨进程顺序由宿主自己的编排脚本负责（`apps/app/scripts/dev.mjs`）。
 - turbo 要求根 `package.json` 声明 `packageManager`，缺失会直接拒绝运行。
 
-版本号的注入点在拆分后每个宿主一处：`console` 在 `packages/console/vite.config.ts`（`__APP_VERSION__`）、`cli` 在 `apps/cli/vite.config.ts`（`__CLI_VERSION__`），两者都取**仓库根** `package.json` 的版本；`vitest.config.ts` 必须把两份 `define` 都同步（历史教训：两处不同步会让任何间接 import 的测试炸掉）。`apps/app/scripts/version.mjs` 是唯一的版本入口，而版本号只写在仓库根的 manifest 里：`pnpm version:set <version>` 从 `pnpm-workspace.yaml` 现算 workspace 包目录、把根版本**强制覆盖**到每一份 manifest（加包不必改脚本），`pnpm version:check` 只读校验它们全都与根一致，挂在 `pnpm lint` 里。之所以要专门盯它，是因为这条链路上有一份**不是代码**的清单——`release.yml` 的 `Commit version` 步骤得把改过的 manifest `git add` 进去，而它曾把 `apps/*` 写死成 `apps/app`：`1.1.0-beta.3` 发出去之后，仓库里的 `apps/cli/package.json` 还停在 `1.1.0-beta.2`。**产物是对的**（CI 里文件确实改了，只是那份改动没被提交），错的是仓库自己，所以 `pnpm typecheck` / `lint` / `test` 一路全绿也看不出来，只有发布之后回头读一遍仓库才会撞见。那条 `git add` 现在与脚本用同一对 glob，`--check` 则负责让「漏提交」在 CI 上直接变红。
+版本号的注入点在拆分后每个宿主一处：`console` 在 `packages/console/vite.config.ts`（`__APP_VERSION__`）、`cli` 在 `apps/cli/vite.config.ts`（`__CLI_VERSION__`），两者都取**仓库根** `package.json` 的版本；`packages/toolkit/vitest.config.ts` 必须把两份 `define` 都同步（历史教训：两处不同步会让任何间接 import 的测试炸掉）。`packages/toolkit/scripts/version.mjs` 是唯一的版本入口，而版本号只写在仓库根的 manifest 里：`pnpm version:set <version>` 从 `pnpm-workspace.yaml` 现算 workspace 包目录、把根版本**强制覆盖**到每一份 manifest（加包不必改脚本），`pnpm version:check` 只读校验它们全都与根一致，挂在 `pnpm lint` 里。之所以要专门盯它，是因为这条链路上有一份**不是代码**的清单——`release.yml` 的 `Commit version` 步骤得把改过的 manifest `git add` 进去，而它曾把 `apps/*` 写死成 `apps/app`：`1.1.0-beta.3` 发出去之后，仓库里的 `apps/cli/package.json` 还停在 `1.1.0-beta.2`。**产物是对的**（CI 里文件确实改了，只是那份改动没被提交），错的是仓库自己，所以 `pnpm typecheck` / `lint` / `test` 一路全绿也看不出来，只有发布之后回头读一遍仓库才会撞见。那条 `git add` 现在与脚本用同一对 glob，`--check` 则负责让「漏提交」在 CI 上直接变红。
 
-测试保持单一 workspace 配置（根 `vitest.config.ts` + `packages/console/scripts/vitest.setup.ts`，经 `packages/toolkit/scripts/test.mjs` 以 Electron 的 Node 执行，以匹配 `node:sqlite` 的 ABI），可按包过滤。两个静态守卫都必须保持通过：`packages/core/scripts/check-proxy-layers.mjs`（指向 `packages/core/source/proxy`）与 `packages/toolkit/scripts/check-package-boundaries.mjs`（已只登记 `packages/*` / `apps/*` 布局）。
+测试保持单一 workspace 配置（`packages/toolkit/vitest.config.ts` + `packages/console/scripts/vitest.setup.ts`，经 `packages/toolkit/scripts/test.mjs` 以 Electron 的 Node 执行，以匹配 `node:sqlite` 的 ABI），可按包过滤。两个静态守卫都必须保持通过：`packages/core/scripts/check-proxy-layers.mjs`（指向 `packages/core/source/proxy`）与 `packages/toolkit/scripts/check-package-boundaries.mjs`（已只登记 `packages/*` / `apps/*` 布局）。
 
 宿主侧还有一条只有拆过构建才知道的约束：删掉 `vite-plugin-electron` 之后，Node 与浏览器的构建差异不再有人代为处理。`apps/app/vite.shared.ts` 与 `apps/cli/vite.config.ts` 现在自己负责四件事，而**四者的缺失都只在运行期暴露、且构建全过程无警告**（分别是「入口函数不是函数」、「require 不可用」、「开发态静默按生产端口启动」和「动态导入直接 `ReferenceError`」）：
 
@@ -369,7 +373,7 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 | Turbo 任务缓存 | `.turbo` | `turbo-cache`（默认开） | 只有 `Build` 会写：它是唯一跑 `turbo run build` 的 job，其余 job 的 typecheck / lint / test 由包内脚本直跑 |
 | ESLint 缓存 / tsc 增量信息 | `node_modules/.cache` | `tool-cache`（默认关） | `Lint`（`eslint . --cache`）与 `Typecheck`（`tsc --incremental`） |
 
-缓存一个命令根本不会创建的目录比不缓存更糟：`actions/cache` 在保存阶段报 `Path Validation Error`，job 白跑一趟，还占着日志让人以为缓存生效了——原先 typecheck / lint / test 三个 job 的 `.turbo` 正是这种情况，现在显式关掉。另一点是收益只出现在第二次运行（首次要写盘，约 15 s），所以 key 不能高频变化，否则等于每次都在付写入成本。本地冷热对照（同机、同一份工作树）：`tsc -p tsconfig.check.json` 16.7 s → 6.9 s；`eslint .` 6.1 s → 2.5 s（`pnpm lint` 整体只快一点，守卫脚本与 turbo/pnpm 启动占了大头）。electron-builder 的 Electron 二进制缓存（Windows 的 `%LOCALAPPDATA%\electron\Cache`、macOS 的 `~/Library/Caches/electron*`，每系统约 1.3 GB）**没有**纳入本次改动：Electron 压缩包从 CDN 下载是秒级的，而 Windows 87 s / macOS 91 s 的打包耗时主要在解压与封装本身，为它占掉一个可观份额的 10 GB 缓存配额不划算（未实测，只按量级判断）。
+缓存一个命令根本不会创建的目录比不缓存更糟：`actions/cache` 在保存阶段报 `Path Validation Error`，job 白跑一趟，还占着日志让人以为缓存生效了——原先 typecheck / lint / test 三个 job 的 `.turbo` 正是这种情况，现在显式关掉。另一点是收益只出现在第二次运行（首次要写盘，约 15 s），所以 key 不能高频变化，否则等于每次都在付写入成本。本地冷热对照（同机、同一份工作树）：`tsc -p packages/toolkit/tsconfig.check.json` 16.7 s → 6.9 s；`eslint .` 6.1 s → 2.5 s（`pnpm lint` 整体只快一点，守卫脚本与 turbo/pnpm 启动占了大头）。electron-builder 的 Electron 二进制缓存（Windows 的 `%LOCALAPPDATA%\electron\Cache`、macOS 的 `~/Library/Caches/electron*`，每系统约 1.3 GB）**没有**纳入本次改动：Electron 压缩包从 CDN 下载是秒级的，而 Windows 87 s / macOS 91 s 的打包耗时主要在解压与封装本身，为它占掉一个可观份额的 10 GB 缓存配额不划算（未实测，只按量级判断）。
 
 发布说明不再手工维护。原先的 `.github/release-body.md` 已删除，改由 `apps/app/scripts/release-notes.mjs` 从提交记录生成（本地用 `pnpm release:notes` 预览；`release.yml` 的 publish job 不装依赖直接 `node` 跑它，因为它只 import `node:` 内建模块与 `electron-builder.config.cjs`）：
 
@@ -559,8 +563,10 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 | 请求头透传 | `createUpstreamRequestHeaders` 改成**默认转发**：客户端带了什么就转发什么（连名字的大小写都不动），只排除四类有理由的头——与位置绑定的 `host`/`content-length`、逐跳头与 `connection` 点名的头、客户端鉴权头、`accept-encoding`。协议固定头拆成 `replace` / `fill` 两半（`resolveProtocolAuthHeaders`），`anthropic-version` 这类只在客户端没带时补上，不再盖掉客户端的值（见 [proxy-engine.md](./proxy-engine.md) §5「已钉在测试上的不变式」） |
 | 控制台 | 拆开撞车的 `['provider-models']` 查询键、补上拖拽监听器卸载清理、重写规则页的加载失败与开关回滚、出站代理探测加客户端超时、`?? []`/`?? {}` 换成稳定空值、切换筛选时收起展开行 |
 | 发布版本清单 | 版本号收敛成单一来源：`version.mjs` 从 `pnpm-workspace.yaml` 现算包目录、把根 manifest 的版本强制覆盖到每一份 manifest，新增 `--check` 并挂进 `pnpm lint`；`release.yml` 的 `git add` 改成与脚本同一对 glob（见 §5.8） |
+| 共享配置归属 | 顺着「根目录还剩什么」的复核，`vitest.config.ts` 与 `tsconfig.check.json` 从仓库根搬进 `packages/toolkit`：它们各自的唯一消费方是该包的 `scripts/test.mjs` 与 `scripts/typecheck.mjs`，而 `vitest` 接受 `--config`、`tsc` 接受 `-p`；根目录只留工具约定必须在那里找到的文件（见 §4.3） |
+| 残留清理 | `tsconfig.check.json` 的 `include` 里还写着 `packages/core/drizzle.config.ts`，而该文件早已被拆成 `drizzle.config.config.ts` / `drizzle.config.data.ts`——`tsc` 对指向空气的条目**静默成功**，于是两份 drizzle 配置从未进过任何一次类型检查。`scripts/typecheck.mjs` 现在会先校验每条 `include` 都能落到实文件；`turbo.json` 里那三个无人实现的 `typecheck` / `lint` / `test` 任务一并删除 |
 
-验收（实测）：`pnpm typecheck` / `pnpm lint`（代理层 48 文件、数据库边界 146 文件、包边界 270 文件）/ `pnpm test`（116 文件 / 1235 测试）/ `pnpm build:cli` / `pnpm smoke:cli`（9/9）全绿。收尾时删掉了 4 条用例（管理接口的两条限长、`clearStaleInstanceLock` 的两条），另补 1 条「声明 64 MiB 也照样解析」把「不设限」钉住，故从 1234 降到 1231；随后做请求头透传收口时又补 5 条（`response/headers.test.ts` 的「未知自定义头原样转发」与「协议固定头只补缺」、`protocols.test.ts` 的 3 条 `replace`/`fill` 拆分），删掉 1 条（`requestHttpBuffered` 的响应体上限），故为 1235。`1.1.0-beta.3` 发布之后复核仓库时又发现 `apps/cli/package.json` 根本没进过版本提交（成因与修法见 §5.8），一并补上；这条修法不新增用例，测试数不变，仍是 116 文件 / 1235 测试。
+验收（实测）：`pnpm typecheck` / `pnpm lint`（代理层 48 文件、数据库边界 146 文件、包边界 270 文件）/ `pnpm test`（116 文件 / 1235 测试）/ `pnpm build:cli` / `pnpm smoke:cli`（9/9）全绿。收尾时删掉了 4 条用例（管理接口的两条限长、`clearStaleInstanceLock` 的两条），另补 1 条「声明 64 MiB 也照样解析」把「不设限」钉住，故从 1234 降到 1231；随后做请求头透传收口时又补 5 条（`response/headers.test.ts` 的「未知自定义头原样转发」与「协议固定头只补缺」、`protocols.test.ts` 的 3 条 `replace`/`fill` 拆分），删掉 1 条（`requestHttpBuffered` 的响应体上限），故为 1235。`1.1.0-beta.3` 发布之后复核仓库时又发现 `apps/cli/package.json` 根本没进过版本提交（成因与修法见 §5.8），一并补上；这条修法不新增用例，测试数不变，仍是 116 文件 / 1235 测试。搬走两份共享配置之后复核过等价性：`tsc --listFiles` 的文件集在搬家前后**逐条相同**，搬迁本身不改变任何被检查的文件；唯一实质变化是那两份 drizzle 配置从此被覆盖，类型检查程序从 584 个文件变成 586 个。
 
 冒烟脚本在这一轮之前已经**悄悄失效**，而它那几天没跑：`/api/*` 加实例 Token 校验之后，脚本没带头，卡在第 2 步的 `403` 上。它停在那里，就没人发现 `status` 用的是同一个姿势探活——`status --json` 从此只可能报 `unresponsive`，因为它的探活请求也不带 Token，`403` 被读成「进程在、服务不答应」。两处都在这一轮修掉：脚本从运行时文件带上 Token，并新增两条断言（错 Token 必须 `403`、崩溃残留的 `instance.lock` 会被下一次 `start` 接管）；`status` 从运行时文件带上 Token。教训是：**一个停住的冒烟脚本比没有更危险**，它会让后续每一轮都默认「那一层已经验过了」。
 

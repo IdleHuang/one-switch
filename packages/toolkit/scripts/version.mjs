@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { log } from '../../../packages/toolkit/scripts/lib/log.mjs'
+import { log } from './lib/log.mjs'
 
 // 版本号的唯一来源是仓库根的 `package.json`：`pnpm version:set <version>` 把它强制覆盖到
 // 每一个 workspace 包，`pnpm version:check` 只读校验它们全都与它一致。
@@ -17,8 +17,9 @@ import { log } from '../../../packages/toolkit/scripts/lib/log.mjs'
 // `packages/contracts/source/database-file.ts`），与发布版本无关。若它跟着应用主版本走，
 // 一次应用大版本升级就会让用户的配置在界面上凭空消失。
 //
-// 为什么住在 app 而不是仓库根：三个消费方里有两个（electron-builder 的产物名、`app.getVersion()`）
-// 属于桌面宿主，版本号是发布链的输入，所以这个脚本跟着发布链走。
+// 为什么住在 toolkit：它改的是每一个 workspace 包的 manifest，任何单一包都不是它的归属物；
+// 而 toolkit 就是「跨包脚本」的落脚处（与 `lint.mjs` / `test.mjs` / `typecheck.mjs` 同级），
+// 它原本就只差一个相对路径去用同目录的 `lib/log.mjs`。
 //
 // 为什么不写包目录清单：这里曾经手写一份，`release.yml` 里那行 `git add` 也手写一份，
 // 两边都漏掉了后加的 `apps/cli`——于是 `1.1.0-beta.3` 发出去之后，仓库里的

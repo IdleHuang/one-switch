@@ -18,10 +18,10 @@ export default defineConfig({
   define: {
     'process.env': 'globalThis.process.env',
     // 版本号在构建期取一次。取的是**仓库根**的 `package.json`：那是唯一的发布版本权威
-    // （`apps/app/scripts/version.mjs` 把它写进全部 workspace manifest）。
+    // （`packages/toolkit/scripts/version.mjs` 把它写进全部 workspace manifest）。
     // 运行期读 `package.json` 会引入一条「按固定层数向上找文件」的路径假设，
     // 那正是 product/packaging.md §5.8 复盘出的脆点。声明见 `source/vite-env.d.ts`，
-    // 测试侧的同一份注入见仓库根 `vitest.config.ts`。
+    // 测试侧的同一份注入见 `packages/toolkit/vitest.config.ts`。
     __CLI_VERSION__: JSON.stringify(packageJson.version),
   },
   resolve: {
