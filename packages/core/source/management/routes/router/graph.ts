@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
 import { WorkflowGraphSchema } from '@common/router/schemas'
-import { listRouterGraphVersions, readRouterGraphSnapshot, readRouterGraphVersion, saveRouterGraphVersion } from '@server/database/router-graph-store'
+import { listRouterGraphVersions, readRouterGraphVersion, resolveRouterGraph, saveRouterGraphVersion } from '@server/database/router-graph-store'
 import { HttpRouter } from '@server/http-router'
 import type { ManagementHandler } from '../../core/response'
 import { sendSuccess } from '../../core/response'
@@ -15,7 +15,7 @@ import { sendSuccess } from '../../core/response'
 
 const SaveRouterGraphSchema = z.object({
   graph: WorkflowGraphSchema,
-  /** 版本名；留空时按版本号自动命名。 */
+  /** 版本名；留空即空串（版本的身份是版本号，不用名字占位）。 */
   name: z.string().max(60).optional(),
   /** 版本说明；留空表示不写。 */
   description: z.string().max(200).optional(),
@@ -31,9 +31,14 @@ export const routerGraphRoutes = new HttpRouter<ManagementHandler>()
   .post('/api/router/graph/version', handleGetRouterGraphVersion)
   .post('/api/router/graph/save', handleSaveRouterGraph)
 
-/** 最近保存的路由图；一版都没保存过时 `data` 为 `null`（调用方用内建默认策略起步）。 */
+/**
+ * 当前生效的路由图；一版都没保存过时是内建默认策略（版本号为 `UNSAVED_ROUTER_GRAPH_VERSION`）。
+ *
+ * 返回的永远是「代理此刻会执行的那张图」，而不是「最近保存过的那张」：
+ * 否则画布打开时只会拿到 `null`，得自己造一张空图充数，而那张图从来没被执行过。
+ */
 async function handleGetRouterGraph(_req: IncomingMessage, res: ServerResponse, _body: unknown): Promise<void> {
-  sendSuccess(res, await readRouterGraphSnapshot())
+  sendSuccess(res, await resolveRouterGraph())
 }
 
 async function handleListRouterGraphVersions(_req: IncomingMessage, res: ServerResponse, _body: unknown): Promise<void> {

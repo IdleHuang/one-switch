@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { runWorkflow } from '@common/router/engine'
 import { appendNode, cloneNode, connectEdge, insertNode, portKey, primarySourcePort, removeEdges, removeNode, resolveInsertAnchor } from './graph-ops'
-import { createDefaultGraph, createDefaultPolicyGraph, createLlmComplexityGraph, createNodeByKind, createPresetModelPool, createUserAgentGraph, findPolicyPreset, resolveLandingModelIds, ROUTER_POLICY_PRESETS } from '@common/router/presets'
+import { createBlankGraph, createDefaultPolicyGraph, createLlmComplexityGraph, createNodeByKind, createPresetModelPool, createUserAgentGraph, findPolicyPreset, resolveLandingModelIds, ROUTER_POLICY_PRESETS } from '@common/router/presets'
 import { APPENDABLE_KINDS } from './node-meta'
 import { WorkflowGraphSchema } from '@common/router/schemas'
 import type { ConditionNode, ControlInputNode, RuntimeLogicalModel, WorkflowGraph, WorkflowNodeModel } from '@common/router/types'
@@ -44,7 +44,7 @@ function expectUniqueSourcePorts(graph: WorkflowGraph) {
 }
 
 function withControlInput(): WorkflowGraph {
-  const graph = createDefaultGraph()
+  const graph = createBlankGraph()
   const control = createNodeByKind('control-input', { x: 80, y: 520 })
   return appendNode(graph, control)
 }
@@ -64,44 +64,44 @@ describe('primarySourcePort', () => {
   })
 
   it('协议发现默认接兜底分支，条件节点默认接第一条 IF 分支', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     expect(primarySourcePort(nodeById(graph, 'protocol'))).toBe('unknown')
     expect(primarySourcePort(conditionOf(graph))).toBe(conditionOf(graph).cases[0].id)
   })
 
   it('出口节点没有可继续的端口', () => {
-    expect(primarySourcePort(nodeById(createDefaultGraph(), 'output'))).toBeNull()
+    expect(primarySourcePort(nodeById(createBlankGraph(), 'output'))).toBeNull()
   })
 })
 
 describe('resolveInsertAnchor', () => {
   it('可以从连线 id 解析出上游端口与原下游', () => {
-    const anchor = resolveInsertAnchor(createDefaultGraph(), { kind: 'condition', edgeId: 'edge-input-protocol' })
+    const anchor = resolveInsertAnchor(createBlankGraph(), { kind: 'condition', edgeId: 'edge-input-protocol' })
     expect(anchor).toEqual({ sourceNodeId: 'input', sourcePort: 'out', targetNodeId: 'protocol' })
   })
 
   it('连线不存在时返回 null', () => {
-    expect(resolveInsertAnchor(createDefaultGraph(), { kind: 'condition', edgeId: 'edge-missing' })).toBeNull()
+    expect(resolveInsertAnchor(createBlankGraph(), { kind: 'condition', edgeId: 'edge-missing' })).toBeNull()
   })
 
   it('可以从端口插入请求解析锚点，并带上端口当前的下游', () => {
-    const anchor = resolveInsertAnchor(createDefaultGraph(), { kind: 'model-select', prevNodeId: 'protocol', prevSourcePort: 'openai-completions' })
+    const anchor = resolveInsertAnchor(createBlankGraph(), { kind: 'model-select', prevNodeId: 'protocol', prevSourcePort: 'openai-completions' })
     expect(anchor).toEqual({ sourceNodeId: 'protocol', sourcePort: 'openai-completions', targetNodeId: 'condition' })
   })
 
   it('端口上没有出边时下游为空', () => {
-    const anchor = resolveInsertAnchor(createDefaultGraph(), { kind: 'model-select', prevNodeId: 'condition', prevSourcePort: 'no-such-port' })
+    const anchor = resolveInsertAnchor(createBlankGraph(), { kind: 'model-select', prevNodeId: 'condition', prevSourcePort: 'no-such-port' })
     expect(anchor).toEqual({ sourceNodeId: 'condition', sourcePort: 'no-such-port', targetNodeId: null })
   })
 
   it('上游节点不存在时返回 null', () => {
-    expect(resolveInsertAnchor(createDefaultGraph(), { kind: 'model-select', prevNodeId: 'nope', prevSourcePort: 'out' })).toBeNull()
+    expect(resolveInsertAnchor(createBlankGraph(), { kind: 'model-select', prevNodeId: 'nope', prevSourcePort: 'out' })).toBeNull()
   })
 })
 
 describe('insertNode', () => {
   it('在端口后面插入节点：原连线被替换为 上游 → 新节点 → 原下游', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const anchor = resolveInsertAnchor(graph, { kind: 'model-select', edgeId: 'edge-input-protocol' })
     expect(anchor).not.toBeNull()
 
@@ -116,7 +116,7 @@ describe('insertNode', () => {
   })
 
   it('在末端端口插入时不会凭空接出下游', () => {
-    const graph = appendNode(createDefaultGraph(), createNodeByKind('condition', { x: 1800, y: 220 }))
+    const graph = appendNode(createBlankGraph(), createNodeByKind('condition', { x: 1800, y: 220 }))
     const tail = graph.nodes[graph.nodes.length - 1]
     const anchor = { sourceNodeId: 'output', sourcePort: 'out', targetNodeId: null }
     const inserted = createNodeByKind('model-select', { x: 2000, y: 220 })
@@ -129,7 +129,7 @@ describe('insertNode', () => {
   })
 
   it('插入条件节点后，续接端口使用第一条 IF 分支', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const inserted = createNodeByKind('condition', { x: 240, y: 220 })
     const next = insertNode(graph, { sourceNodeId: 'input', sourcePort: 'out', targetNodeId: 'protocol' }, inserted)
     const condition = nodeById(next, inserted.id)
@@ -146,7 +146,7 @@ describe('insertNode', () => {
 
 describe('appendNode', () => {
   it('只追加节点，不建立任何连线', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const next = appendNode(graph, createNodeByKind('model-select', { x: 0, y: 0 }))
     expect(next.nodes).toHaveLength(graph.nodes.length + 1)
     expect(next.edges).toEqual(graph.edges)
@@ -155,7 +155,7 @@ describe('appendNode', () => {
 
 describe('removeNode', () => {
   it('被删节点只有一条出边时，上游直接接下游（穿透删除）', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const next = removeNode(graph, 'model')
 
     expect(next.nodes.some(node => node.id === 'model')).toBe(false)
@@ -166,7 +166,7 @@ describe('removeNode', () => {
   })
 
   it('被删节点有多条出边时，直接断开上游连线', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const next = removeNode(graph, 'condition')
 
     expect(next.nodes.some(node => node.id === 'condition')).toBe(false)
@@ -176,7 +176,7 @@ describe('removeNode', () => {
   })
 
   it('删除不存在的节点时图为空操作', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const next = removeNode(graph, 'not-exist')
     expect(next.nodes).toEqual(graph.nodes)
     expect(next.edges).toEqual(graph.edges)
@@ -185,7 +185,7 @@ describe('removeNode', () => {
 
 describe('cloneNode', () => {
   it('复制节点会换新 id 并偏移位置', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const source = nodeById(graph, 'model')
     const cloned = cloneNode(source)
 
@@ -211,7 +211,7 @@ describe('cloneNode', () => {
 
 describe('connectEdge', () => {
   it('新增连线时追加一条端口独占的出边', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const next = connectEdge(graph, 'condition', 'new-case', 'model')
 
     expect(next.edges.find(edge => edge.sourceNodeId === 'condition' && edge.sourcePort === 'new-case')?.targetNodeId).toBe('model')
@@ -219,7 +219,7 @@ describe('connectEdge', () => {
   })
 
   it('同一端口重复连接会改写目标而不是新增连线', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const next = connectEdge(graph, 'input', 'out', 'output')
 
     expect(next.edges.filter(edge => edge.sourceNodeId === 'input' && edge.sourcePort === 'out')).toHaveLength(1)
@@ -228,7 +228,7 @@ describe('connectEdge', () => {
   })
 
   it('自连接与重复连接都返回原图引用', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     expect(connectEdge(graph, 'input', 'out', 'input')).toBe(graph)
     expect(connectEdge(graph, 'input', 'out', 'protocol')).toBe(graph)
   })
@@ -236,7 +236,7 @@ describe('connectEdge', () => {
 
 describe('removeEdges', () => {
   it('按 id 删除连线', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const next = removeEdges(graph, ['edge-input-protocol', 'edge-model-output'])
     expect(next.edges).toHaveLength(graph.edges.length - 2)
     expect(next.edges.some(edge => edge.id === 'edge-input-protocol')).toBe(false)
@@ -245,8 +245,8 @@ describe('removeEdges', () => {
 })
 
 describe('图谱校验（回归）', () => {
-  it('默认图本身必须通过 schema 校验', () => {
-    expect(WorkflowGraphSchema.safeParse(createDefaultGraph()).error?.issues).toBeUndefined()
+  it('空白脚手架图必须通过 schema 校验', () => {
+    expect(WorkflowGraphSchema.safeParse(createBlankGraph()).error?.issues).toBeUndefined()
   })
 
   it('默认策略图由基础节点组合而成，同样必须通过 schema 校验', () => {
@@ -297,7 +297,7 @@ describe('图谱校验（回归）', () => {
 
   it('插入任意可新增节点后，图仍能通过 schema 校验', () => {
     for (const kind of APPENDABLE_KINDS) {
-      const graph = createDefaultGraph()
+      const graph = createBlankGraph()
       const anchor = resolveInsertAnchor(graph, { kind, edgeId: 'edge-input-protocol' })
       expect(anchor).not.toBeNull()
 
@@ -407,7 +407,7 @@ describe('预设落点解析', () => {
 
 describe('图操作与引擎的协同', () => {
   it('在连线上插入节点后仍通过图校验，且引擎按新顺序经过它', async () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
     const anchor = resolveInsertAnchor(graph, { kind: 'protocol-discovery', edgeId: 'edge-input-protocol' })
     expect(anchor).not.toBeNull()
 
@@ -425,7 +425,7 @@ describe('图操作与引擎的协同', () => {
   })
 
   it('穿透删除中间节点后，引擎把上游直接接到下游', async () => {
-    const next = removeNode(createDefaultGraph(), 'model')
+    const next = removeNode(createBlankGraph(), 'model')
     const result = await runWorkflow(next, { request: { body: {} }, metadata: {} })
 
     expect(result.stopReason).toBe('output')

@@ -1,4 +1,5 @@
-import type { RouterGraphVersionSummary } from '@common/router/types'
+import { UNSAVED_ROUTER_GRAPH_VERSION } from '@common/router/types'
+import type { RouterGraphSnapshot, RouterGraphVersionSummary } from '@common/router/types'
 
 /**
  * 历史版本的展示模型。
@@ -40,6 +41,17 @@ export function toRouterGraphVersion(summary: RouterGraphVersionSummary): Router
 /** 服务端摘要列表 → 列表模型；顺序沿用服务端给的（新的在前）。 */
 export function toRouterGraphVersions(summaries: RouterGraphVersionSummary[]): RouterGraphVersion[] {
   return summaries.map(toRouterGraphVersion)
+}
+
+/**
+ * 服务端是否已经保存过至少一版图。
+ *
+ * 一版都没保存过时，读当前生效的图拿到的是内建默认策略（版本号 `UNSAVED_ROUTER_GRAPH_VERSION`）：
+ * 它确实是代理此刻在执行的那张图，但不是「用户存下来的图」，所以画布要把它当成「内容尚未保存」——
+ * 否则保存按钮一打开就是灰的，用户没办法把这份默认策略存成 v1。
+ */
+export function hasSavedVersion(snapshot: RouterGraphSnapshot): boolean {
+  return snapshot.version !== UNSAVED_ROUTER_GRAPH_VERSION
 }
 
 /** `2026-09-11 22:41`，列表里按保存时间倒序展示。 */

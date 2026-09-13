@@ -51,10 +51,10 @@ import { WorkflowNodePanel } from './components/workflow-node-panel'
 import { resolveInputHints } from './field-hints'
 import { policyPresetTextKeys } from './policy-preset-text'
 import { buildFlowEdges, layoutRouterNodes, type WorkflowFlowEdge } from './flow-projection'
-import { toRouterGraphVersion, toRouterGraphVersions, type RouterGraphVersion } from './graph-versions'
+import { hasSavedVersion, toRouterGraphVersion, toRouterGraphVersions, type RouterGraphVersion } from './graph-versions'
 import {
   ROUTER_POLICY_PRESETS,
-  createDefaultGraph,
+  createDefaultPolicyGraph,
   createNodeByKind,
   isSameGraph,
   samplePayload,
@@ -81,7 +81,7 @@ import type { AppendableKind, NodePosition, WorkflowGraph, WorkflowNodeModel, Wo
 /** 这些元素自身消费删除键，画布的键盘删除需要跳过。 */
 const EDITABLE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
 
-/** 画布内容没有来源版本（空白起点、套用预设）时，保存弹窗的输入初值。 */
+/** 画布内容没有来源版本（内建默认策略、套用预设）时，保存弹窗的输入初值。 */
 const EMPTY_VERSION_DRAFT: RouterGraphVersionDraft = { name: '', description: '' }
 
 /** 单条节点输出的值转成一行文本：字符串直出，数组用逗号连接，其余走 JSON。 */
@@ -131,7 +131,14 @@ function WorkflowStudioCanvas() {
     [logicalModels],
   )
 
-  const [graph, setGraph] = useState<WorkflowGraph>(createDefaultGraph)
+  /**
+   * 首屏画布初值：内建默认策略本身，落点用当前已知的逻辑模型列表（列表还没到时先为空池）。
+   *
+   * 图只有服务端一份，下面的 effect 会把「当前生效的图」铺上来；这里只是让首帧有张合法图可画。
+   * 用默认策略而不是一张空白骨架：占位期间画布上显示的规则，与代理此刻执行的规则是同一条，
+   * 不会出现「打开工作台先看到一张没人执行过的图」。
+   */
+  const [graph, setGraph] = useState<WorkflowGraph>(() => createDefaultPolicyGraph(runtimeLogicalModels))
   const graphRef = useRef(graph)
   graphRef.current = graph
 
@@ -148,8 +155,9 @@ function WorkflowStudioCanvas() {
   /**
    * 服务端当前生效的那张图 —— 「有没有可保存的改动」以它为基线。
    *
-   * `null` 表示服务端一版都没保存过（此时代理跑内建默认策略），画布上的内容一律算未保存，
-   * 所以它同样是一个「有改动」的状态；载入完成后才允许保存，避免首屏闪一下可点。
+   * `null` 表示画布上这份内容不对应任何已保存版本（一版都没存过时的内建默认策略、或刚套用的预设），
+   * 此时它本身就等于一个「有改动」的状态。
+   * 载入完成后才允许保存，避免首屏闪一下可点。
    */
   const [activeGraph, setActiveGraph] = useState<WorkflowGraph | null>(null)
   const [graphLoaded, setGraphLoaded] = useState(false)
@@ -167,7 +175,8 @@ function WorkflowStudioCanvas() {
    * 首屏从服务端拉一次「当前生效的图」与版本列表。
    *
    * 图只有服务端一份：画布打开时看到的，就是代理此刻正在执行的那张；
-   * 一版都没保存过时服务端会给出内建默认策略，而不是让画布自己造一张空图。
+   * 一版都没保存过时它给的是内建默认策略（版本号 `UNSAVED_ROUTER_GRAPH_VERSION`），
+   * 画布因此默认落在「逻辑模型命中」这条规则上，而不是一张空白图。
    */
   useEffect(() => {
     let cancelled = false
@@ -178,11 +187,10 @@ function WorkflowStudioCanvas() {
           unwrap(routerApi.getGraphVersions()),
         ])
         if (cancelled) return
-        if (snapshot) {
-          const canvasGraph = toCanvasGraph(snapshot.graph)
-          setGraph(canvasGraph)
-          setActiveGraph(canvasGraph)
-        }
+        const canvasGraph = toCanvasGraph(snapshot.graph)
+        setGraph(canvasGraph)
+        // 内建默认策略（版本号 0）不是已保存版本：基线留空，画布内容一律算未保存。
+        setActiveGraph(hasSavedVersion(snapshot) ? canvasGraph : null)
         const loadedVersions = toRouterGraphVersions(summaries)
         setVersions(loadedVersions)
         // 画布铺的就是这一版（一版都没保存过时列表为空、初值也是空串）。

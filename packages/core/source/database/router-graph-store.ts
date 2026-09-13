@@ -1,5 +1,6 @@
 import { createDefaultPolicyGraph, isSameGraph } from '@common/router/presets'
 import { WorkflowGraphSchema } from '@common/router/schemas'
+import { UNSAVED_ROUTER_GRAPH_VERSION } from '@common/router/types'
 import type { RouterGraphSaveResult, RouterGraphSnapshot, RouterGraphVersionSummary, WorkflowGraph } from '@common/router/types'
 import { listLogicalModels } from './logical-model-store'
 import { createWorkflow, deleteWorkflow, getLatestWorkflow, getWorkflow, listWorkflows, type WorkflowRecord } from './workflow-store'
@@ -15,9 +16,6 @@ export const ROUTER_GRAPH_TYPE = 'router'
 
 /** 保留的版本上限：超出后把最旧的版本软删除，它只是不再出现在版本列表里。 */
 export const MAX_ROUTER_GRAPH_VERSIONS = 30
-
-/** 还没保存过任何版本时占用的版本号；它不是真实行，只是让调用方不必处理两种空值。 */
-const UNSAVED_VERSION = 0
 
 function parseGraph(record: WorkflowRecord): WorkflowGraph | null {
   const parsed = WorkflowGraphSchema.safeParse(record.definition)
@@ -79,14 +77,14 @@ export async function readRouterGraphVersion(version: number): Promise<RouterGra
  *
  * 还没人保存过时，用内建默认策略当场生成一张（落点按当前逻辑模型定好）：
  * 「开箱可用」与「用户保存的图」因此走的是同一条执行路径，不存在只在某个分支里才成立的兜底逻辑。
- * 版本号留 0 表示这份图不来自任何已保存版本。
+ * 版本号留 `UNSAVED_ROUTER_GRAPH_VERSION` 表示这份图不来自任何已保存版本。
  */
 export async function resolveRouterGraph(): Promise<RouterGraphSnapshot> {
   const saved = await readRouterGraphSnapshot()
   if (saved) return saved
 
   const graph = createDefaultPolicyGraph(await listLogicalModels())
-  return { graph, version: UNSAVED_VERSION, savedAt: 0 }
+  return { graph, version: UNSAVED_ROUTER_GRAPH_VERSION, savedAt: 0 }
 }
 
 /**

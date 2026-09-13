@@ -9,8 +9,10 @@ import { request } from './client'
  */
 export const routerApi = {
   run: (graph: WorkflowGraph, inputPayload: unknown, signal?: AbortSignal) => request<WorkflowRunResult>('/router/run', { graph, inputPayload }, { signal }),
-  /** 最近保存的图；一版都没保存过时返回 `null`。 */
-  getGraph: () => request<RouterGraphSnapshot | null>('/router/graph'),
+  /**
+   * 当前生效的图；一版都没保存过时是内建默认策略（版本号为 `UNSAVED_ROUTER_GRAPH_VERSION`）。
+   */
+  getGraph: () => request<RouterGraphSnapshot>('/router/graph'),
   getGraphVersions: () => request<RouterGraphVersionSummary[]>('/router/graph/versions'),
   getGraphVersion: (version: number) => request<RouterGraphSnapshot | null>('/router/graph/version', { version }),
   saveGraph: (graph: WorkflowGraph, name?: string, description?: string) => request<RouterGraphSaveResult>('/router/graph/save', { graph, name, description }),

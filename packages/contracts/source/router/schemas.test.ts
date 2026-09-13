@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createDefaultGraph, createNodeByKind, createInputNode, createOutputNode, createConditionRule, ROUTER_POLICY_PRESETS } from './presets'
+import { createBlankGraph, createNodeByKind, createInputNode, createOutputNode, createConditionRule, ROUTER_POLICY_PRESETS } from './presets'
 import { RouteContextInputSchema, WorkflowGraphSchema, WorkflowNodeModelSchema } from './schemas'
 import {
   ALL_CONDITION_OPERATORS,
@@ -223,14 +223,14 @@ describe('配置契约 · 请求上下文与图', () => {
   })
 
   it('图的版本号只能是 1（读到别的版本说明数据不是这一版写的）', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
 
     expect(WorkflowGraphSchema.safeParse({ ...graph, version: 2 }).success).toBe(false)
     expect(WorkflowGraphSchema.safeParse(graph).error?.issues).toBeUndefined()
   })
 
   it('连线的 id / 两端节点 / 端口都不能是空串', () => {
-    const graph = createDefaultGraph()
+    const graph = createBlankGraph()
 
     expect(WorkflowGraphSchema.safeParse({ ...graph, edges: [{ id: '', sourceNodeId: 'input', sourcePort: 'out', targetNodeId: 'protocol' }] }).success).toBe(false)
     expect(WorkflowGraphSchema.safeParse({ ...graph, edges: [{ id: 'edge', sourceNodeId: 'input', sourcePort: '', targetNodeId: 'protocol' }] }).success).toBe(false)
