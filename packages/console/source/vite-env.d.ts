@@ -55,13 +55,12 @@ interface ElectronAPI {
 /**
  * 宿主注入的运行时信息（`window.__ONE_SWITCH__`）。
  *
- * 两个字段都在回答「控制台这份产物只有一份，它怎么找到并访问管理服务」：
- *   `apiBase`——Electron 形态从 `file://` 加载页面，靠 URL 推不出管理服务在哪儿；
- *   `token`——管理 API 的凭证，每个 `/api/*` 都要带（见 core 的 `runtime/runtime-identity.ts`）。
+ * 回答一个问题：控制台这份产物只有一份，它怎么找到管理服务？Electron 形态从 `file://`
+ * 加载页面，靠 URL 推不出管理服务在哪儿，所以由 preload 注入 `apiBase`；浏览器形态
+ * 是 `undefined`，控制台按页面来源自己算（见 `api/client.ts`）。
  */
 interface OneSwitchRuntime {
   apiBase?: string
-  token?: string
 }
 
 interface Window {

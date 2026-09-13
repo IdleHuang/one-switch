@@ -24,7 +24,6 @@ function createState(overrides: Partial<RuntimeFileState> = {}): RuntimeFileStat
     proxyHost: '127.0.0.1',
     proxyPort: 9300,
     webUrl: 'http://127.0.0.1:9301',
-    shutdownToken: 'token',
     startedAt: '2026-09-11T00:00:00.000Z',
     ...overrides,
   }
@@ -81,7 +80,7 @@ describe('runtime state file', () => {
   it('writes the file with owner-only permissions', async () => {
     await writeRuntimeState(dataDirectory, createState())
 
-    // 里面的 token 就是本机优雅退出的凭证。Windows 上 POSIX 权限位不可靠，跳过。
+    // 里面写着本机管理面（回环地址与端口）。Windows 上 POSIX 权限位不可靠，跳过。
     if (process.platform !== 'win32') {
       expect(fs.statSync(runtimeFilePath(dataDirectory)).mode & 0o777).toBe(0o600)
     }

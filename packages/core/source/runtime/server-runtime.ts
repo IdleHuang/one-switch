@@ -18,7 +18,6 @@ import {
   startInstanceLockHeartbeat,
   type InstanceLock,
 } from './instance-lock'
-import { clearRuntimeIdentity, createRuntimeIdentity } from './runtime-identity'
 
 export interface ServerRuntimeOptions {
   runtimeConfig: RuntimeConfig
@@ -40,13 +39,6 @@ export interface ServerEndpoints {
   proxyPort: number
   /** 托管控制台时的静态产物根目录；没托管为 `null`。 */
   webRoot: string | null
-  /**
-   * 本次运行的实例 token。
-   *
-   * 宿主必须把它交给自己的前端（桌面形态经 preload / 命令行形态写进运行时文件），
-   * 否则控制台的每一个请求都会被守卫拒掉（见 `./runtime-identity.ts`）。
-   */
-  instanceToken: string
 }
 
 export class ServerRuntime {
@@ -84,8 +76,6 @@ export class ServerRuntime {
       // 最难查的一类损坏，而“谁先认领数据目录”跟启动方式无关，所以它是 core 的能力
       // 而不是某个宿主的（见 `./instance-lock.ts`）。
       await this.acquireInstanceLock(config.dataDir)
-      // token 必须在监听之前就位：守卫对没有身份的请求是拒绝的（fail closed）。
-      const identity = createRuntimeIdentity()
       await initDatabases(config.dataDir)
       const outboundConnector = createOutboundConnector(getSettings, this.options.systemProxyResolver)
       await outboundConnector.initialize()
@@ -109,7 +99,6 @@ export class ServerRuntime {
         proxyHost: settings.listenHost,
         proxyPort: settings.listenPort,
         webRoot,
-        instanceToken: identity.token,
       }
       this.state = 'running'
       console.info(`[runtime] start completed state=${this.state}`)
@@ -156,7 +145,6 @@ export class ServerRuntime {
     this.managementServer = null
     this.endpoints = null
     await this.releaseInstanceLock()
-    clearRuntimeIdentity()
 
     const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
     if (failure) throw failure.reason

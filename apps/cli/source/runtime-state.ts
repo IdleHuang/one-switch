@@ -1,8 +1,8 @@
 /**
  * 运行时状态文件。
  *
- * `stop` / `status` 是**另一个进程**，它们要知道服务在哪儿、pid 是多少、管理 API 的 token
- * 是什么，只能靠磁盘上的这份快照。桌面形态不需要它：那是进程内状态，落盘只会多一份要维护的副本。
+ * `stop` / `status` 是**另一个进程**，它们要知道服务在哪儿、pid 是多少，只能靠磁盘上的
+ * 这份快照。桌面形态不需要它：那是进程内状态，落盘只会多一份要维护的副本。
  *
  * 读取方一律把「读不出来」当成「没有实例在跑」——文件可能被手工删掉、写坏，也可能是更早的
  * 版本留下的。这是**正常状态**，不是错误，`stop` 与 `status` 都按「未运行」继续往下走。
@@ -26,13 +26,6 @@ export interface RuntimeFileState {
   proxyPort: number
   /** 托管控制台时的访问地址；`--no-web` 时为 `null`。 */
   webUrl: string | null
-  /**
-   * 本次运行的实例 token（见 core 的 `runtime/runtime-identity.ts`）。
-   *
-   * 它是管理 API 的**唯一**凭证：`stop` 用它请求优雅退出，控制台用它请求其余接口。
-   * 落盘权限 0600，`stop` / `status` 之外的东西读到它就等于拿到了本机管理面。
-   */
-  shutdownToken: string
   /** ISO 8601。 */
   startedAt: string
 }
@@ -58,7 +51,7 @@ export async function readRuntimeState(dataDir: string): Promise<RuntimeFileStat
  * 原子写。
  *
  * `stop` 随时可能来读，必须让它读到「旧的完整内容」或「新的完整内容」，不能是写了一半的
- * JSON。落盘权限 0600：里面那个 token 就是本机优雅退出的凭证。
+ * JSON。落盘权限 0600：这份快照描述了本机管理面的位置，不必要地放宽没有好处。
  */
 export async function writeRuntimeState(dataDir: string, state: RuntimeFileState): Promise<void> {
   const filePath = runtimeFilePath(dataDir)
@@ -91,7 +84,7 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
-const STRING_FIELDS = ['appVersion', 'environment', 'managementHost', 'proxyHost', 'shutdownToken', 'startedAt'] as const
+const STRING_FIELDS = ['appVersion', 'environment', 'managementHost', 'proxyHost', 'startedAt'] as const
 const NUMBER_FIELDS = ['pid', 'managementPort', 'proxyPort'] as const
 
 /**

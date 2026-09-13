@@ -75,9 +75,9 @@ async function handleProxyRestart(_req: IncomingMessage, res: ServerResponse): P
 /**
  * 请求宿主优雅退出。
  *
- * 端点只在宿主显式配置了握手时存在（CLI 会配，桌面形态不会）。**凭证不在这里校验**：
- * 所有 `/api/*` 都在 `../../core/request-guards.ts` 里统一要求实例 token，这里只回答
- * 「本次宿主允许被停掉吗」。
+ * 端点只在宿主显式配置了握手时存在（CLI 会配，桌面形态不会）。**这里不做身份校验**：
+ * 本版本的管理 API 没有凭证，`/api/*` 的边界只有回环监听与 CORS
+ *（见 `../../core/request-guards.ts`），这里只回答「本次宿主允许被停掉吗」。
  */
 function handleRuntimeShutdown(_req: IncomingMessage, res: ServerResponse): void {
   const handshake = getShutdownHandshake()

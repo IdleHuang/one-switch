@@ -3,7 +3,6 @@ import { handleApiRequest } from './router'
 import { applyManagementRequestGuards } from './core/request-guards'
 import { createStaticWebHost, type StaticWebHost } from './core/static-web'
 import { normalizeError } from '@server/errors'
-import { getRuntimeIdentity } from '@server/runtime/runtime-identity'
 import { sendManagementError } from './core/response'
 import type { Server } from 'node:http'
 import type { RuntimeEnvironment } from '@common/runtime-profile'
@@ -30,7 +29,7 @@ export function startManagementServer(options: ManagementServerOptions = {}): Pr
   const host = options.host ?? '127.0.0.1'
   const port = options.port ?? 9301
   const environment = options.environment ?? 'production'
-  const webHost = options.webRoot ? createStaticWebHost(options.webRoot, { token: requireInstanceToken() }) : null
+  const webHost = options.webRoot ? createStaticWebHost(options.webRoot) : null
   if (webHost) console.log(`[management-lifecycle] serving console static root=${webHost.root}`)
   const candidate = http.createServer((req, res) => {
     void handleManagementRequest(req, res, environment, webHost)
@@ -94,19 +93,6 @@ async function handleManagementRequest(req: http.IncomingMessage, res: http.Serv
 function handleApiRequestError(res: http.ServerResponse, error: unknown): void {
   const normalized = normalizeError(error)
   sendManagementError(res, normalized)
-}
-
-/**
- * 托管控制台所必需的实例 token。
- *
- * 没有身份就不托管：一个「打得开但每个请求都 503」的控制台比直接不托管更难查。
- * 正常路径下 `ServerRuntime.start()` 一定先建身份（见 `../runtime/server-runtime.ts`），
- * 所以这里抛出的绝对是编程错误，不是运行期状况。
- */
-function requireInstanceToken(): string {
-  const identity = getRuntimeIdentity()
-  if (identity === null) throw new Error('Management server cannot serve the console before the runtime identity exists')
-  return identity.token
 }
 
 export async function stopManagementServer(): Promise<void> {

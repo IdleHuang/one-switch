@@ -163,8 +163,6 @@ export async function runStart(values: CliArguments): Promise<number> {
       runtimeConfig,
       secretStore: new EncryptedFileSecretStore(dataDir),
       // 桌面形态不传：同一个进程自己说了算。命令行必须传，`stop` 才能优雅停掉它。
-      // token 不用在这里给——凭证是 core 的实例身份的一部分（`runtime-identity.ts`），
-      // 这里只是把它的值转发给 `stop`。
       shutdown: { onRequest: () => void shutdown() },
     })
   } catch (error) {
@@ -200,7 +198,6 @@ export async function runStart(values: CliArguments): Promise<number> {
     proxyHost: endpoints.proxyHost,
     proxyPort: endpoints.proxyPort,
     webUrl: endpoints.webRoot === null ? null : formatUrl(endpoints.managementHost, endpoints.managementPort),
-    shutdownToken: endpoints.instanceToken,
     startedAt: new Date().toISOString(),
   }
 
