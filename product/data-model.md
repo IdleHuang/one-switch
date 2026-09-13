@@ -687,6 +687,8 @@ CREATE INDEX idx_request_logs_client_protocol
 
 `request_usages` 是关系表，而不是塞进 `request_logs` 的一个 JSON 列。每个数值用量保存为一行，便于按 `type`、时间和请求关联进行范围筛选、分组和汇总。
 
+**请求级用量是「服务该请求的那次尝试」的镜像，不是历次尝试的累加。** 一次请求可能尝试过多个候选，客户端却只收到其中一次的响应，把历次尝试的 Token 相加会造出一个没人消耗过的数字。因此 `request_usages` 随「服务该请求的那次尝试」整体替换（先删后插，同一事务），`attempt_usages` 则保留每一次尝试自己的用量——需要逐次尝试的数字时读尝试级。
+
 ```sql
 CREATE TABLE request_usages (
   requestId TEXT NOT NULL REFERENCES request_logs(id),
@@ -746,7 +748,7 @@ CREATE INDEX idx_attempt_usages_created_time
 
 名称快照不放在 `request_logs`：`request_attempts` 已在写入时保存 `providerName`、`providerModelName` 和实际 `url`，供配置实体被删除后日志详情页仍能展示；`request_logs.logicalModelId` 是稳定列。请求级不再复制一份供应商快照——一次请求可能尝试过多个供应商，「请求级的供应商快照」必须回答「记哪个」这个没有确定答案的问题，而尝试级快照天然没有这个问题。
 
-请求总耗时是请求级事实，落在 `request_logs.totalDurationMilliseconds`；缓存命中是派生量，由 `cachedInputTokens > 0` 现算，不单独落库。Token、缓存 Token 和其他协议用量按视角放入 `request_usages` / `attempt_usages`，不得重复记录。TTFT 是**尝试级事实**，写在 `request_attempts.ttftMilliseconds` 上——把尝试级样本平均成「请求级 TTFT」会直接污染延迟分布；需要请求粒度展示时按 `min(ttftMilliseconds)` 现算，不落库。`request_logs` 只保留请求身份、客户端协议、传输形态、状态、逻辑模型、总耗时和创建时间等稳定字段。
+请求总耗时是请求级事实，落在 `request_logs.totalDurationMilliseconds`；缓存命中是派生量，由 `cachedInputTokens > 0` 现算，不单独落库。Token、缓存 Token 和其他协议用量按视角放入 `request_usages` / `attempt_usages`，不得重复记录。TTFT 是**尝试级事实**，写在 `request_attempts.ttftMilliseconds` 上——把尝试级样本平均成「请求级 TTFT」会直接污染延迟分布；需要请求粒度展示时按**服务该请求的那次尝试**（尝试顺序里恒为最后一次）的 `ttftMilliseconds` 现算，不落库。取历次尝试的最小值是错的：被放弃的尝试从没向客户端写出过一个字节，它的首字延迟不是「客户端多久看到第一个 token」。`request_logs` 只保留请求身份、客户端协议、传输形态、状态、逻辑模型、总耗时和创建时间等稳定字段。
 
 日志表的稳定查询字段为：
 

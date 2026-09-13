@@ -447,6 +447,9 @@ interface RawUsageProps {
  * 没有 usage 时不给整块换一套写法：卡片、标题、在栅格里的位置全都不变，
  * 只是正文换成一句说明。否则同一张请求列表里「有用量」和「没用量」两种行长得完全不一样，
  * 上下滚动时整页都在跳。
+ *
+ * 副标题必须把口径写出来：这块展示的是**服务该请求的那次尝试**报回的用量，
+ * 不是这个请求历次尝试用量的合并（详见 `recordAttemptUsage`）。
  */
 function RawUsage(props: RawUsageProps) {
   const t = useTranslation()
@@ -454,12 +457,15 @@ function RawUsage(props: RawUsageProps) {
 
   return (
     <section className="overflow-hidden rounded-lg border border-module-border">
-      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-3 py-2.5">
-        <div className="flex items-center gap-1.5 system-sm-medium text-text-primary">
-          <Braces size={13} aria-hidden className="text-text-quaternary" />
-          {t('requestLogs.usage.title')}
+      <div className="border-b border-border/50 px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 system-sm-medium text-text-primary">
+            <Braces size={13} aria-hidden className="text-text-quaternary" />
+            {t('requestLogs.usage.title')}
+          </div>
+          {rawUsage && <CopyIconButton label={t('requestLogs.usage.copy')} value={rawUsage} />}
         </div>
-        {rawUsage && <CopyIconButton label={t('requestLogs.usage.copy')} value={rawUsage} />}
+        <div className="mt-1 system-2xs-regular text-text-tertiary">{t('requestLogs.usage.provenance')}</div>
       </div>
       {rawUsage
         ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all bg-inset p-3 font-mono system-2xs-regular text-text-secondary">{rawUsage}</pre>
@@ -474,6 +480,11 @@ function RawUsage(props: RawUsageProps) {
  * 不用「有值才出现」的写法，是因为那样每次请求的格子数量和顺序都不一样，
  * 上下扫的时候数字会跑到别的列上，也没法一眼看出「哪一格是空的」——
  * 而「这里没有数」本身就是排障要知道的事。
+ *
+ * 口径统一到「服务该请求的那次尝试」：Token 六项与首字延迟读的都是那次尝试的值
+ * （请求级用量本来就是它镜像过来的一份，`ttftMilliseconds` 也是按它现算的），
+ * 所以多次重试的请求不会把历次尝试的数字加在一起。
+ * 只有「总耗时」是请求级事实——客户端等的是整条链路，不是某一个候选。
  */
 function buildMetrics(t: AppTranslator, log: RequestLogEntry | RequestLogDetail, tps: string): MetricCardProps[] {
   return [
@@ -494,11 +505,15 @@ export function RequestLogDetailRow(props: RequestLogDetailRowProps) {
   const locale = useLocale()
   const proxyStatus = useProxyStatus()
   const { log, modelName } = props
-  const successfulAttempt = log.attempts.find(attempt => attempt.status === 'success')
-  // 上游协议只是尝试级事实：失败转移的请求可能先后走过不同协议。
-  const upstreamProtocol = successfulAttempt?.upstreamProtocol
+  // 服务该请求的那次尝试恒为最后一次：故障转移一旦交付就停止，被放弃的尝试不会排在它后面。
+  // 它是这张详情卡片全部尝试级口径的来源，也是「有成功记录时必然是那一条」的原因。
+  const servingAttempt = log.attempts[log.attempts.length - 1] ?? null
+  // 上游协议只是尝试级事实：失败转移的请求可能先后走过不同协议，
+  // 而只有真正交付给客户端的那次尝试说明了「客户端拿到的响应是什么形态」。
+  const upstreamProtocol = servingAttempt?.upstreamProtocol
     ?? log.attempts[0]?.upstreamProtocol
-  const tps = formatTPS(log.outputTokens, successfulAttempt?.durationMilliseconds ?? log.totalDurationMilliseconds)
+  // 速度按同一个口径现算：分母是那次尝试自己的耗时，不是整条请求链路的耗时。
+  const tps = formatTPS(log.outputTokens, servingAttempt?.durationMilliseconds ?? log.totalDurationMilliseconds)
   const contents = 'contents' in log ? log.contents : null
   const requestRewriteRules = 'requestRewriteRules' in log ? log.requestRewriteRules : null
   const [selectedAttemptId, setSelectedAttemptId] = React.useState<string | null>(null)
