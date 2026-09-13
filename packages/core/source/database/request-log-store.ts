@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, min, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm'
 import type {
   AttemptContent,
   AttemptStatus,
@@ -469,9 +469,12 @@ function parseTransportKind(value: string | null): TransportKind | null {
 /**
  * 批量把请求行映射成契约对象。
  *
- * 用量与 TTFT 都是**派生视图**，不是存储事实：
- * - 用量事实属于「尝试」，这里读的是服务该请求的那次尝试镜像过来的行；
- * - 首字延迟的归属单位也是「尝试」，取最小值表达「这个请求多久拿到了第一个 token」。
+ * 用量与 TTFT 都是**派生视图**，不是存储事实，而且两者口径相同——都只描述
+ * 「服务该请求的那次尝试」：
+ * - 用量：读的是那次尝试镜像到 `request_usages` 的行（不是多次尝试的累加）；
+ * - 首字延迟：取那次尝试的 `ttftMilliseconds`。它在尝试顺序里恒为最后一次，
+ *   因为故障转移一旦交付就停止。历史尝试的样本不是「客户端多久看到第一个 token」——
+ *   被放弃的尝试从没向客户端写出过一个字节。
  *
  * 两个派生字段各自一批只查一次：列表页有 50 行时逐行查询会放大成上百次数据库往返。
  */
@@ -481,8 +484,14 @@ function mapRequestLogs(rows: Array<typeof requestLogs.$inferSelect>): RequestLo
   const usageByRequest = new Map<string, UsageValues>()
   const usageRows = getDataDb().select({ requestId: requestUsages.requestId, type: requestUsages.type, value: requestUsages.value, rawValue: requestUsages.rawValue }).from(requestUsages).where(inArray(requestUsages.requestId, ids)).all()
   for (const [requestId, group] of groupBy(usageRows, row => row.requestId)) usageByRequest.set(requestId, usageValues(group))
+  // 按 attemptIndex 升序取回，因此每个请求最后写入映射的那一行就是服务该请求的尝试。
   const ttftByRequest = new Map<string, number | null>()
-  const ttftRows = getDataDb().select({ requestId: requestAttempts.requestId, value: min(requestAttempts.ttftMilliseconds) }).from(requestAttempts).where(inArray(requestAttempts.requestId, ids)).groupBy(requestAttempts.requestId).all()
+  const ttftRows = getDataDb()
+    .select({ requestId: requestAttempts.requestId, value: requestAttempts.ttftMilliseconds })
+    .from(requestAttempts)
+    .where(inArray(requestAttempts.requestId, ids))
+    .orderBy(requestAttempts.requestId, requestAttempts.attemptIndex)
+    .all()
   for (const row of ttftRows) ttftByRequest.set(row.requestId, row.value == null ? null : Number(row.value))
   return rows.map(row => {
     const usage = usageByRequest.get(row.id) ?? EMPTY_USAGE_VALUES

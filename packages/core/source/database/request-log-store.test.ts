@@ -55,6 +55,23 @@ async function createAttemptOrThrow(input: Parameters<typeof createRequestAttemp
   return attempt
 }
 
+/** 多次尝试的用例共用的尝试字段；每次调用只需覆盖随尝试变化的那几项。 */
+function attemptBase(requestId: string, provider: Awaited<ReturnType<typeof createProvider>>) {
+  return {
+    requestId,
+    providerId: provider.id,
+    providerModelId: 'model_retry',
+    providerName: provider.name,
+    providerModelName: 'retry-model',
+    upstreamProtocol: 'openai-completions' as const,
+    upstreamRequestId: null,
+    url: 'https://example.com/v1/chat/completions',
+    retryable: false,
+    upstreamTransport: 'http-stream' as const,
+    durationMilliseconds: 5,
+  }
+}
+
 /** 用量字段的「都不知道」形状，用于只关心部分字段的用例。 */
 const EMPTY_USAGE = { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheCreationInputTokens: null, reasoningTokens: null, rawUsage: null }
 
@@ -121,7 +138,7 @@ describe('request log store persistence', () => {
       requestRewriteRuleIds: ['rule_a', 'rule_b'],
       responseRewriteRuleIds: ['rule_c'],
     })])
-    // 请求级 TTFT 由尝试级取最小值得出，不存第二份副本。
+    // 请求级 TTFT 取自服务该请求的那次尝试（这里只有一次尝试），不存第二份副本。
     expect((await getRequestLog(log.id))?.ttftMilliseconds).toBe(3)
     // 两个视角的用量各自存在自己的表里，互不影面。
     expect(await getAttemptUsage(attempt.id)).toEqual({ inputTokens: 7, outputTokens: 2, totalTokens: 9, cachedInputTokens: null, cacheCreationInputTokens: null, reasoningTokens: null, rawUsage: null })
@@ -266,5 +283,34 @@ describe('request log store persistence', () => {
 
     // 保留期 0 表示永久保留：不删任何东西。
     expect(await pruneRequestContentsBefore(0)).toBe(0)
+  })
+
+  it('请求级用量与首字延迟只描述服务该请求的那次尝试', async () => {
+    const log = await createLog('req_retried')
+    const provider = await createProvider({ name: 'Retry Provider', apiKeyReference: 'retry-key', timeoutMilliseconds: 1000 })
+    const base = attemptBase(log.id, provider)
+
+    // 第一次尝试上游按整包 JSON 作答（与客户端要的增量不符）而被放弃：
+    // 它有尝试级样本，但一个字节都没写给客户端。
+    const abandoned = await createAttemptOrThrow({ ...base, attemptIndex: 0, status: 'failed', httpStatus: 200, ttftMilliseconds: 120 })
+    await recordAttemptUsage({ attemptId: abandoned.id, servesRequest: false, ...EMPTY_USAGE, inputTokens: 10, outputTokens: 1 })
+    // 第二次尝试才是交付给客户端的那次，因此请求级两项都只能来自它。
+    const serving = await createAttemptOrThrow({ ...base, attemptIndex: 1, status: 'success', httpStatus: 200, ttftMilliseconds: 300 })
+    await recordAttemptUsage({ attemptId: serving.id, servesRequest: true, ...EMPTY_USAGE, inputTokens: 7, outputTokens: 2, rawUsage: { total_tokens: 9 } })
+
+    const detail = await getRequestLog(log.id)
+    // 不是历次尝试的累加：请求级就是服务那次尝试镜像过来的一份。
+    expect(detail).toMatchObject({ inputTokens: 7, outputTokens: 2, totalTokens: 9, rawUsage: { total_tokens: 9 } })
+    // 也不是历次尝试的最小值：120 属于一次客户端根本没看到响应的尝试。
+    expect(detail?.ttftMilliseconds).toBe(300)
+    expect(await getAttemptUsage(abandoned.id)).toMatchObject({ inputTokens: 10, outputTokens: 1 })
+
+    // 服务该请求的尝试重写用量时是替换，不是相加。
+    await recordAttemptUsage({ attemptId: serving.id, servesRequest: true, ...EMPTY_USAGE, inputTokens: 30, outputTokens: 4 })
+    expect(await getRequestUsage(log.id)).toMatchObject({ inputTokens: 30, outputTokens: 4, totalTokens: 34 })
+
+    // 服务那次尝试没观测到首字时，请求级只能是「不知道」——不能用更早的样本顶上。
+    getDataDb().$client.prepare('UPDATE request_attempts SET ttftMilliseconds = NULL WHERE id = ?').run(serving.id)
+    expect((await getRequestLog(log.id))?.ttftMilliseconds).toBeNull()
   })
 })

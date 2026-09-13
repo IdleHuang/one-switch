@@ -50,7 +50,7 @@
 | logicalModelId | `request_logs.logicalModelId` | 逻辑模型 ID；尚未解析到时为 `null` |
 | status | `request_logs.status` | `pending`、`success`、`failed` 或 `cancelled` |
 | durationMilliseconds | `request_logs.totalDurationMilliseconds` | 从收到请求到写完响应的总耗时 |
-| ttftMilliseconds | `request_attempts` 派生 | 取该请求所有尝试 `ttftMilliseconds` 的最小值；无样本时为空。不落库，避免出现会漂移的第二份首字延迟 |
+| ttftMilliseconds | `request_attempts` 派生 | 取服务该请求的那次尝试（尝试顺序里恒为最后一次）的 `ttftMilliseconds`；无样本时为空。不落库，避免出现会漂移的第二份首字延迟 |
 | attemptCount | `request_attempts` | 按 `requestId` 汇总尝试数量 |
 | contentCaptured | `request_contents.captureStatus` | 由正文记录状态派生 |
 
@@ -61,9 +61,10 @@
 | 展示区域 | 数据来源 | 说明 |
 | --- | --- | --- |
 | 请求摘要 | `request_logs` | 请求身份、客户端协议、逻辑模型和最终状态 |
-| 总耗时与缓存命中 | `request_logs` / `request_usages` | 总耗时读 `request_logs.totalDurationMilliseconds`；缓存命中由缓存用量现算 |
-| 首字延迟 | `request_attempts` 派生 | 取所有尝试 `ttftMilliseconds` 的最小值；尝试级样本本身留在 `request_attempts` |
-| Token 与其他用量 | `request_usages` / `attempt_usages` | 请求级与尝试级分开，不混口径 |
+| 总耗时与缓存命中 | `request_logs` / `request_usages` | 总耗时读 `request_logs.totalDurationMilliseconds`，是整条链路的耗时（不是某一次尝试的）；缓存命中由缓存用量现算 |
+| 首字延迟 | `request_attempts` 派生 | 取服务该请求的那次尝试的 `ttftMilliseconds`；尝试级样本本身留在 `request_attempts` |
+| 输出速度 | `request_usages` / `request_attempts` | 输出 Token 除以服务该请求那次尝试的耗时，两者同口径现算，不落库 |
+| Token 与其他用量 | `request_usages` / `attempt_usages` | 请求级用量是服务该请求那次尝试的镜像，不是历次尝试的累加；与尝试级分开、不混口径 |
 | Provider 尝试 | `request_attempts` | 按 `attemptIndex` 排序展示 |
 | 客户端请求 / 最终响应 | `request_contents` | 客户端视角，一个请求一行 |
 | 发送到上游的请求 / 真实上游响应 | `attempt_contents` | 上游视角，按 `attemptId` 对应到具体尝试 |

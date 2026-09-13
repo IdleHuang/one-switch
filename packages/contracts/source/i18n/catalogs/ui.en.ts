@@ -289,6 +289,7 @@ export const uiEn = {
   'requestLogs.metric.cacheRead': 'Cache read',
   'requestLogs.metric.cacheWrite': 'Cache write',
   'requestLogs.usage.title': 'Raw usage',
+  'requestLogs.usage.provenance': 'From the last attempt',
   'requestLogs.usage.copy': 'Copy the raw usage JSON',
   'requestLogs.usage.empty': 'No usage data was recorded for this request',
   'requestLogs.contents.searchAria': 'Search request detail contents',

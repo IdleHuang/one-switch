@@ -291,6 +291,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'requestLogs.metric.cacheRead': '缓存读取',
   'requestLogs.metric.cacheWrite': '缓存写入',
   'requestLogs.usage.title': '原始 Usage',
+  'requestLogs.usage.provenance': '取自最后一次尝试',
   'requestLogs.usage.copy': '复制原始 Usage JSON',
   'requestLogs.usage.empty': '本次请求没有记录到用量数据',
   'requestLogs.contents.searchAria': '搜索请求详情内容',
