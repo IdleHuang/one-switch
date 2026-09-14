@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { ManagementHandler } from '../../core/response'
 import { sendError, sendSuccess } from '../../core/response'
 import { AnalyticsRangeSchema, type AnalyticsRange, type AnalyticsSummary, type ModelStat, type ProviderAnalyticsDetail } from '@common/schemas'
+import { tokensPerSecondFromTotals } from '@common/metrics'
 import {
   getStatsSummary,
   getUsageTrend,
@@ -145,9 +146,9 @@ function mapModelStat(model: DatabaseModelStat): ModelStat {
     success: model.success,
     avgLatencyMs: model.avgLatencyMs,
     avgTtftMs: model.avgTtftMs,
-    // 分子与分母同口径：都只统计成功的尝试；分母已经扣掉首字延迟，
-    // 是真正在产出 token 的那段时间，因此这里算出来的是生成速率。
-    avgTps: model.successGenerationDurationMs > 0 && model.outputTokens > 0 ? model.outputTokens / (model.successGenerationDurationMs / 1000) : null,
+    // 输出速度的公式只写在 `@common/metrics` 里，这里只是把同一批尝试的两个合计值送进去。
+    // 参数由数据库成对选出：分子是这批尝试的输出 Token，分母是同一批尝试的生成时段。
+    avgTps: tokensPerSecondFromTotals(model.speedOutputTokens, model.speedGenerationDurationMs),
     successRate: model.attempts > 0 ? model.success / model.attempts : 0,
     // 缓存读取量本就是输入量的一部分，同口径相除才是命中率。
     cacheHitRate: model.inputTokens > 0 ? model.cachedInputTokens / model.inputTokens : null,

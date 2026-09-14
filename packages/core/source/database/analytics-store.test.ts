@@ -4,9 +4,11 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { closeDatabases, getDataDb, initDatabases } from './index'
-import { createRequestAttempt, createRequestLog } from './request-log-store'
+import { createRequestAttempt, createRequestLog, recordAttemptUsage } from './request-log-store'
 import { requestAttempts, requestLogs } from './data-schema'
 import { formatLatencyBucketRange, getLatencyDistribution, getModelStats } from './analytics-store'
+
+const EMPTY_USAGE = { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheCreationInputTokens: null, reasoningTokens: null, rawUsage: null }
 
 let temporaryDirectory: string
 
@@ -147,6 +149,7 @@ describe('getModelStats', () => {
     providerName: string
     status?: 'success' | 'failed'
     durationMilliseconds?: number
+    ttftMilliseconds?: number | null
   }
 
   /** 造一条归属确定的尝试，以便控制排行榜里的「同一模型、不同提供方快照」。 */
@@ -167,8 +170,13 @@ describe('getModelStats', () => {
       upstreamTransport: 'http',
       attemptIndex: 0,
       durationMilliseconds: input.durationMilliseconds ?? 10,
+      ttftMilliseconds: input.ttftMilliseconds ?? null,
     })
     return requestId
+  }
+
+  function attemptIdOf(requestId: string): string {
+    return getDataDb().select({ id: requestAttempts.id }).from(requestAttempts).where(eq(requestAttempts.requestId, requestId)).all()[0].id
   }
 
   it('keeps one row per upstream model even when older attempts carry a stale provider snapshot', async () => {
@@ -218,5 +226,26 @@ describe('getModelStats', () => {
     const second = await getModelStats(0)
     expect(first.map(stat => stat.providerModelId)).toEqual(['model_ranking', 'model_ranking_b'])
     expect(second.map(stat => stat.providerModelId)).toEqual(first.map(stat => stat.providerModelId))
+  })
+
+  it('measures speed over the generation window, and keeps numerator and denominator on the same samples', async () => {
+    // 四条尝试里只有第一条能算出速度：
+    // 1) 2000ms 耗时、500ms 首字 → 生成时段 1500ms，20 Token；
+    // 2) 800ms 耗时、800ms 首字 → 生成时段为 0，它那 24 Token 一个也不能进分子；
+    // 3) 没有输出 Token → 没有分子；
+    // 4) 失败的尝试 → 没有完整输出，整个样本都不该参与。
+    const normalId = await createRankedAttempt({ providerId: 'prov_speed', providerName: '速度提供方', durationMilliseconds: 2000, ttftMilliseconds: 500 })
+    const waitedId = await createRankedAttempt({ providerId: 'prov_speed', providerName: '速度提供方', durationMilliseconds: 800, ttftMilliseconds: 800 })
+    const emptyId = await createRankedAttempt({ providerId: 'prov_speed', providerName: '速度提供方', durationMilliseconds: 600 })
+    const failedId = await createRankedAttempt({ providerId: 'prov_speed', providerName: '速度提供方', status: 'failed', durationMilliseconds: 3000 })
+    await recordAttemptUsage({ attemptId: attemptIdOf(normalId), servesRequest: true, ...EMPTY_USAGE, inputTokens: 100, outputTokens: 20 })
+    await recordAttemptUsage({ attemptId: attemptIdOf(waitedId), servesRequest: true, ...EMPTY_USAGE, inputTokens: 100, outputTokens: 24 })
+    await recordAttemptUsage({ attemptId: attemptIdOf(emptyId), servesRequest: true, ...EMPTY_USAGE, inputTokens: 100, outputTokens: null })
+    await recordAttemptUsage({ attemptId: attemptIdOf(failedId), servesRequest: false, ...EMPTY_USAGE, inputTokens: 100, outputTokens: 999 })
+
+    const [stats] = await getModelStats(0)
+    // 分母是 2000 - 500，不是整段 2000，也不是四次尝试相加。
+    expect(stats.speedOutputTokens).toBe(20)
+    expect(stats.speedGenerationDurationMs).toBe(1500)
   })
 })

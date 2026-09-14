@@ -370,7 +370,13 @@ export const RequestLogSchema = z.object({
   /** 派生值：请求级 `cachedInputTokens > 0`。缓存是否命中不是独立事实。 */
   promptCacheHit: z.boolean().nullable(),
   rawUsage: RawUsageSchema.nullable(),
-  /** 请求级派生值：由本次请求所有 `request_attempts.ttftMilliseconds` 取最小值得出，不是存储列。 */
+  /**
+   * 请求级派生值：取**服务该请求的那次尝试**（尝试顺序里的最后一条）的
+   * `request_attempts.ttftMilliseconds`，不是存储列。
+   *
+   * 不能取历次尝试的最小值：被放弃的尝试从没向客户端写出过一个字节，
+   * 它的首字延迟不是「客户端多久看到第一个 token」。
+   */
   ttftMilliseconds: z.number().int().nonnegative().nullable(),
   createdTime: z.number().int(),
 })

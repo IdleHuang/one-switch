@@ -53,27 +53,11 @@ export function formatTime(locale: string, ts: number): string {
   return new Date(ts).toLocaleTimeString(locale, { hour12: false })
 }
 
-export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
-export function formatTTFT(ttftMs: number | null | undefined): string {
-  if (ttftMs == null) return '—'
-  return `${(ttftMs / 1000).toFixed(2)}s`
-}
-
 export function formatNumber(n: number | null | undefined): string {
   if (n == null) return '—'
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
-}
-
-export function formatTPS(outputTokens: number | null | undefined, totalMs: number): string {
-  if (outputTokens == null || outputTokens <= 0 || totalMs <= 0) return '—'
-  const tps = (outputTokens / totalMs) * 1000
-  return tps >= 10 ? `${Math.round(tps)}` : tps.toFixed(1)
 }
 
 /**
