@@ -94,6 +94,19 @@ describe('openAiResponseToAnthropic', () => {
     })
     expect((result.content as Array<{ type: string }>).map(block => block.type)).toEqual(['text', 'tool_use', 'tool_use'])
   })
+
+  it('drops custom tool calls instead of emitting a nameless tool_use block', () => {
+    // Anthropic 没有自由文本工具概念：custom 调用既没有可映射的名字，也没有 JSON 参数，
+    // 硬造一个 tool_use 块只会得到「没有名字、参数永远填不上」的坏内容。
+    const result = openAiResponseToAnthropic({
+      choices: [{
+        message: { content: null, tool_calls: [{ id: 'call_1', type: 'custom', custom: { name: 'raw', input: 'free' } }] },
+        finish_reason: 'tool_calls',
+      }],
+    })
+
+    expect(result.content).toEqual([])
+  })
 })
 
 describe('OpenAI to Anthropic stream conversion', () => {
@@ -156,6 +169,26 @@ describe('OpenAI to Anthropic stream conversion', () => {
 
     expect(first.filter(event => event.type === 'content_block_start').map(event => (event as { index: number }).index)).toEqual([0, 1])
     expect(second).toEqual([{ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } }])
+  })
+
+  it('skips custom tool calls instead of emitting a nameless tool_use block', () => {
+    // Anthropic 没有自由文本工具概念：custom 调用既没有可映射的名字，也没有 JSON 参数，
+    // 硬开一个 tool_use 块只会得到「没有名字、参数永远填不上」的坏内容。
+    const streamState = createOpenAiToAnthropicState()
+    const events = [
+      ...openAiChunkToAnthropicEvents({
+        choices: [{ delta: { tool_calls: [
+          { index: 0, id: 'call_1', type: 'custom', custom: { name: 'raw', input: 'free' } },
+          { index: 1, id: 'call_2', function: { name: 'lookup' } },
+        ] } }],
+      }, streamState),
+      ...openAiChunkToAnthropicEvents({ choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1 } }, streamState),
+    ]
+
+    expect(events.filter(event => event.type === 'content_block_start')).toEqual([
+      { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'call_2', name: 'lookup', input: {} } },
+    ])
+    expect(JSON.stringify(events)).not.toContain('raw')
   })
 
   it('waits for usage before closing and closes on flush otherwise', () => {

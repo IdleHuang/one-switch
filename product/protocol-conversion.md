@@ -176,7 +176,7 @@ packages/core/source/proxy/protocols/
     response-conversion-openai-to-anthropic.ts   # 非流式 + 有状态 SSE
     response-conversion-anthropic-to-openai.ts   # 非流式 + 有状态 SSE
     response-conversion-openai-to-responses.ts   # 非流式 + 有状态 SSE（Responses 事件生命周期）
-    tool-name-registry.ts                        # 一次上游尝试的转换上下文：展平名 ↔ (namespace, name)
+    tool-name-registry.ts                        # 一次上游尝试的转换上下文：展平名 ↔ (namespace, name)，含 locate / restore 双向查询
     types.ts                                     # StreamConverter / NativeProtocolAdapter / ProtocolConversionAdapter
   registry.ts                                    # 转换器注册表：按 (endpointProtocol, clientProtocol) 分发
 ```
@@ -209,14 +209,33 @@ interface ProtocolConversionAdapter {
 - **系统提示词**：`system` 顶层字段 ↔ `messages` 中 `role: system` 首条消息
 - **工具调用**：OpenAI `tool_calls` ↔ Anthropic `tool_use` / `tool_result` content block 双向映射；assistant 消息同时含文本与工具调用时两者都要保留，连续的 `role: tool` 结果必须合并进同一条消息的多个 `tool_result` block，以维持 OpenAI 要求的「工具结果紧随 assistant」顺序
 - **工具选择**：`tool_choice` 四种形态双向映射（`auto` / `required` ↔ `any` / `none` / 指定工具）；`parallel_tool_calls: false` ↔ `disable_parallel_tool_use: true`
-- **工具命名空间**：Responses 的 `type: "namespace"` 工具组把 function / custom 工具嵌套在一个共享命名空间下，Chat Completions 与 Anthropic 都没有对应容器，因此**可逆展平**：组内 function 逐个提升为顶层工具，名字按 `namespace__name` 拼接（非法字符换下划线、截到 64 字符以符合 Chat 命名约束），组成员同名时追加 `__2` / `__3` 等序号，命名空间自己的 `description` 并入每个成员描述的开头。展平不是纯字符串改写：展平名 ↔ `(namespace, name)` 的对照表记在**一次上游尝试的内存上下文**里（`ToolNameRegistry`，请求转换写入、响应转换读取，随尝试结束丢弃），响应侧据此把 `namespace` 字段还原回 `function_call` 项。所以客户端看到的工具寻址与 Responses 原生语义一致，模型只看到 Chat 合法的扁平名字；顶层工具名优先原样保留，展平结果让位（顶层占位必须早于 `input` 转换，因为历史消息里的 namespace 限定调用也会登记展平名）。组内 custom 工具仍丢弃。`tool_choice` 的 `ToolChoiceFunction` 只有 `name`、没有命名空间维度，按名字原样透传（模型若真去调展平后的名字，响应侧仍能还原）。
-- **Responses 输入项**：`input` 数组中的 `function_call` / `function_call_output` 既可出现在顶层项，也可内嵌在 `message.content` 中，两种形态都要识别；`reasoning` / `item_reference` 无对应语义，直接丢弃
+- **工具命名空间**：Responses 的 `type: "namespace"` 工具组把 function / custom 工具嵌套在一个共享命名空间下，Chat Completions 与 Anthropic 都没有对应容器，因此**可逆展平**：组内 function / custom 逐个提升为顶层工具，名字按 `namespace__name` 拼接（非法字符换下划线、截到 64 字符以符合 Chat 命名约束），组成员同名时追加 `__2` / `__3` 等序号，命名空间自己的 `description` 并入每个成员描述的开头。展平不是纯字符串改写：展平名 ↔ `(namespace, name)` 的对照表记在**一次上游尝试的内存上下文**里（`ToolNameRegistry`，请求转换写入、响应转换读取，随尝试结束丢弃），响应侧据此把 `namespace` 字段还原回 `function_call` / `custom_tool_call` 项。所以客户端看到的工具寻址与 Responses 原生语义一致，模型只看到 Chat 合法的扁平名字；顶层工具名优先原样保留，展平结果让位（顶层占位必须早于 `input` 转换，因为历史消息里的 namespace 限定调用也会登记展平名）。
+- **工具选择的展平改写**：`tool_choice` 是「客户端写名字、上游按名字找工具」，所以展平后必须跟着改写目标名字（`ToolNameRegistry.locate`：原始名 → 展平名），否则上游会报「未知工具」。消歧保守：顶层工具名原样下发；同名工具落在多个命名空间时**不改写**（`ToolChoiceFunction` / `ToolChoiceCustom` 只有 `name`，没有命名空间维度，猜错工具比让上游报错更糟）。`ToolChoiceAllowed` 在 Chat 里没有「允许集合」概念，退化为其 `mode`（`auto` / `required`）；强制内置工具的变体（`mcp` / `web_search` 等）对应的工具本身已被丢弃，不臆造替代值。
+- **自定义工具（custom tool）**：`type: "custom"` 没有 JSON Schema 参数，输入是自由文本，Responses ↔ Chat 双向映射；`format` 两侧嵌套层级不同（Responses 是 `{ type, definition, syntax }`，Chat 多一层 `{ type: "grammar", grammar: { definition, syntax } }`），必须逐字段重建；`syntax` 不是 `lark` / `regex` 时整个 `format` 丢弃。调用项同理：`custom_tool_call` ↔ `tool_calls[].type: "custom"`，载荷字段叫 `input`（不是 `arguments`），且 `CustomToolCall` 没有 `status` 字段，不能照抄 `function_call` 的骨架。
+- **Responses 输入项**：`input` 数组中的 `function_call` / `function_call_output` / `custom_tool_call` / `custom_tool_call_output` 既可出现在顶层项，也可内嵌在 `message.content` 中，两种形态都要识别，连续的调用项合并进同一条 assistant 消息的 `tool_calls`；`reasoning` / `item_reference` 无对应语义，直接丢弃
 - **采样参数**：`temperature` / `top_p` 直接映射；长度上限读 `max_completion_tokens` 优先于已弃用的 `max_tokens`（Responses 为 `max_output_tokens`），目标协议没有对应字段时降级为目标协议的必填上限；`stop` ↔ `stop_sequences`；`reasoning.effort` ↔ `reasoning_effort`
 - **结束原因**：`stop` ↔ `end_turn` / `stop_sequence`、`length` ↔ `max_tokens`、`tool_calls` ↔ `tool_use`、`content_filter` ↔ `refusal`；Anthropic `model_context_window_exceeded` 归到 `length`（同为「被上限截断」），`pause_turn` 等单侧取值退回 `stop`
 - **usage 明细**：按目标协议格式回填并裁剪字段集，不整体搬运；不能把 OpenAI 总输入与 Anthropic 未缓存输入直接等同。`*_tokens_details` 只保留目标协议声明的键（如 OpenAI 输入明细有 5 个键，Responses `input_tokens_details` 只有 `cache_write_tokens` / `cached_tokens`）；Anthropic `message_delta.usage` 的输入侧字段允许为 null，不得覆盖 `message_start` 已给出的计数
 - **多模态**：图片 base64 双向映射；`detail` 只传递目标协议支持的取值（Responses 的 `original` 在 Chat Completions 不存在，丢弃而非折算）；视频等单侧能力降级为文本提示
-- **不映射的单侧能力**：Anthropic `tool_result.is_error`、OpenAI 自定义工具（`tool_calls[].type=custom`）、命名空间组内的 custom 成员、`tool_choice.allowed_tools`、Chat 的 `input_audio` / `file` 内容段在另一协议无对应语义，按保守转换丢弃；Responses 工具对象的 `allowed_callers` / `async` / `defer_loading` / `output_schema`，以及 `tool_search` / `mcp` / `file_search` / `web_search` 等托管工具也不属于函数调用语义，只保留 `name` / `description` / `parameters` / `strict`
+- **不映射的单侧能力**：Anthropic `tool_result.is_error`、`tool_choice.allowed_tools`（只保留 `mode`，见上）、Chat 的 `input_audio` / `file` 内容段在另一协议无对应语义，按保守转换丢弃；Responses 工具对象的 `allowed_callers` / `async` / `defer_loading` / `output_schema`，以及 `tool_search` / `mcp` / `file_search` / `web_search` 等托管工具也不属于函数调用语义，只保留 `name` / `description` / `parameters` / `strict`。单向能力：从 Chat 上游回到 **Anthropic** 客户端时，`tool_calls[].type: "custom"` 认不出（Anthropic 没有自由文本工具概念），整个调用项丢弃；而在 Responses 客户端方向上是可逆映射的
 - 不做角色扮演式 hack（不注入「你在扮演 Claude」之类的提示词）
+
+### 不可逆字段与已知限制
+
+转换器是**无状态**的：一次请求的转换上下文（`ToolNameRegistry`）只覆盖一次尝试，进程不保存任何跨请求的会话状态，也不落库。因此以下 Responses 字段无法映射到 Chat Completions，按保守转换丢弃，且**不会**被降级成「假装能用」的近似值 —— 客户端拿到的是目标协议的原生语义，需要跨请求能力的场景不适用于本转换对：
+
+| 字段 | 为什么丢 | 影响 |
+|---|---|---|
+| `previous_response_id` | Chat Completions 没有服务端会话概念，转换器也不保存响应 | 客户端必须每次自带完整 `input`；只靠 id 续话会丢上下文 |
+| `store` | 无服务端存储，转换后永远不落库 | 依赖「服务端存了、下次能取」的用法不可用 |
+| `conversation` | 同上 | 同上 |
+| `item_reference` | 需要服务端已有该项才能解析 | 输入项直接丢弃 |
+| `include: ["reasoning.encrypted_content"]` | Chat 不产出加密推理内容，没有可回传的载荷 | 该 `include` 值无效果 |
+| Anthropic `tool_result.is_error` | 反向目标协议没有该标志 | 错误标志丢失，内容仍在 |
+
+同一个转换器**必须保持无状态**：适配器在模块加载时创建一次、服务全部并发请求（见上文「一次尝试的转换上下文」），任何跨请求状态都会在并发下串请求。要支持服务端会话必须新建一层存储，而不是在转换器里加缓存。
+
+流式 `custom_tool_call` 的事件名依据不足：本地规范收录的 Responses SSE 事件只有 `response.content_part.*` / `response.output_item.*` / `response.output_text.*`，`response.function_call_arguments.*` 与 `response.custom_tool_call_input.*` 都没有权威定义。转换器按 `output_item.done` 的 item 结构对齐字段（`arguments` / `input`）发出，名称与 Responses 官方 SDK 惯例一致，但**未经验证**；接入真实上游后需要按实际报文复核。字段取值本身是确定的，只有事件名属于推测。
 
 ### Prompt Cache 兼容边界
 

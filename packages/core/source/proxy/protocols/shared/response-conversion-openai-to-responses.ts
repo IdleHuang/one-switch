@@ -8,15 +8,19 @@ import type { ToolNameRegistry } from './tool-name-registry'
  *
  * Responses 的响应体不是 Chat Completions 的字段改名，而是「事件/输出项」模型：
  * 非流式返回 `output[]` 项列表，流式则要补齐 output_item / content_part /
- * output_text / function_call_arguments 的完整生命周期事件。转换器据此重建一套
+ * output_text / 工具调用参数的完整生命周期事件。转换器据此重建一套
  * 合法的 Responses 事件序列，而不是只翻译文本增量。
  *
  * 请求侧的 namespace 工具组被展平成顶层工具名（见 `tool-name-registry.ts`），
- * 所以这里发 function_call 项时要拿着同一个 `toolNames` 把名字还原成
+ * 所以这里发工具调用项时要拿着同一个 `toolNames` 把名字还原成
  * `(namespace, name)` 寻址，否则客户端认不出这是它声明的哪个工具。
+ * function 与 custom 两类调用共用这条还原规则。
  */
 
 type ResponsesStatus = 'in_progress' | 'completed' | 'incomplete'
+
+/** 工具调用输出项的类别；两类字段集不同，构造时按类别分流。 */
+type ToolItemKind = 'function' | 'custom'
 
 /**
  * Chat 的 `prompt_tokens_details` 是 `{ audio_tokens, cache_write_tokens, cached_tokens,
@@ -88,10 +92,45 @@ function messageItem(id: string, text: string, status: ResponsesStatus): Json {
  * 工具名 → Responses 的 `(namespace, name)` 寻址。
  * 请求转换登记过的命名空间工具才查得到；非命名空间工具、模型臆造的工具名原样输出。
  */
-function restoreFunctionName(name: string, toolNames?: ToolNameRegistry): { name: string, namespace?: string } {
+function restoreToolName(name: string, toolNames?: ToolNameRegistry): { name: string, namespace?: string } {
   const identity = toolNames?.restore(name)
   if (!identity) return { name }
   return { name: identity.name, namespace: identity.namespace }
+}
+
+/**
+ * Chat 的 tool_call → Responses 的 `(kind, id, name, call_id, payload)`。
+ *
+ * `custom` 调用的载荷是自由文本而不是 JSON 字符串，所以字段名不同：
+ * Responses 用 `input`（见 `CustomToolCall object`），Chat 也用 `input`
+ * （见 `ChatCompletionMessageCustomToolCall`）。`function` 调用两边都叫 `arguments`。
+ */
+function openAiToolCallToResponses(call: Json): { kind: ToolItemKind, callId: string, name: string, payload: string } | null {
+  const custom = asObject(call.custom)
+  if (custom) {
+    const name = asString(custom.name)
+    if (!name) return null
+    return { kind: 'custom', callId: asString(call.id) ?? '', name, payload: asString(custom.input) ?? '' }
+  }
+  const fn = asObject(call.function)
+  const name = asString(fn?.name)
+  if (!fn || !name) return null
+  return { kind: 'function', callId: asString(call.id) ?? '', name, payload: asString(fn.arguments) ?? '' }
+}
+
+/**
+ * 组装一个工具调用输出项（名字已还原成 Responses 的寻址）。
+ *
+ * 两类项字段集不同，不能套同一个骨架：`FunctionCall` 有 `status`、载荷叫 `arguments`；
+ * `CustomToolCall` 没有 `status`、载荷叫 `input`
+ * （见 docs/references/openai-responses.md 的 `FunctionCall` 与 `CustomToolCall`）。
+ */
+function toolCallItem(kind: ToolItemKind, itemId: string, callId: string, name: string, payload: string, status: ResponsesStatus, toolNames?: ToolNameRegistry): Json {
+  const address = restoreToolName(name, toolNames)
+  if (kind === 'custom') {
+    return { id: itemId, type: 'custom_tool_call', call_id: callId, ...address, input: payload }
+  }
+  return { id: itemId, type: 'function_call', status, call_id: callId, ...address, arguments: payload }
 }
 
 export function openAiResponseToResponses(body: Json, toolNames?: ToolNameRegistry): Json {
@@ -109,17 +148,10 @@ export function openAiResponseToResponses(body: Json, toolNames?: ToolNameRegist
 
   asArray(message?.tool_calls).forEach((rawCall, index) => {
     const call = asObject(rawCall)
-    const fn = asObject(call?.function)
-    const name = asString(fn?.name)
-    if (!call || !fn || !name) return
-    output.push({
-      id: `${id}_fc_${index}`,
-      type: 'function_call',
-      status: itemStatus,
-      call_id: asString(call.id) ?? '',
-      ...restoreFunctionName(name, toolNames),
-      arguments: asString(fn.arguments) ?? '',
-    })
+    if (!call) return
+    const converted = openAiToolCallToResponses(call)
+    if (!converted) return
+    output.push(toolCallItem(converted.kind, `${id}_fc_${index}`, converted.callId, converted.name, converted.payload, itemStatus, toolNames))
   })
 
   const usage = openAiUsageToResponses(asObject(body.usage))
@@ -138,9 +170,11 @@ export function openAiResponseToResponses(body: Json, toolNames?: ToolNameRegist
 interface ResponsesToolItemState {
   outputIndex: number
   itemId: string
+  kind: ToolItemKind
   callId: string
   name: string
-  arguments: string
+  /** function 调用是 `arguments`（JSON 字符串），custom 调用是 `input`（自由文本），共用这一个累加器。 */
+  payload: string
   added: boolean
   closed: boolean
   /** 关闭时确定的 item 终态，用于聚合 output 时保持一致 */
@@ -186,25 +220,13 @@ export function createOpenAiToResponsesState(toolNames?: ToolNameRegistry): Open
   }
 }
 
-/** 组装一个 function_call 输出项（名字已还原成 Responses 的寻址）。 */
-function functionCallItem(item: ResponsesToolItemState, status: ResponsesStatus, toolNames?: ToolNameRegistry): Json {
-  return {
-    id: item.itemId,
-    type: 'function_call',
-    status,
-    call_id: item.callId,
-    ...restoreFunctionName(item.name, toolNames),
-    arguments: item.arguments,
-  }
-}
-
 function buildOutput(state: OpenAiToResponsesState): Json[] {
   const fallbackStatus = terminalItemStatus(state.finishReason)
   const items: Array<{ index: number; item: Json }> = []
   if (state.textStarted) items.push({ index: state.messageOutputIndex, item: messageItem(state.messageItemId, state.text, state.textStatus ?? fallbackStatus) })
   for (const item of state.toolItems.values()) {
     if (!item.added) continue
-    items.push({ index: item.outputIndex, item: functionCallItem(item, item.status ?? fallbackStatus, state.toolNames) })
+    items.push({ index: item.outputIndex, item: toolCallItem(item.kind, item.itemId, item.callId, item.name, item.payload, item.status ?? fallbackStatus, state.toolNames) })
   }
   return items.sort((left, right) => left.index - right.index).map(entry => entry.item)
 }
@@ -248,15 +270,26 @@ function closeTextItem(state: OpenAiToResponsesState, events: Json[], status: Ex
   events.push({ type: 'response.output_item.done', output_index: state.messageOutputIndex, item: messageItem(state.messageItemId, state.text, status) })
 }
 
+/**
+ * 关闭一个工具调用项：先发载荷完成事件，再发 output_item.done。
+ *
+ * 载荷事件按类别分流：`function_call` 是 `response.function_call_arguments.delta/done`（载荷字段
+ * `arguments`），`custom_tool_call` 是 `response.custom_tool_call_input.delta/done`（载荷字段 `input`）。
+ * 后者是前者的对位事件，但本地参考文档（docs/references/openai-responses.md）的事件清单并不完整
+ * （连 `response.function_call_arguments.*` 都没收录），因此此处按 `output_item.done` 里
+ * 已经确定的 item 结构对齐字段，不额外臆造别的键。
+ */
 function closeToolItem(item: ResponsesToolItemState, events: Json[], status: Exclude<ResponsesStatus, 'in_progress'>, toolNames?: ToolNameRegistry): void {
   if (!item.added || item.closed) return
   item.closed = true
   item.status = status
-  events.push({ type: 'response.function_call_arguments.done', item_id: item.itemId, output_index: item.outputIndex, arguments: item.arguments })
+  events.push(item.kind === 'custom'
+    ? { type: 'response.custom_tool_call_input.done', item_id: item.itemId, output_index: item.outputIndex, input: item.payload }
+    : { type: 'response.function_call_arguments.done', item_id: item.itemId, output_index: item.outputIndex, arguments: item.payload })
   events.push({
     type: 'response.output_item.done',
     output_index: item.outputIndex,
-    item: functionCallItem(item, status, toolNames),
+    item: toolCallItem(item.kind, item.itemId, item.callId, item.name, item.payload, status, toolNames),
   })
 }
 
@@ -306,12 +339,15 @@ export function openAiChunkToResponsesEvents(chunk: Json, state: OpenAiToRespons
     let item = state.toolItems.get(openAiIndex)
     if (!item) {
       const outputIndex = state.nextOutputIndex++
+      // 流式下 `custom` 调用的名字与载荷都在 `custom` 子对象里，字段与 function 调用平行。
+      const custom = asObject(call.custom)
       item = {
         outputIndex,
         itemId: `${state.id}_fc_${outputIndex}`,
+        kind: custom ? 'custom' : 'function',
         callId: asString(call.id) ?? '',
-        name: asString(asObject(call.function)?.name) ?? '',
-        arguments: '',
+        name: asString(custom?.name) ?? asString(asObject(call.function)?.name) ?? '',
+        payload: '',
         added: false,
         closed: false,
       }
@@ -324,13 +360,16 @@ export function openAiChunkToResponsesEvents(chunk: Json, state: OpenAiToRespons
       events.push({
         type: 'response.output_item.added',
         output_index: item.outputIndex,
-        item: functionCallItem(item, 'in_progress', state.toolNames),
+        item: toolCallItem(item.kind, item.itemId, item.callId, item.name, item.payload, 'in_progress', state.toolNames),
       })
     }
-    const argumentsDelta = asString(asObject(call.function)?.arguments)
-    if (argumentsDelta) {
-      item.arguments += argumentsDelta
-      events.push({ type: 'response.function_call_arguments.delta', item_id: item.itemId, output_index: item.outputIndex, delta: argumentsDelta })
+    const custom = asObject(call.custom)
+    const payloadDelta = custom ? asString(custom.input) : asString(asObject(call.function)?.arguments)
+    if (payloadDelta) {
+      item.payload += payloadDelta
+      events.push(custom
+        ? { type: 'response.custom_tool_call_input.delta', item_id: item.itemId, output_index: item.outputIndex, delta: payloadDelta }
+        : { type: 'response.function_call_arguments.delta', item_id: item.itemId, output_index: item.outputIndex, delta: payloadDelta })
     }
   }
 

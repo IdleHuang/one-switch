@@ -114,6 +114,45 @@ describe('openAiResponseToResponses', () => {
     ])
   })
 
+  it('emits custom_tool_call items for custom tool calls', () => {
+    const toolNames = new ToolNameRegistry()
+    toolNames.flatten('crm', 'raw')
+
+    const result = openAiResponseToResponses({
+      id: 'chat_3',
+      choices: [{
+        message: {
+          content: null,
+          tool_calls: [
+            { id: 'call_1', type: 'custom', custom: { name: 'crm__raw', input: 'free text' } },
+            // function 与 custom 共用同一个 tool_calls 数组，两类要各自按自己的字段集输出
+            { id: 'call_2', type: 'function', function: { name: 'lookup', arguments: '{}' } },
+          ],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    }, toolNames)
+
+    // `CustomToolCall` 没有 `status` 字段（见 docs/references/openai-responses.md），
+    // 而且载荷叫 `input` 不是 `arguments`，不能照抄 function_call 的骨架
+    expect(result.output).toEqual([
+      { id: 'chat_3_fc_0', type: 'custom_tool_call', call_id: 'call_1', name: 'raw', namespace: 'crm', input: 'free text' },
+      { id: 'chat_3_fc_1', type: 'function_call', status: 'completed', call_id: 'call_2', name: 'lookup', arguments: '{}' },
+    ])
+  })
+
+  it('drops tool calls that carry neither a function nor a custom payload', () => {
+    const result = openAiResponseToResponses({
+      id: 'chat_4',
+      choices: [{
+        message: { content: null, tool_calls: [{ id: 'call_1' }, { id: 'call_2', type: 'custom', custom: {} }] },
+        finish_reason: 'tool_calls',
+      }],
+    })
+
+    expect(result.output).toEqual([])
+  })
+
   it('returns an empty output for missing choices', () => {
     const result = openAiResponseToResponses({})
     expect(result).toMatchObject({
@@ -361,6 +400,46 @@ describe('openAiChunkToResponsesEvents', () => {
     expect(events[events.length - 1]).toMatchObject({
       response: {
         output: [{ id: 'chat_2_fc_0', type: 'function_call', status: 'completed', call_id: 'call_1', name: 'lookup', namespace: 'crm' }],
+      },
+    })
+  })
+
+  it('streams custom_tool_call items with their own input events', () => {
+    const toolNames = new ToolNameRegistry()
+    toolNames.flatten('crm', 'raw')
+    const streamState = createOpenAiToResponsesState(toolNames)
+    const events = [
+      ...openAiChunkToResponsesEvents({
+        id: 'chat_7',
+        choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', custom: { name: 'crm__raw' } }] } }],
+      }, streamState),
+      ...openAiChunkToResponsesEvents({ choices: [{ delta: { tool_calls: [{ index: 0, custom: { input: 'free' } }] } }] }, streamState),
+      ...openAiChunkToResponsesEvents({
+        choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }, streamState),
+    ]
+
+    expect(events.map(event => event.type)).toEqual([
+      'response.created',
+      'response.in_progress',
+      'response.output_item.added',
+      'response.custom_tool_call_input.delta',
+      'response.custom_tool_call_input.done',
+      'response.output_item.done',
+      'response.completed',
+    ])
+    // custom 项没有 `status`，载荷字段叫 `input`
+    expect(events[2]).toEqual({
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { id: 'chat_7_fc_0', type: 'custom_tool_call', call_id: 'call_1', name: 'raw', namespace: 'crm', input: '' },
+    })
+    expect(events[3]).toEqual({ type: 'response.custom_tool_call_input.delta', item_id: 'chat_7_fc_0', output_index: 0, delta: 'free' })
+    expect(events[4]).toEqual({ type: 'response.custom_tool_call_input.done', item_id: 'chat_7_fc_0', output_index: 0, input: 'free' })
+    expect(events[events.length - 1]).toMatchObject({
+      response: {
+        output: [{ id: 'chat_7_fc_0', type: 'custom_tool_call', call_id: 'call_1', name: 'raw', namespace: 'crm', input: 'free' }],
       },
     })
   })

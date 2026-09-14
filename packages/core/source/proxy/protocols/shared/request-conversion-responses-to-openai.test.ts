@@ -225,7 +225,7 @@ describe('responsesToOpenAiRequest', () => {
       .toEqual(['crm__lookup', 'crm__lookup__2'])
   })
 
-  it('drops non-function members of a namespace and skips malformed groups', () => {
+  it('keeps custom members of a namespace and skips malformed groups', () => {
     const result = responsesToOpenAiRequest({
       input: 'hi',
       tools: [
@@ -234,8 +234,73 @@ describe('responsesToOpenAiRequest', () => {
       ],
     }, 'm')
 
-    // 无名的命名空间整组跳过；组内非 function 成员与无名 function 各自丢弃
-    expect(result).not.toHaveProperty('tools')
+    // 无名的命名空间整组跳过；组内无名成员各自丢弃，custom 成员保留并展平
+    expect(result.tools).toEqual([{ type: 'custom', custom: { name: 'crm__raw', description: '' } }])
+  })
+
+  it('maps custom tools and their input format to Chat Completions', () => {
+    const result = responsesToOpenAiRequest({
+      input: 'hi',
+      tools: [
+        { type: 'custom', name: 'raw', description: 'Raw input', format: { type: 'grammar', definition: 'start: WORD', syntax: 'lark' } },
+        { type: 'custom', name: 'plain', format: { type: 'text' } },
+      ],
+    }, 'm')
+
+    expect(result.tools).toEqual([
+      {
+        type: 'custom',
+        // grammar 的嵌套层级两侧不同：Responses 是 `{ type, definition, syntax }`，Chat 多一层 `grammar`
+        custom: { name: 'raw', description: 'Raw input', format: { type: 'grammar', grammar: { definition: 'start: WORD', syntax: 'lark' } } },
+      },
+      { type: 'custom', custom: { name: 'plain', description: '', format: { type: 'text' } } },
+    ])
+  })
+
+  it('drops an unsupported custom tool input format instead of guessing', () => {
+    const result = responsesToOpenAiRequest({
+      input: 'hi',
+      tools: [{ type: 'custom', name: 'raw', format: { type: 'grammar', definition: 'x', syntax: 'peg' } }],
+    }, 'm')
+
+    expect(result.tools).toEqual([{ type: 'custom', custom: { name: 'raw', description: '' } }])
+  })
+
+  it('maps custom tool calls and outputs in both top-level and nested input', () => {
+    const toolNames = new ToolNameRegistry()
+    const result = responsesToOpenAiRequest({
+      input: [
+        { type: 'custom_tool_call', call_id: 'call_1', name: 'lookup', namespace: 'crm', input: 'raw text' },
+        { type: 'custom_tool_call_output', call_id: 'call_1', output: 'ok' },
+        { role: 'user', content: [
+          { type: 'custom_tool_call', call_id: 'call_2', name: 'raw', input: 'x' },
+          { type: 'custom_tool_call_output', call_id: 'call_2', output: 'done' },
+        ] },
+      ],
+      tools: [
+        { type: 'namespace', name: 'crm', tools: [{ type: 'custom', name: 'lookup' }] },
+        { type: 'custom', name: 'raw' },
+      ],
+    }, 'm', toolNames)
+
+    expect(result.tools).toEqual([
+      { type: 'custom', custom: { name: 'crm__lookup', description: '' } },
+      { type: 'custom', custom: { name: 'raw', description: '' } },
+    ])
+    expect(result.messages).toEqual([
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'custom', custom: { name: 'crm__lookup', input: 'raw text' } }] },
+      { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_2', type: 'custom', custom: { name: 'raw', input: 'x' } }] },
+      { role: 'tool', tool_call_id: 'call_2', content: 'done' },
+    ])
+  })
+
+  it('drops custom tool calls without a name', () => {
+    const result = responsesToOpenAiRequest({
+      input: [{ type: 'custom_tool_call', call_id: 'call_1', input: 'x' }],
+    }, 'm')
+
+    expect(result.messages).toEqual([])
   })
 
   it('maps every tool choice variant and simple text format', () => {
@@ -245,12 +310,52 @@ describe('responsesToOpenAiRequest', () => {
     expect(choiceOf('none')).toBe('none')
     expect(choiceOf('required')).toBe('required')
     expect(choiceOf({ type: 'function', name: 'lookup' })).toEqual({ type: 'function', function: { name: 'lookup' } })
+    expect(choiceOf({ type: 'custom', name: 'raw' })).toEqual({ type: 'custom', custom: { name: 'raw' } })
     expect(choiceOf({ type: 'function' })).toBeUndefined()
+    // 允许集合在 Chat 里不存在，只保留强制语义
+    expect(choiceOf({ type: 'allowed_tools', mode: 'required', tools: [{ type: 'function', name: 'lookup' }] })).toBe('required')
+    expect(choiceOf({ type: 'allowed_tools', mode: 'auto' })).toBe('auto')
+    // 强制内置工具所对应的工具本身也已被丢弃，不臆造替代值
+    expect(choiceOf({ type: 'mcp', server_label: 'deepwiki' })).toBeUndefined()
+    expect(choiceOf({ type: 'web_search_preview' })).toBeUndefined()
     expect(choiceOf('bogus')).toBeUndefined()
     expect(responsesToOpenAiRequest({ input: 'hi' }, 'm')).not.toHaveProperty('tool_choice')
 
     const jsonObject = responsesToOpenAiRequest({ input: 'hi', text: { format: { type: 'json_object' } } }, 'm')
     expect(jsonObject.response_format).toEqual({ type: 'json_object' })
+  })
+
+  it('rewrites tool choice to the flattened name the upstream actually sees', () => {
+    const choiceOf = (choice: unknown): unknown => responsesToOpenAiRequest({
+      input: 'hi',
+      tools: [{ type: 'namespace', name: 'crm', tools: [{ type: 'function', name: 'lookup' }, { type: 'custom', name: 'raw' }] }],
+      tool_choice: choice,
+    }, 'm').tool_choice
+
+    // 客户端写的是它自己声明的名字，上游只认展平名，否则会报「未知工具」
+    expect(choiceOf({ type: 'function', name: 'lookup' })).toEqual({ type: 'function', function: { name: 'crm__lookup' } })
+    expect(choiceOf({ type: 'custom', name: 'raw' })).toEqual({ type: 'custom', custom: { name: 'crm__raw' } })
+
+    const topLevel = responsesToOpenAiRequest({
+      input: 'hi',
+      tools: [{ type: 'function', name: 'plain' }],
+      tool_choice: { type: 'function', name: 'plain' },
+    }, 'm')
+    expect(topLevel.tool_choice).toEqual({ type: 'function', function: { name: 'plain' } })
+  })
+
+  it('leaves tool choice untouched when the name is ambiguous', () => {
+    const result = responsesToOpenAiRequest({
+      input: 'hi',
+      tools: [
+        { type: 'namespace', name: 'crm', tools: [{ type: 'function', name: 'lookup' }] },
+        { type: 'namespace', name: 'billing', tools: [{ type: 'function', name: 'lookup' }] },
+      ],
+      tool_choice: { type: 'function', name: 'lookup' },
+    }, 'm')
+
+    // 两个命名空间里的同名工具只从 `name` 无法消歧，宁可让上游报错也不猜错工具
+    expect(result.tool_choice).toEqual({ type: 'function', function: { name: 'lookup' } })
   })
 
   it('carries input_image detail only when Chat Completions supports the value', () => {
@@ -300,6 +405,22 @@ describe('responsesToOpenAiRequest', () => {
       text: { format: { type: 'json_schema', name: 'answer', schema: { type: 'object' }, strict: 'yes' } },
     }, 'm')
     expect(looseStrict.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object' } } })
+  })
+
+  it('normalizes a json schema name the upstream would otherwise reject', () => {
+    // 两侧对 `name` 的约束相同（`a-z A-Z 0-9 _ -`，最长 64），而响应不回显这个名字，
+    // 所以这里归一化不会丢信息，只是让不合规的客户端也能用。
+    const result = responsesToOpenAiRequest({
+      input: 'hi',
+      text: { format: { type: 'json_schema', name: 'my answer!', schema: { type: 'object' } } },
+    }, 'm')
+    expect(result.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'my_answer_', schema: { type: 'object' } } })
+
+    const long = responsesToOpenAiRequest({
+      input: 'hi',
+      text: { format: { type: 'json_schema', name: 'x'.repeat(70), schema: {} } },
+    }, 'm')
+    expect(long.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'x'.repeat(64), schema: {} } })
   })
 
   it('tolerates malformed input items without throwing', () => {

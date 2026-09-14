@@ -742,3 +742,61 @@ describe('namespace tool flattening round-trip', () => {
     expect(downstream).not.toContain('crm__lookup')
   })
 })
+
+describe('custom tool round-trip', () => {
+  const customRequest = {
+    input: [
+      { type: 'custom_tool_call', call_id: 'call_0', name: 'raw', input: 'first turn' },
+      { type: 'custom_tool_call_output', call_id: 'call_0', output: 'seen' },
+      { role: 'user', content: 'now do it again' },
+    ],
+    tools: [{ type: 'custom', name: 'raw', description: 'Free-form', format: { type: 'text' } }],
+    tool_choice: { type: 'custom', name: 'raw' },
+  }
+
+  it('maps a custom tool, its history, and its tool_choice to Chat Completions', () => {
+    const body = parseBody(convertRequestBody(
+      'openai-responses', 'openai-completions', request('openai-responses', customRequest), 'upstream-model', new ToolNameRegistry(),
+    ))
+
+    expect(body.tools).toEqual([{ type: 'custom', custom: { name: 'raw', description: 'Free-form', format: { type: 'text' } } }])
+    expect(body.tool_choice).toEqual({ type: 'custom', custom: { name: 'raw' } })
+    expect(body.messages).toEqual([
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_0', type: 'custom', custom: { name: 'raw', input: 'first turn' } }] },
+      { role: 'tool', tool_call_id: 'call_0', content: 'seen' },
+      { role: 'user', content: 'now do it again' },
+    ])
+  })
+
+  it('restores a custom tool call to a custom_tool_call item', () => {
+    const body = parseBody(convertResponseBody('openai-responses', 'openai-completions', Buffer.from(JSON.stringify({
+      id: 'chat_2',
+      choices: [{
+        message: { content: null, tool_calls: [{ id: 'call_1', type: 'custom', custom: { name: 'raw', input: 'generated' } }] },
+        finish_reason: 'tool_calls',
+      }],
+    })), new ToolNameRegistry()))
+
+    expect(body.output).toEqual([
+      { id: 'chat_2_fc_0', type: 'custom_tool_call', call_id: 'call_1', name: 'raw', input: 'generated' },
+    ])
+  })
+
+  it('streams a custom tool call back as custom_tool_call_input events', () => {
+    const converter = createSseConverter('openai-responses', 'openai-completions', new ToolNameRegistry())
+    const upstream = [
+      { id: 'chat_3', choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', custom: { name: 'raw' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, custom: { input: 'generated' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+    ]
+
+    const downstream = upstream
+      .map(chunk => converter.push(`data: ${JSON.stringify(chunk)}\n\n`))
+      .join('') + converter.flush() + (converter.finish?.() ?? '')
+
+    expect(downstream).toContain('"type":"custom_tool_call"')
+    expect(downstream).toContain('"type":"response.custom_tool_call_input.delta"')
+    expect(downstream).toContain('"type":"response.custom_tool_call_input.done"')
+    expect(downstream).toContain('"input":"generated"')
+  })
+})
