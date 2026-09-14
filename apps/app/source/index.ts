@@ -35,7 +35,7 @@ const runtimeProfile = getRuntimeProfile(isDevelopment ? 'development' : 'produc
 
 process.env.DIST = path.join(__dirname, '..')
 
-// 数据目录固定落在用户主目录，与命令行形态同一处（见 `product/packaging.md` §5.5）：两种形态
+// 数据目录固定落在用户主目录，与命令行形态同一处（见 `docs/product/packaging.md` §5.5）：两种形态
 // 共用同一份配置与同一对数据库文件，所以「先用命令行跑起来、再开桌面端」不会看到两套空数据。
 // Electron 自己的缓存与凭据也跟着搬过去——`app.getPath('userData')` 是它们的唯一落点。
 app.setPath('userData', path.join(os.homedir(), runtimeProfile.dataDirectoryName))

@@ -1,8 +1,11 @@
-# 上游协议参考文档
+# 文档索引
 
-`docs/` 只放**外部权威**资料：上游厂商公开 API 文档的逐字快照。本仓库自己的设计结论一律写在 [`../product/`](../product/README.md)，两边不互相复制——参考文档回答「上游到底怎么定义的」，`product/` 回答「我们决定怎么做」。
+`docs/` 分两半，**两边不互相复制**：
 
-## 目录
+- [`product/`](./product/README.md)：本仓库自己的设计结论（产品规格、行为契约、验收标准），产品侧的唯一权威。回答「我们决定怎么做」。
+- [`references/`](./references/)：上游厂商公开 API 文档的逐字快照，只回答「上游到底怎么定义的」。
+
+## 上游协议参考目录
 
 | 文件 | 上游接口 | 规模 | 采集来源 |
 |------|---------|------|---------|
@@ -16,7 +19,7 @@
 
 - 实现：[`packages/core/source/proxy/protocols/shared/`](../packages/core/source/proxy/protocols/shared/)
 - 转换矩阵（哪些方向存在）：[`conversion-registry.ts`](../packages/core/source/proxy/protocols/shared/conversion-registry.ts)
-- 产品侧语义（转换开关、候选过滤、失败语义、流式状态机约定）：[`product/protocol-conversion.md`](../product/protocol-conversion.md)
+- 产品侧语义（转换开关、候选过滤、失败语义、流式状态机约定）：[`product/protocol-conversion.md`](./product/protocol-conversion.md)
 
 字段级争议以这里的定义为最终裁决：某个字段能不能映射、枚举值取哪几个、usage 该不该相加，都应当能在下面三份文件里找到对应条目。反过来，参考文档里没有写的东西（例如 Responses 快照未收录的事件名）不得在实现里凭印象发明。
 

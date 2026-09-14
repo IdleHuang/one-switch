@@ -89,7 +89,7 @@ describe('isLoopbackHost', () => {
 describe('defaultDataDirectory', () => {
   it('lands directly under the home directory', () => {
     // 目录名只能来自预设：Linux 上曾经写死成小写的 `one-switch`，与桌面形态的
-    // `One Switch` 分叉成两个目录（见 `product/packaging.md` §5.5）。
+    // `One Switch` 分叉成两个目录（见 `docs/product/packaging.md` §5.5）。
     expect(defaultDataDirectory()).toBe(path.join(os.homedir(), getRuntimeProfile(CLI_RUNTIME_ENVIRONMENT).dataDirectoryName))
     expect(path.dirname(defaultDataDirectory())).toBe(os.homedir())
   })
