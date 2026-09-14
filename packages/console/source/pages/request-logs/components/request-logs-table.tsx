@@ -40,13 +40,15 @@ interface RequestLogsTableProps {
 }
 
 /**
- * 多试了几次才拿到结果。
+ * 这个请求一共走了几次尝试。
  *
- * 列表里只说「多试了几次」，不说是换到了哪一家：具体每一次是怎么失败的、落在哪个模型上，
- * 是展开区该讲的事，塞进这一列只会把逻辑模型名挤成省略号。
+ * 次数**固定显示**，只走了一次也照挂 `×1`：同一列每行都是同一个形状，横向扫一眼就能比出
+ * 谁多试了几次，不会出现「有徽章的行才需要留意」这种要逐行找的区别。
+ * 但只说次数，不说是换到了哪一家：具体每一次是怎么失败的、落在哪个模型上，是展开区该讲的事，
+ * 塞进这一列只会把逻辑模型名挤成省略号。
  */
-function failoverCount(log: RequestLogEntry): number {
-  return Math.max(log.attempts.length - 1, 0)
+function attemptCount(log: RequestLogEntry): number {
+  return log.attempts.length
 }
 
 export function CachedTokensCell(props: CachedTokensCellProps) {
@@ -145,7 +147,7 @@ function RequestLogTableRow(props: RequestLogTableRowProps) {
   const locale = useLocale()
   const t = useTranslation()
   const successfulAttempt = props.log.attempts.find(attempt => attempt.status === 'success')
-  const failovers = failoverCount(props.log)
+  const attempts = attemptCount(props.log)
   const tps = formatTPS(
     props.log.outputTokens,
     successfulAttempt?.durationMilliseconds ?? props.log.totalDurationMilliseconds,
@@ -172,14 +174,12 @@ function RequestLogTableRow(props: RequestLogTableRowProps) {
         <td className={cn(tableCellClass, 'max-w-40')}>
           <div className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 truncate system-xs-medium text-text-primary">{props.modelName}</span>
-            {failovers > 0 && (
-              <span
-                className="shrink-0 rounded-md bg-components-input-bg-normal px-1.5 py-0.5 font-mono system-2xs-medium text-text-tertiary"
-                title={t('requestLogs.route.totalAttempts', { count: props.log.attempts.length })}
-              >
-                +{failovers}
-              </span>
-            )}
+            <span
+              className="shrink-0 rounded-md bg-components-input-bg-normal px-1.5 py-0.5 font-mono system-2xs-medium text-text-tertiary"
+              title={t('requestLogs.route.totalAttempts', { count: attempts })}
+            >
+              ×{attempts}
+            </span>
           </div>
         </td>
         <td className={cn(tableCellClass, 'whitespace-nowrap')}>

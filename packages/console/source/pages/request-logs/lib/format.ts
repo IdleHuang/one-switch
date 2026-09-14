@@ -25,7 +25,8 @@ export function formatStatus(t: AppTranslator, status: string): string {
 /**
  * 传输形态的展示标签。
  *
- * 一根轴三个取值，不需要再做任何组合推断：`http` 是整包收送，`http-stream` 是增量收送。
+ * 一根轴三个取值，不需要再做任何组合推断：`http` 是非流式，`http-stream` 是流式。
+ * 「流式 / 非流式」是这根轴的常规叫法，比「增量 / 整包」少一层从字面到语义的翻译。
  * 加一个 `websocket` 只为让「声明了但没实现」在界面上也读得懂。
  */
 export const TRANSPORT_LABEL_KEY: Record<string, UiCatalogKey> = {
