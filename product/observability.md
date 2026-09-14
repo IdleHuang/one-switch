@@ -29,7 +29,7 @@
 **一张表 = 一个视角。** 列名不带视角前缀——视角由表名唯一确定。
 客户端发来的请求与最终收到的响应只写入 `request_contents`；真正发给 Provider 的请求与 Provider 返回的响应只写入 `attempt_contents`（关联 `attemptId`）。用量同样按视角拆：`request_usages`（请求级）与 `attempt_usages`（尝试级），主键分别是 `(requestId, type)` 与 `(attemptId, type)`，**不存在用可空列判别归属的行**。新增一个观测视角时新增一张表，而不在已有列上叠含义。
 
-**事实永远写入，载荷才受开关控制。** `captureRequestContent` 只决定是否保存正文；是否发生协议转换、上游跳以什么形态作答、命中的改写规则 id、尝试耗时、TTFT 都是事实，无论开关如何都必须落库。因此它们写在 `request_attempts` 上，而不写在与正文同生命周期的表里。而“客户端要的是整包还是增量”是请求刚一进来就已经定下的**预期**，它与请求日志同生命周期，写在 `request_logs.transport` 上。
+**事实永远写入，载荷才受开关控制。** `captureRequestContent` 只决定是否保存正文；是否发生协议转换、上游跳以什么形态作答、命中的改写规则 id、尝试耗时、TTFT 都是事实，无论开关如何都必须落库。因此它们写在 `request_attempts` 上，而不写在与正文同生命周期的表里。而“客户端要的是流式还是非流式”是请求刚一进来就已经定下的**预期**，它与请求日志同生命周期，写在 `request_logs.transport` 上。
 
 **协议转换是派生事实，不单独建表。** `request_logs.clientProtocol` 与 `request_attempts.upstreamProtocol` 不相等，就是「发生了转换」的唯一判据；上游跳以什么形态作答读 `request_attempts.upstreamTransport`；耗时直接读 `request_attempts.durationMilliseconds`。三者合并后没有任何独立信息，单独建表只会引入一份会漂移的耗时副本。
 
@@ -46,7 +46,7 @@
 | id | `request_logs.id` | 请求唯一 ID |
 | createdTime | `request_logs.createdTime` | Unix 毫秒时间戳 |
 | clientProtocol | `request_logs.clientProtocol` | 客户端协议；协议无法识别时为 `null` |
-| transport | `request_logs.transport` | 客户端跳的传输形态（`http` / `http-stream` / `websocket`），即“字节怎么回来”的预期 |
+| transport | `request_logs.transport` | 客户端跳的传输形态（`http` / `http-stream` / `websocket`，界面上分别写作“非流式” / “流式” / “WebSocket”），即“字节怎么回来”的预期 |
 | logicalModelId | `request_logs.logicalModelId` | 逻辑模型 ID；尚未解析到时为 `null` |
 | status | `request_logs.status` | `pending`、`success`、`failed` 或 `cancelled` |
 | durationMilliseconds | `request_logs.totalDurationMilliseconds` | 从收到请求到写完响应的总耗时 |
@@ -56,8 +56,8 @@
 
 列表只列**本次请求的结果特征**，不列尝试级细节：
 
-- **列逻辑模型，不列供应商模型**：一次请求可能先后落到多个供应商模型（故障转移），列表只回答「客户端要的那个逻辑模型」；具体每一次落在哪个供应商模型上是尝试级事实，展开详情看。多试了几次才拿到结果时，逻辑模型名后面挂一个 `+N` 计数（`request_attempts` 汇总数量减一）。
-- **协议与传输形态各占一列**：`clientProtocol` 与 `transport` 是请求刚一进来就定下的事实，列出来是为了「这是哪种客户端协议、要整包还是要增量」一眼可见。
+- **列逻辑模型，不列供应商模型**：一次请求可能先后落到多个供应商模型（故障转移），列表只回答「客户端要的那个逻辑模型」；具体每一次落在哪个供应商模型上是尝试级事实，展开详情看。逻辑模型名后面**固定**挂这个请求的尝试次数（`request_attempts` 汇总数量，只走一次也照挂 `×1`）——每行同一个形状，横向扫一眼就能比出谁多试了几次。
+- **协议与传输形态各占一列**：`clientProtocol` 与 `transport` 是请求刚一进来就定下的事实，列出来是为了「这是哪种客户端协议、要流式还是要非流式」一眼可见。
 - **总耗时不在列表里**：延迟特征已经由 TTFT（首字多快）与 TPS（出字多快）表达，总耗时回答的是「整条链路一共花了多久」，在详情里展示。
 
 ### 请求详情

@@ -674,7 +674,7 @@ CREATE INDEX idx_request_logs_client_protocol
 
 `clientProtocol` 与 `logicalModelId` 均可为空：请求可能在协议识别或模型解析之前就被拒掉，但它同样是用户真实发出的请求，必须留下记录。为空表达的是「还没走到那一步」，不是「没有这一列」。
 
-`transport` 是**请求进入代理时就已经定下的预期**（客户端要整包还是增量，见 [proxy-engine.md](./proxy-engine.md) §1.1）——它是客户端跳的形态，取自入口对请求体的解析，因此属于请求级事实；上游跳实际是什么形态是**上游视角的事实**，写在 `request_attempts.upstreamTransport` 上。两者不相等不是「上游不配合」这种可容错的小事，而是「本次传输无法按声明兑现」——代理不自己攒出一份整包来弥合（见 [proxy-engine.md](./proxy-engine.md) §1.2）。`totalDurationMilliseconds` 是从收到请求到写完响应的总耗时，它无法由尝试耗时稳定推导（尝试之间还有调度与等待），因此落在日志主表。
+`transport` 是**请求进入代理时就已经定下的预期**（客户端要流式还是非流式，见 [proxy-engine.md](./proxy-engine.md) §1.1）——它是客户端跳的形态，取自入口对请求体的解析，因此属于请求级事实；上游跳实际是什么形态是**上游视角的事实**，写在 `request_attempts.upstreamTransport` 上。两者不相等不是「上游不配合」这种可容错的小事，而是「本次传输无法按声明兑现」——代理不自己攒出一份整包来弥合（见 [proxy-engine.md](./proxy-engine.md) §1.2）。`totalDurationMilliseconds` 是从收到请求到写完响应的总耗时，它无法由尝试耗时稳定推导（尝试之间还有调度与等待），因此落在日志主表。
 
 原始协议 `usage` 报文不再占用日志主表的列：它属于某个视角的一份事实，以 `type = 'raw'` 的记录保存在对应的用量表里（见 3.10）。
 

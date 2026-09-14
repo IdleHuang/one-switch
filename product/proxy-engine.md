@@ -28,7 +28,7 @@
 
 把「这一跳用什么连接」与「客户端要不要边收边发」压成一个布尔量（`streamingRequest`）是不成立的：一条双向长连接上既没有请求体里的 `stream` 字段可解析，也不存在「上游是不是回了 SSE」的问题，可下游逻辑却仍要按预期走。
 
-**只有一根轴**：`TransportKind` 的 `http` / `http-stream` / `websocket`。「连接方式」不是另一层领域概念——它就是 **URL scheme**（`wss://` 就是 WebSocket），不需要一个跟着每一跳复制的枚举；「客户端要不要增量」是同一档 `http-stream` 的线格式，不是另一档连接形态。
+**只有一根轴**：`TransportKind` 的 `http` / `http-stream` / `websocket`。「连接方式」不是另一层领域概念——它就是 **URL scheme**（`wss://` 就是 WebSocket），不需要一个跟着每一跳复制的枚举；「客户端要不要流式」是同一档 `http-stream` 的线格式，不是另一档连接形态。
 
 | 词 | 类型 | 取值 | 含义 | 从哪读出来 |
 | --- | --- | --- | --- | --- |
@@ -40,7 +40,7 @@
 - **客户端跳**：入口认路径选出端点声明之后，读该端点的**唯一封装** `ProtocolEnvelope.resolveTransport(input)` —— 对 JSON 封装就是看请求体里的 `stream` 字段（`stream: true` → `http-stream`，否则 `http`）。它是**事实陈述**，不是凭印象写死的假设；返回取值而不是 `boolean`，调用方不必自己把 `true` 翻译成 `'http-stream'`，也就不会有两处翻得不一样。
 - **上游跳**：`routing/upstream-url.ts` 的 `resolveUpstreamTransport(url, 客户端形态)` —— `wss://` / `ws://` 得 `websocket`，否则**镜像客户端跳**。镜像不是「客户端偏好决定上游」，而是**忠实转发**：我们原样把 `stream` 字段转发过去（`native-adapter.ts` 的 `prepareRequest` 只重写模型名），客户端要什么形态就发什么形态，上游该回什么由它自己那份请求决定。
 
-**实现层怎么表达「连接方式」**：传输实现自己声明它服务哪几档——`transports/http.ts` 写 `transports: ['http', 'http-stream']`。这两档在建连、TLS、超时、abort、出网方式上**一字不差**（该文件全文不读响应头），差别只在响应体怎么分帧，而那是**封装**的属性。因此同一条 HTTP 实现天然覆盖两档，不需要两套执行器，也不存在「把增量需求漏进连接层」的机会。
+**实现层怎么表达「连接方式」**：传输实现自己声明它服务哪几档——`transports/http.ts` 写 `transports: ['http', 'http-stream']`。这两档在建连、TLS、超时、abort、出网方式上**一字不差**（该文件全文不读响应头），差别只在响应体怎么分帧，而那是**封装**的属性。因此同一条 HTTP 实现天然覆盖两档，不需要两套执行器，也不存在「把流式需求漏进连接层」的机会。
 
 `'websocket'` 是词表里**唯一一个「已声明但未实现」**的取值，所有拒绝点都收敛到传输注册表：`transports/registry.ts` 抛错（WebSocket 传输尚未实现，规划器不应产出 websocket 候选）、`runtime/proxy-runtime.ts` 回 `TRANSPORT_NOT_IMPLEMENTED`、`target-planner.ts` 用 `isWebSocketEndpoint()` 拒绝跨形态转换。保留它不为了兼容，而是为了**让拒绝有地方发生**——把不支持的形态写进词表，比让它以「解析失败」的形式出现更好查。
 
@@ -51,7 +51,7 @@
 
 **预期与事实分持**：
 
-- `TransportKind`（客户端跳的 `exchange.transport`）：**预期**。客户端要整包还是增量，入口解析请求体时就已经定下；
+- `TransportKind`（客户端跳的 `exchange.transport`）：**预期**。客户端要流式还是非流式，入口解析请求体时就已经定下；
 - `isEventStreamResponse(headers)`：**事实**。上游响应的分帧格式（读 `content-type: text/event-stream`）。SSE 是**格式**，不是一种传输，因此判定留在帧层；
 - **两者是否一致** → 一个**比较**的结果，而不是一个可被反复读取、可以常驻的合成量。
 
@@ -64,19 +64,19 @@
 **落库字段与轴同名**，不做投影、不留兼容别名（见 [data-model.md](./data-model.md)）：
 
 - `request_logs.transport`：客户端跳的形态，即**预期**，原值落库（不是布尔）；
-- `request_attempts.upstreamTransport`：上游这一跳实际是什么形态，即**事实**，没拿到响应时为 `null`——因此「上游没回」与「上游回了整包」在库里是两件事。
+- `request_attempts.upstreamTransport`：上游这一跳实际是什么形态，即**事实**，没拿到响应时为 `null`——因此「上游没回」与「上游回了非流式」在库里是两件事。
 
 改写规则试跑接口的 `testCase.transport` 同样是轴上的取值：库里存的就是原生取值，读取端也不做投影或兼容别名，所以不存在「旧值」需要映射。
 
 ### 1.2 响应头不能决定「做什么」
 
-「客户端要 `stream` 而上游回了整包 JSON」不能就地改造成一个看起来能用的响应（转换修改器改走 `accumulateWholeBody`、改写规则从「跳过」变成「介入」）——那样**同一个客户端请求会不会被改写规则改写，就取决于上游回了什么**。
+「客户端要流式而上游回了整包 JSON」不能就地改造成一个看起来能用的响应（转换修改器改走 `accumulateWholeBody`、改写规则从「跳过」变成「介入」）——那样**同一个客户端请求会不会被改写规则改写，就取决于上游回了什么**。
 
 按「定位」里的不变式，这里只能有一个结论：上游违约，报错并按切换策略处理。理由不是「实现不了合成事件流」，而是**我们不该合成它**。
 
-出口的分派依据只有客户端跳的 `transport`（预期），响应头只用来选解析器与**校验**预期；两者不一致时该次尝试记 `transportMismatch` → 按切换策略换下一个候选，并打一条 `[proxy] transport mismatch …` 的告警。比较是**双向**的：客户端要整包而收到 SSE、以及客户端要 `http-stream` 而收到整包，都算预期落空——只查一个方向时，「客户端没要流、上游硬塞流」这一类会被当成成功交给协议层解析。
+出口的分派依据只有客户端跳的 `transport`（预期），响应头只用来选解析器与**校验**预期；两者不一致时该次尝试记 `transportMismatch` → 按切换策略换下一个候选，并打一条 `[proxy] transport mismatch …` 的告警。比较是**双向**的：客户端要非流式而收到 SSE、以及客户端要流式而收到整包，都算预期落空——只查一个方向时，「客户端没要流、上游硬塞流」这一类会被当成成功交给协议层解析。
 
-**为什么预期不是响应期才知道的。** 「客户端要整包还是增量」只在客户端跳存在，而上游跳根本没有这个声明——上游只会收到一个请求体。关键在于：我们**自己把 `stream` 字段转发过去**（`native-adapter.ts:13` 的 `prepareRequest` 只重写模型名，`stream` 原样透传），并且当我们转发 `stream: false` 时上游看到的就是 `stream: false`。因此：
+**为什么预期不是响应期才知道的。** 「客户端要流式还是非流式」只在客户端跳存在，而上游跳根本没有这个声明——上游只会收到一个请求体。关键在于：我们**自己把 `stream` 字段转发过去**（`native-adapter.ts:13` 的 `prepareRequest` 只重写模型名，`stream` 原样透传），并且当我们转发 `stream: false` 时上游看到的就是 `stream: false`。因此：
 
 | 客户端 `transport` | 我们转发给上游的 | 上游**应当**回的 | 上游回了另一个 |
 | --- | --- | --- | --- |
@@ -100,7 +100,7 @@
 | `protocol-conversion` 用哪个解析器 | 事实（`isEventStreamResponse`） | `isEventStreamResponse(head.headers)` ✅ |
 | `request_attempts.upstreamTransport` 落库 | 事实（`isEventStreamResponse`） | `isEventStreamResponse(head.headers)` ✅ |
 
-「预期落空」本身成了一个显式的失败状态：响应是 2xx、但响应头里的流式形态与客户端声明的 `transport` 不符（客户端要 `http-stream` 却拿到整包，或客户端要整包却拿到 SSE）时，执行器记 `transportMismatch`，按 failover 换下一个候选，并按 `provider-model` 记一次健康失败（上游违约是上游的事，不该算成客户端的错，也不该算成这个模型「健康但没用」）。
+「预期落空」本身成了一个显式的失败状态：响应是 2xx、但响应头里的流式形态与客户端声明的 `transport` 不符（客户端要流式却拿到整包，或客户端要非流式却拿到 SSE）时，执行器记 `transportMismatch`，按 failover 换下一个候选，并按 `provider-model` 记一次健康失败（上游违约是上游的事，不该算成客户端的错，也不该算成这个模型「健康但没用」）。
 
 「两者是否一致」是**一次比较**，用完即弃：不需要任何常驻的合成量。
 
@@ -159,7 +159,7 @@ flowchart TD
 ingress(protocol, 客户端跳形态) ──protocol→protocol 转换──► egress(protocol, 上游跳形态)
 ```
 
-**协议与传输形态是两根互不约束的轴**，中间只做协议到协议的转换，**没有形态到形态的转换**——上游地址是 `wss://` 就是 WebSocket，是 `https://` 就照客户端跳的形态转发；没有任何一步会把「增量」变成「整包」或反过来（那正是 §1.2 禁止的兜底行为）。
+**协议与传输形态是两根互不约束的轴**，中间只做协议到协议的转换，**没有形态到形态的转换**——上游地址是 `wss://` 就是 WebSocket，是 `https://` 就照客户端跳的形态转发；没有任何一步会把「流式」变成「非流式」或反过来（那正是 §1.2 禁止的兜底行为）。
 
 这个形状能成立，靠的是三件事实：
 
@@ -406,7 +406,7 @@ export interface ModifierScope {
 3. **失败语义显式**。修改器抛错 → 内核产出带 `modifierId` 的 `ModifierError`；由 `AttemptPlanner` / 切换策略决定「本次尝试失败并切换」还是「直接回客户端 4xx」。当前 `RequestRewriteError` 被硬编码成 422 的分支（`attempt-executor.ts` 的 `onError`），就是这个语义被写死在内核里的后果。
 4. **`skip` 必须显式声明而不是静默跳过**。观察者需要知道「本规则在本形态下未生效」，才能如实写日志。
 5. **修改器不得用上游响应头决定「做什么」**。响应头只能用来选**解析器**（手里这堆字节是 SSE 还是整包 JSON），不能用来决定形态、能不能改写、要不要跳过。一旦允许，改写规则是否生效就变成了上游实现细节的函数——同一条规则、同一个请求，换台机器结果不同（见 §1.2）。需要按形态分流时读 `context.exchange.transport`（**预期**），需要确认上游是否兑现时读 `context.upstreamHead`（**事实**），两者不一致是失败，不是分支。
-6. **能排除的形态是声明出来的**。`ModifierScope.transports` 是静态能力声明：内核在选候选时就按它排除，修改器自己不必再判断这根轴——这正是「hooks 基于 protocol 与 transport 处理数据，且不需要自己去判断」的落地方式。它与 `match` 的分工是语义而不是效果：前者说「这种形态下根本没有它能做的事」（结论要进日志），后者说「这一条请求不满足它的条件」。今天只有 `response-rewrite` 声明了 `scope: { transports: ['http'] }`——说的就是「只有整包那一档才有它能做的事」；请求侧的三个修改器都不声明，因为形态说的是响应怎么回来，而请求总是整份读完再发，没有哪个形态能让他们无事可做。
+6. **能排除的形态是声明出来的**。`ModifierScope.transports` 是静态能力声明：内核在选候选时就按它排除，修改器自己不必再判断这根轴——这正是「hooks 基于 protocol 与 transport 处理数据，且不需要自己去判断」的落地方式。它与 `match` 的分工是语义而不是效果：前者说「这种形态下根本没有它能做的事」（结论要进日志），后者说「这一条请求不满足它的条件」。今天只有 `response-rewrite` 声明了 `scope: { transports: ['http'] }`——说的就是「只有非流式那一档才有它能做的事」；请求侧的三个修改器都不声明，因为形态说的是响应怎么回来，而请求总是整份读完再发，没有哪个形态能让他们无事可做。
 现有修改能力的落位：`modifiers/auth.ts`（认证头注入）、`modifiers/endpoint-defaults.ts`（`include_usage` 等接口默认值）、`modifiers/protocol-conversion.ts`（协议转换，一对 ingress/egress）、`modifiers/rewrite-rules.ts`（请求重写规则，`buffered` 或 `frame`）。
 
 ### 3.6 AttemptPlanner 与 LocalHandler：两个装配点
