@@ -123,7 +123,9 @@ one-switch/
 │           ├── main/                  # index / tray-* / updater / auto-launch / secret-store / i18n
 │           └── preload/
 │
-├── product/                           # 产品规格文档
+├── docs/                              # 文档：上游协议参考 + 产品规格
+│   ├── references/                    # 三家上游 API 的逐字快照
+│   └── product/                       # 产品规格文档
 ├── turbo.json                         # 任务编排与依赖顺序
 └── pnpm-workspace.yaml
 ```
@@ -142,7 +144,7 @@ one-switch/
 
 ### 4.3 根级资产的最终归属
 
-根目录只保留工作区级配置（`pnpm-workspace.yaml`、`turbo.json`、`tsconfig.json` / `tsconfig.base.json`、`eslint.config.js`、`package.json`）与 `product/`、`release/`。**留在这里的都不是残留**：`pnpm-workspace.yaml` 决定 workspace 成员，`turbo.json` 由 turbo 在根查找，`tsconfig.json` 是各包 `extends` 的目标，`eslint.config.js` 由 `eslint .` 从 cwd 向上找——把这些搬走才是破坏约定。同样只被脚本读取的 `vitest.config.ts` 与 `tsconfig.check.json` 归 `packages/toolkit`（见 §5.8）。
+根目录只保留工作区级配置（`pnpm-workspace.yaml`、`turbo.json`、`tsconfig.json` / `tsconfig.base.json`、`eslint.config.js`、`package.json`）与 `docs/`、`release/`。**留在这里的都不是残留**：`pnpm-workspace.yaml` 决定 workspace 成员，`turbo.json` 由 turbo 在根查找，`tsconfig.json` 是各包 `extends` 的目标，`eslint.config.js` 由 `eslint .` 从 cwd 向上找——把这些搬走才是破坏约定。同样只被脚本读取的 `vitest.config.ts` 与 `tsconfig.check.json` 归 `packages/toolkit`（见 §5.8）。
 
 其余资产（包括脚本）按「谁用谁持有」归属各自的包：
 

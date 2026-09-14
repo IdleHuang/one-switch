@@ -334,7 +334,7 @@ export const SettingsSchema = z.object({
    * 界面语言偏好。
    *
    * 放在服务端设置里而不是渲染进程的 `localStorage`：托盘菜单与原生对话框由主进程渲染，
-   * 主进程读不到渲染进程的存储（见 `product/i18n.md` §3）。
+   * 主进程读不到渲染进程的存储（见 `docs/product/i18n.md` §3）。
    */
   language: LanguagePreferenceSchema.default('system'),
   updatedTime: z.number().int(),
@@ -531,7 +531,7 @@ export const ApiSuccessSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
 export const ApiErrorSchema = z.object({
   success: z.literal(false),
   errorCode: z.string(),
-  /** 诊断消息，固定英文。界面**不要**直接展示它，按 `errorCode` 本地化（见 `product/i18n.md` §5）。 */
+  /** 诊断消息，固定英文。界面**不要**直接展示它，按 `errorCode` 本地化（见 `docs/product/i18n.md` §5）。 */
   errorMessage: z.string(),
   /**
    * 消息里 `{name}` 占位符的取值。

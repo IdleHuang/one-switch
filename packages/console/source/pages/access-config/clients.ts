@@ -4,7 +4,7 @@
  * 这里只放「路径怎么拼」的事实，不放文案；接口名（Chat Completions 等）是 OpenAI / Anthropic
  * 的专有名词，按仓库惯例直接硬编码，进不了文案表。
  *
- * 路径事实的出处是 `product/proxy.md` §协议识别：代理同时接受带 `/v1` 与不带 `/v1` 的路径，
+ * 路径事实的出处是 `docs/product/proxy.md` §协议识别：代理同时接受带 `/v1` 与不带 `/v1` 的路径，
  * 所以两类客户端的差别只在于「谁负责补 `/v1`」：
  * - OpenAI 兼容客户端把 `/v1` 当成 Base URL 的一部分（自己只拼 `/chat/completions`），所以 Base URL 必须带 `/v1`；
  * - Anthropic 客户端自己就拼 `/v1/messages`，Base URL 到端口为止；带上 `/v1` 会拼成

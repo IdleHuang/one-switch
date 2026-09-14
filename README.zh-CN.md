@@ -193,7 +193,7 @@ pnpm release:linux   # 构建 Linux arm64 / x64 安装包
 
 仓库是 pnpm workspace：`packages/{contracts,core,console}` 是可被单独消费的库包，`packages/toolkit` 收纳跨包开发脚本，`apps/app` 是桌面宿主，任务编排交给 Turborepo。技术栈是 Electron + React + TypeScript + Vite + Drizzle ORM + SQLite。
 
-设计目标、行为契约和验收标准的唯一权威在 [`product/`](./product/README.md)，构建与打包细节见 [packaging.md](./product/packaging.md)。
+设计目标、行为契约和验收标准的唯一权威在 [`docs/product/`](./docs/product/README.md)，构建与打包细节见 [packaging.md](./docs/product/packaging.md)；上游 API 的逐字快照见 [`docs/references/`](./docs/references/)。
 
 ## 反馈
 

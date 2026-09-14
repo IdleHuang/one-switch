@@ -193,7 +193,7 @@ pnpm release:linux   # build Linux arm64 / x64 installers
 
 The repository is a pnpm workspace: `packages/{contracts,core,console}` are libraries that can be consumed on their own, `packages/toolkit` holds the cross-package development scripts, `apps/app` is the desktop host, and Turborepo runs the tasks. The stack is Electron + React + TypeScript + Vite + Drizzle ORM + SQLite.
 
-Design goals, behaviour contracts and acceptance criteria have a single authority in [`product/`](./product/README.md); build and packaging details live in [packaging.md](./product/packaging.md).
+Design goals, behaviour contracts and acceptance criteria have a single authority in [`docs/product/`](./docs/product/README.md); build and packaging details live in [packaging.md](./docs/product/packaging.md). Verbatim upstream API references are kept in [`docs/references/`](./docs/references/).
 
 ## Feedback
 

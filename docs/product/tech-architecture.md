@@ -67,7 +67,9 @@ one-switch/
 ├── turbo.json                           # 任务编排与依赖顺序（build / typecheck / lint / test / dev）
 ├── tsconfig.json / tsconfig.base.json   # 共享编译选项：各包 extends 前者，后者供构建期使用
 ├── eslint.config.js                     # 分层守卫与包边界守卫经 packages/toolkit 挂在 pnpm lint 上（vitest 与 tsc 的配置住在 packages/toolkit）
-├── product/                             # 产品规格文档
+├── docs/                                # 文档：上游协议参考 + 产品规格
+│   ├── references/                      # 三家上游 API 的逐字快照
+│   └── product/                         # 产品规格文档
 ├── packages/                            # 工作区内部包：可被第三方消费的库 + 开发工具
 │   ├── contracts/                       # 共享契约：Zod schema、协议表、i18n 目录、宿主接口
 │   │   └── source/
