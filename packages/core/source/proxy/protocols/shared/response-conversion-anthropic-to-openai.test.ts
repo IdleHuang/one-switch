@@ -48,6 +48,10 @@ describe('anthropicResponseToOpenAi', () => {
     expect(finishOf('max_tokens')).toBe('length')
     expect(finishOf('stop_sequence')).toBe('stop')
     expect(finishOf('refusal')).toBe('content_filter')
+    // 上下文窗口耗尽在 Chat Completions 里语义最接近 length
+    expect(finishOf('model_context_window_exceeded')).toBe('length')
+    // 长任务暂停没有对应取值，退回 stop
+    expect(finishOf('pause_turn')).toBe('stop')
     expect(finishOf('something_new')).toBe('stop')
   })
 
@@ -167,6 +171,31 @@ describe('anthropicEventToOpenAiChunks', () => {
     const tail = finishAnthropicToOpenAiChunks(streamState)
     expect(tail[0]).toMatchObject({ choices: [{ finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1 } })
     expect(finishAnthropicToOpenAiChunks(streamState)).toEqual([])
+  })
+
+  it('keeps message_start counters when message_delta reports null usage fields', () => {
+    const streamState = createAnthropicToOpenAiState()
+    anthropicEventToOpenAiChunks({
+      type: 'message_start',
+      message: { id: 'msg_7', usage: { input_tokens: 100, cache_read_input_tokens: 20, cache_creation_input_tokens: 5 } },
+    }, streamState)
+
+    // MessageDeltaUsage 的输入侧三个字段规范上可为 null，不能覆盖 message_start 的准确值
+    const tail = anthropicEventToOpenAiChunks({
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn' },
+      usage: { input_tokens: null, cache_read_input_tokens: null, cache_creation_input_tokens: null, output_tokens: 5 },
+    }, streamState)
+
+    expect(tail[0]).toMatchObject({
+      choices: [{ finish_reason: 'stop' }],
+      usage: {
+        prompt_tokens: 125,
+        completion_tokens: 5,
+        total_tokens: 130,
+        prompt_tokens_details: { cache_write_tokens: 5, cached_tokens: 20 },
+      },
+    })
   })
 
   it('uses message_stop as a fallback terminator and never flushes a silent stream', () => {

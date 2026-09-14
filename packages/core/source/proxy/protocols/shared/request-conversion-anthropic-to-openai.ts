@@ -139,6 +139,7 @@ export function anthropicToOpenAiRequest(body: Json, model: string): Json {
 
     // user：tool_result 必须先于普通内容输出（OpenAI 要求 tool 消息紧随 assistant.tool_calls），
     // 因此同一条 user 消息内先发 tool 消息，再把剩余的 text/image block 合并成一条 user 消息。
+    // `tool_result.is_error` 在 OpenAI 的 `role: tool` 消息里没有对应字段，只能丢弃。
     const toolMessages = asArray(message.content)
       .map(part => asObject(part))
       .filter((block): block is Json => block?.type === 'tool_result')

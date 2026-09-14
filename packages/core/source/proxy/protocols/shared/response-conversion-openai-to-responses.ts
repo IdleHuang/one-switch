@@ -3,27 +3,67 @@ import { asArray, asNumber, asObject, asString, type Json } from './conversion-u
 /**
  * OpenAI Chat Completions 响应 → OpenAI Responses 响应。
  *
+ * 字段依据见 docs/references/openai-responses.md 与 docs/references/openai-completions.md。
+ *
  * Responses 的响应体不是 Chat Completions 的字段改名，而是「事件/输出项」模型：
  * 非流式返回 `output[]` 项列表，流式则要补齐 output_item / content_part /
  * output_text / function_call_arguments 的完整生命周期事件。转换器据此重建一套
  * 合法的 Responses 事件序列，而不是只翻译文本增量。
  */
 
+type ResponsesStatus = 'in_progress' | 'completed' | 'incomplete'
+
+/**
+ * Chat 的 `prompt_tokens_details` 是 `{ audio_tokens, cache_write_tokens, cached_tokens,
+ * image_tokens, text_tokens }`，Responses 的 `input_tokens_details` 只有
+ * `{ cache_write_tokens, cached_tokens }`。两者字段集不同，必须挑字段而不是整体搬运，
+ * 否则会输出 Responses 规范里不存在的键。
+ */
+function openAiInputDetailsToResponses(inputDetails: unknown): Json | undefined {
+  const details = asObject(inputDetails)
+  if (!details) return undefined
+  const cached = asNumber(details.cached_tokens)
+  const created = asNumber(details.cache_write_tokens)
+  if (cached === undefined && created === undefined) return undefined
+  return {
+    ...(created !== undefined ? { cache_write_tokens: created } : {}),
+    ...(cached !== undefined ? { cached_tokens: cached } : {}),
+  }
+}
+
 function openAiUsageToResponses(usage: Json | null): Json | undefined {
   if (!usage) return undefined
   const input = asNumber(usage.prompt_tokens) ?? asNumber(usage.input_tokens)
   const output = asNumber(usage.completion_tokens) ?? asNumber(usage.output_tokens)
   if (input === undefined && output === undefined) return undefined
-  const promptDetails = asObject(usage.prompt_tokens_details) ?? asObject(usage.input_tokens_details)
+  const inputDetails = openAiInputDetailsToResponses(usage.prompt_tokens_details ?? usage.input_tokens_details)
   const completionDetails = asObject(usage.completion_tokens_details) ?? asObject(usage.output_tokens_details)
   const reasoning = asNumber(completionDetails?.reasoning_tokens)
   return {
     ...(input !== undefined ? { input_tokens: input } : {}),
-    ...(promptDetails ? { input_tokens_details: promptDetails } : {}),
+    ...(inputDetails ? { input_tokens_details: inputDetails } : {}),
     ...(output !== undefined ? { output_tokens: output } : {}),
     ...(reasoning !== undefined ? { output_tokens_details: { reasoning_tokens: reasoning } } : {}),
     ...(input !== undefined || output !== undefined ? { total_tokens: (input ?? 0) + (output ?? 0) } : {}),
   }
+}
+
+/**
+ * Chat 的 `finish_reason` → Responses 的 `incomplete_details.reason`。
+ *
+ * Responses 用「终态 + 原因」表达截断：`status: "incomplete"` 配 `incomplete_details.reason`
+ * （可取 `max_output_tokens` / `content_filter` 等），正常结束则是 `status: "completed"`
+ * 且不带 `incomplete_details`。
+ */
+function responsesIncompleteReason(finishReason: string | undefined): string | undefined {
+  if (finishReason === 'length') return 'max_output_tokens'
+  if (finishReason === 'content_filter') return 'content_filter'
+  return undefined
+}
+
+/** 终态下 output item 自身的 status：被截断时同为 incomplete。 */
+function terminalItemStatus(finishReason: string | undefined): Exclude<ResponsesStatus, 'in_progress'> {
+  return responsesIncompleteReason(finishReason) ? 'incomplete' : 'completed'
 }
 
 function openAiContentToText(content: unknown): string {
@@ -35,18 +75,22 @@ function outputTextPart(text: string): Json {
   return { type: 'output_text', text, annotations: [] }
 }
 
-function messageItem(id: string, text: string, status: 'in_progress' | 'completed'): Json {
-  return { id, type: 'message', status, role: 'assistant', content: status === 'completed' ? [outputTextPart(text)] : [] }
+function messageItem(id: string, text: string, status: ResponsesStatus): Json {
+  return { id, type: 'message', status, role: 'assistant', content: status === 'in_progress' ? [] : [outputTextPart(text)] }
 }
 
 export function openAiResponseToResponses(body: Json): Json {
   const id = asString(body.id) ?? ''
   const first = asObject(asArray(body.choices)[0])
   const message = asObject(first?.message)
+  const finishReason = asString(first?.finish_reason)
+  // 非流式也会带上 finish_reason：length / content_filter 同样要还原成 incomplete 终态。
+  const incompleteReason = responsesIncompleteReason(finishReason)
+  const itemStatus = terminalItemStatus(finishReason)
   const output: Json[] = []
 
   const text = openAiContentToText(message?.content)
-  if (text) output.push(messageItem(`${id}_msg`, text, 'completed'))
+  if (text) output.push(messageItem(`${id}_msg`, text, itemStatus))
 
   asArray(message?.tool_calls).forEach((rawCall, index) => {
     const call = asObject(rawCall)
@@ -56,7 +100,7 @@ export function openAiResponseToResponses(body: Json): Json {
     output.push({
       id: `${id}_fc_${index}`,
       type: 'function_call',
-      status: 'completed',
+      status: itemStatus,
       call_id: asString(call.id) ?? '',
       name,
       arguments: asString(fn.arguments) ?? '',
@@ -68,9 +112,10 @@ export function openAiResponseToResponses(body: Json): Json {
     id,
     object: 'response',
     created_at: asNumber(body.created) ?? Math.floor(Date.now() / 1000),
-    status: 'completed',
+    status: itemStatus,
     model: asString(body.model) ?? '',
     output,
+    ...(incompleteReason ? { incomplete_details: { reason: incompleteReason } } : {}),
     ...(usage ? { usage } : {}),
   }
 }
@@ -83,6 +128,8 @@ interface ResponsesToolItemState {
   arguments: string
   added: boolean
   closed: boolean
+  /** 关闭时确定的 item 终态，用于聚合 output 时保持一致 */
+  status?: Exclude<ResponsesStatus, 'in_progress'>
 }
 
 export interface OpenAiToResponsesState {
@@ -95,6 +142,7 @@ export interface OpenAiToResponsesState {
   messageOutputIndex: number
   textStarted: boolean
   textClosed: boolean
+  textStatus?: Exclude<ResponsesStatus, 'in_progress'>
   text: string
   /** OpenAI tool_calls[].index → Responses 输出项状态 */
   toolItems: Map<number, ResponsesToolItemState>
@@ -121,28 +169,30 @@ export function createOpenAiToResponsesState(): OpenAiToResponsesState {
 }
 
 function buildOutput(state: OpenAiToResponsesState): Json[] {
+  const fallbackStatus = terminalItemStatus(state.finishReason)
   const items: Array<{ index: number; item: Json }> = []
-  if (state.textStarted) items.push({ index: state.messageOutputIndex, item: messageItem(state.messageItemId, state.text, 'completed') })
+  if (state.textStarted) items.push({ index: state.messageOutputIndex, item: messageItem(state.messageItemId, state.text, state.textStatus ?? fallbackStatus) })
   for (const item of state.toolItems.values()) {
     if (!item.added) continue
     items.push({
       index: item.outputIndex,
-      item: { id: item.itemId, type: 'function_call', status: 'completed', call_id: item.callId, name: item.name, arguments: item.arguments },
+      item: { id: item.itemId, type: 'function_call', status: item.status ?? fallbackStatus, call_id: item.callId, name: item.name, arguments: item.arguments },
     })
   }
   return items.sort((left, right) => left.index - right.index).map(entry => entry.item)
 }
 
-function buildResponse(state: OpenAiToResponsesState, status: 'in_progress' | 'completed'): Json {
-  const usage = status === 'completed' ? state.usage : undefined
+function buildResponse(state: OpenAiToResponsesState, status: ResponsesStatus, incompleteReason?: string): Json {
+  const terminal = status !== 'in_progress'
   return {
     id: state.id,
     object: 'response',
     created_at: state.created,
     status,
     model: state.model,
-    output: status === 'completed' ? buildOutput(state) : [],
-    ...(usage ? { usage } : {}),
+    output: terminal ? buildOutput(state) : [],
+    ...(incompleteReason ? { incomplete_details: { reason: incompleteReason } } : {}),
+    ...(terminal && state.usage ? { usage: state.usage } : {}),
   }
 }
 
@@ -162,28 +212,31 @@ function openTextItem(state: OpenAiToResponsesState, events: Json[]): void {
 }
 
 /** 文本块结束后依次发出 text.done / content_part.done / output_item.done。 */
-function closeTextItem(state: OpenAiToResponsesState, events: Json[]): void {
+function closeTextItem(state: OpenAiToResponsesState, events: Json[], status: Exclude<ResponsesStatus, 'in_progress'>): void {
   if (!state.textStarted || state.textClosed) return
   state.textClosed = true
+  state.textStatus = status
   events.push({ type: 'response.output_text.done', item_id: state.messageItemId, output_index: state.messageOutputIndex, content_index: 0, text: state.text })
   events.push({ type: 'response.content_part.done', item_id: state.messageItemId, output_index: state.messageOutputIndex, content_index: 0, part: outputTextPart(state.text) })
-  events.push({ type: 'response.output_item.done', output_index: state.messageOutputIndex, item: messageItem(state.messageItemId, state.text, 'completed') })
+  events.push({ type: 'response.output_item.done', output_index: state.messageOutputIndex, item: messageItem(state.messageItemId, state.text, status) })
 }
 
-function closeToolItem(item: ResponsesToolItemState, events: Json[]): void {
+function closeToolItem(item: ResponsesToolItemState, events: Json[], status: Exclude<ResponsesStatus, 'in_progress'>): void {
   if (!item.added || item.closed) return
   item.closed = true
+  item.status = status
   events.push({ type: 'response.function_call_arguments.done', item_id: item.itemId, output_index: item.outputIndex, arguments: item.arguments })
   events.push({
     type: 'response.output_item.done',
     output_index: item.outputIndex,
-    item: { id: item.itemId, type: 'function_call', status: 'completed', call_id: item.callId, name: item.name, arguments: item.arguments },
+    item: { id: item.itemId, type: 'function_call', status, call_id: item.callId, name: item.name, arguments: item.arguments },
   })
 }
 
 function closeOpenItems(state: OpenAiToResponsesState, events: Json[]): void {
-  closeTextItem(state, events)
-  for (const item of state.toolItems.values()) closeToolItem(item, events)
+  const status = terminalItemStatus(state.finishReason)
+  closeTextItem(state, events, status)
+  for (const item of state.toolItems.values()) closeToolItem(item, events, status)
 }
 
 function complete(state: OpenAiToResponsesState, events: Json[]): void {
@@ -191,7 +244,12 @@ function complete(state: OpenAiToResponsesState, events: Json[]): void {
   ensureStarted(state, events)
   closeOpenItems(state, events)
   state.completed = true
-  events.push({ type: 'response.completed', response: buildResponse(state, 'completed') })
+  // 被 token 上限或内容过滤截断时，Responses 规范要求以 response.incomplete + incomplete_details
+  // 收尾，其余情况才是 response.completed；两者都带完整 output 与 usage。
+  const incompleteReason = responsesIncompleteReason(state.finishReason)
+  events.push(incompleteReason
+    ? { type: 'response.incomplete', response: buildResponse(state, 'incomplete', incompleteReason) }
+    : { type: 'response.completed', response: buildResponse(state, 'completed') })
 }
 
 export function openAiChunkToResponsesEvents(chunk: Json, state: OpenAiToResponsesState): Json[] {
@@ -215,7 +273,7 @@ export function openAiChunkToResponsesEvents(chunk: Json, state: OpenAiToRespons
     if (!call) continue
     ensureStarted(state, events)
     // 文本与工具调用分属不同输出项，切换前先收尾文本项
-    closeTextItem(state, events)
+    closeTextItem(state, events, 'completed')
 
     const openAiIndex = asNumber(call.index) ?? 0
     let item = state.toolItems.get(openAiIndex)
