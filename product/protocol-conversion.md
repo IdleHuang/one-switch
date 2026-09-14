@@ -167,6 +167,7 @@
 packages/core/source/proxy/protocols/
   shared/
     conversion-utils.ts                          # JSON 取值/序列化工具，畸形输入统一降级
+    conversion-registry.ts                       # 转换矩阵：3 个请求方向 + 3 个镜像响应方向
     request-conversion.ts                        # convertRequestBody 入口：按方向分发
     request-conversion-openai-to-anthropic.ts
     request-conversion-anthropic-to-openai.ts
@@ -175,24 +176,30 @@ packages/core/source/proxy/protocols/
     response-conversion-openai-to-anthropic.ts   # 非流式 + 有状态 SSE
     response-conversion-anthropic-to-openai.ts   # 非流式 + 有状态 SSE
     response-conversion-openai-to-responses.ts   # 非流式 + 有状态 SSE（Responses 事件生命周期）
-  types.ts                                       # StreamConverter / NativeProtocolAdapter / ProtocolConversionAdapter
+    tool-name-registry.ts                        # 一次上游尝试的转换上下文：展平名 ↔ (namespace, name)
+    types.ts                                     # StreamConverter / NativeProtocolAdapter / ProtocolConversionAdapter
   registry.ts                                    # 转换器注册表：按 (endpointProtocol, clientProtocol) 分发
 ```
 
 每个方向的实现都拆成「请求转换」与「响应转换」两个文件，响应转换文件同时导出非流式转换函数、状态工厂（`create*State`）、逐事件转换函数（`*Events`）与收尾函数（`finish*`），便于对状态机做单元测试而无需构造完整 SSE 流。
 
-`Converter` 接口（每个方向一组）：
+**一次尝试的转换上下文**：可逆展平需要响应侧拿到请求侧登记过的对照表，而转换器是模块级单例（进程启动创建一次、服务全部并发请求），所以上下文**不能存在转换器上**，只能作为参数逐层透传：`attempt-executor.ts` 每次尝试新建 `ToolNameRegistry` → 请求修改器 → `convertRequestBody` → 方向转换器；同一实例再传给响应修改器 → `convertResponseBody` / `createSseConverter`。省略时按「不记录上下文」处理，展平仍然生效、只是响应侧不还原。
+
+`ProtocolConversionAdapter` 接口（每个方向一个，见 `shared/types.ts`）：
 
 ```ts
-interface ProtocolConverter {
-  support: 'full' | 'partial' | 'unsupported'
-  convertRequest(body: unknown): unknown          // 客户端 → Provider
-  convertResponse(body: unknown): unknown         // Provider → 客户端（非流式）
-  createStreamConverter(): StreamConverter        // Provider SSE → 客户端 SSE
+interface ProtocolConversionAdapter {
+  readonly kind: 'conversion'
+  readonly requiresResponseConversion: true
+  prepareRequest(context, providerModelName, toolNames?): Buffer
+  convertResponse(body: Buffer, toolNames?): Buffer               // Provider → 客户端（非流式）
+  createStreamConverter(toolNames?): StreamConverter              // Provider SSE → 客户端 SSE
+  finishStream(converter: StreamConverter): string
 }
 ```
 
 - 转换器为纯函数 + 流式状态机，不依赖网络与数据库，便于单测
+- 适配器按方向在 `registry.ts` 里模块加载时创建一次并全局复用，因此只能是无状态的；请求级上下文只能走参数
 - handler 在透传路径之外新增转换路径分支，复用现有的认证注入、URL 解析、错误分类、日志与用量统计逻辑
 
 ## 字段映射原则
@@ -202,12 +209,13 @@ interface ProtocolConverter {
 - **系统提示词**：`system` 顶层字段 ↔ `messages` 中 `role: system` 首条消息
 - **工具调用**：OpenAI `tool_calls` ↔ Anthropic `tool_use` / `tool_result` content block 双向映射；assistant 消息同时含文本与工具调用时两者都要保留，连续的 `role: tool` 结果必须合并进同一条消息的多个 `tool_result` block，以维持 OpenAI 要求的「工具结果紧随 assistant」顺序
 - **工具选择**：`tool_choice` 四种形态双向映射（`auto` / `required` ↔ `any` / `none` / 指定工具）；`parallel_tool_calls: false` ↔ `disable_parallel_tool_use: true`
+- **工具命名空间**：Responses 的 `type: "namespace"` 工具组把 function / custom 工具嵌套在一个共享命名空间下，Chat Completions 与 Anthropic 都没有对应容器，因此**可逆展平**：组内 function 逐个提升为顶层工具，名字按 `namespace__name` 拼接（非法字符换下划线、截到 64 字符以符合 Chat 命名约束），组成员同名时追加 `__2` / `__3` 等序号，命名空间自己的 `description` 并入每个成员描述的开头。展平不是纯字符串改写：展平名 ↔ `(namespace, name)` 的对照表记在**一次上游尝试的内存上下文**里（`ToolNameRegistry`，请求转换写入、响应转换读取，随尝试结束丢弃），响应侧据此把 `namespace` 字段还原回 `function_call` 项。所以客户端看到的工具寻址与 Responses 原生语义一致，模型只看到 Chat 合法的扁平名字；顶层工具名优先原样保留，展平结果让位（顶层占位必须早于 `input` 转换，因为历史消息里的 namespace 限定调用也会登记展平名）。组内 custom 工具仍丢弃。`tool_choice` 的 `ToolChoiceFunction` 只有 `name`、没有命名空间维度，按名字原样透传（模型若真去调展平后的名字，响应侧仍能还原）。
 - **Responses 输入项**：`input` 数组中的 `function_call` / `function_call_output` 既可出现在顶层项，也可内嵌在 `message.content` 中，两种形态都要识别；`reasoning` / `item_reference` 无对应语义，直接丢弃
 - **采样参数**：`temperature` / `top_p` 直接映射；长度上限读 `max_completion_tokens` 优先于已弃用的 `max_tokens`（Responses 为 `max_output_tokens`），目标协议没有对应字段时降级为目标协议的必填上限；`stop` ↔ `stop_sequences`；`reasoning.effort` ↔ `reasoning_effort`
 - **结束原因**：`stop` ↔ `end_turn` / `stop_sequence`、`length` ↔ `max_tokens`、`tool_calls` ↔ `tool_use`、`content_filter` ↔ `refusal`；Anthropic `model_context_window_exceeded` 归到 `length`（同为「被上限截断」），`pause_turn` 等单侧取值退回 `stop`
 - **usage 明细**：按目标协议格式回填并裁剪字段集，不整体搬运；不能把 OpenAI 总输入与 Anthropic 未缓存输入直接等同。`*_tokens_details` 只保留目标协议声明的键（如 OpenAI 输入明细有 5 个键，Responses `input_tokens_details` 只有 `cache_write_tokens` / `cached_tokens`）；Anthropic `message_delta.usage` 的输入侧字段允许为 null，不得覆盖 `message_start` 已给出的计数
 - **多模态**：图片 base64 双向映射；`detail` 只传递目标协议支持的取值（Responses 的 `original` 在 Chat Completions 不存在，丢弃而非折算）；视频等单侧能力降级为文本提示
-- **不映射的单侧能力**：Anthropic `tool_result.is_error`、OpenAI 自定义工具（`tool_calls[].type=custom`）、`tool_choice.allowed_tools`、Chat 的 `input_audio` / `file` 内容段在另一协议无对应语义，按保守转换丢弃
+- **不映射的单侧能力**：Anthropic `tool_result.is_error`、OpenAI 自定义工具（`tool_calls[].type=custom`）、命名空间组内的 custom 成员、`tool_choice.allowed_tools`、Chat 的 `input_audio` / `file` 内容段在另一协议无对应语义，按保守转换丢弃；Responses 工具对象的 `allowed_callers` / `async` / `defer_loading` / `output_schema`，以及 `tool_search` / `mcp` / `file_search` / `web_search` 等托管工具也不属于函数调用语义，只保留 `name` / `description` / `parameters` / `strict`
 - 不做角色扮演式 hack（不注入「你在扮演 Claude」之类的提示词）
 
 ### Prompt Cache 兼容边界

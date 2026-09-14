@@ -1,5 +1,6 @@
 import type { Protocol } from '@common/schemas'
 import { findResponseDirection } from './conversion-registry'
+import { ToolNameRegistry } from './tool-name-registry'
 
 /**
  * 响应转换：将上游端点协议的响应（含 SSE 流）转换回客户端协议的响应。
@@ -52,8 +53,13 @@ export function serializeSseEvent(event: SseEvent): string {
 
 // ========== 响应转换入口 ==========
 
-/** 非流式响应转换 */
-export function convertResponseBody(clientProtocol: Protocol, endpointProtocol: Protocol, body: Buffer): Buffer {
+/**
+ * 非流式响应转换。
+ *
+ * `toolNames` 必须是本次尝试请求转换时用的同一个实例，否则展平过的命名空间工具名
+ * 无法还原成 `(namespace, name)`；省略时按「不记录上下文」处理。
+ */
+export function convertResponseBody(clientProtocol: Protocol, endpointProtocol: Protocol, body: Buffer, toolNames: ToolNameRegistry = new ToolNameRegistry()): Buffer {
   if (clientProtocol === endpointProtocol) {
     throw new Error(`Same-protocol responses must not enter the conversion path: ${clientProtocol}`)
   }
@@ -64,14 +70,16 @@ export function convertResponseBody(clientProtocol: Protocol, endpointProtocol: 
   }
 
   const payload = JSON.parse(body.toString('utf8')) as Json
-  return Buffer.from(JSON.stringify(direction.convert(payload)))
+  return Buffer.from(JSON.stringify(direction.convert(payload, toolNames)))
 }
 
 /**
  * 流式响应转换器：喂入上游 SSE 文本增量，产出下游 SSE 文本。
  * 用法：const converter = createSseConverter(...); out = converter.push(chunk); out += converter.flush()
+ *
+ * `toolNames` 与 `convertResponseBody` 同理，必须是本次尝试请求转换时用的同一个实例。
  */
-export function createSseConverter(clientProtocol: Protocol, endpointProtocol: Protocol) {
+export function createSseConverter(clientProtocol: Protocol, endpointProtocol: Protocol, toolNames: ToolNameRegistry = new ToolNameRegistry()) {
   if (clientProtocol === endpointProtocol) {
     throw new Error(`Same-protocol streaming responses must not enter the conversion path: ${clientProtocol}`)
   }
@@ -82,7 +90,7 @@ export function createSseConverter(clientProtocol: Protocol, endpointProtocol: P
   }
 
   let buffer = ''
-  const events = direction.createSseConverter()
+  const events = direction.createSseConverter(toolNames)
 
   /** OpenAI 上游的 [DONE] 只是结束信号，不属于任何目标协议的事件模型。 */
   const isUpstreamDoneSignal = (data: string): boolean => endpointProtocol === 'openai-completions' && data.trim() === '[DONE]'

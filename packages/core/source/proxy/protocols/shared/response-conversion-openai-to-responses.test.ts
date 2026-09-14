@@ -5,6 +5,7 @@ import {
   openAiChunkToResponsesEvents,
   openAiResponseToResponses,
 } from './response-conversion-openai-to-responses'
+import { ToolNameRegistry } from './tool-name-registry'
 
 describe('openAiResponseToResponses', () => {
   it('converts text and cache usage to a completed response', () => {
@@ -81,6 +82,35 @@ describe('openAiResponseToResponses', () => {
     expect(result.output).toEqual([
       { id: 'chat_2_fc_0', type: 'function_call', status: 'completed', call_id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' },
       { id: 'chat_2_fc_1', type: 'function_call', status: 'completed', call_id: 'call_2', name: 'store', arguments: '{"v":1}' },
+    ])
+  })
+
+  it('restores namespace addressing for flattened tool names', () => {
+    const toolNames = new ToolNameRegistry()
+    toolNames.reserve('plain')
+    toolNames.flatten('crm', 'lookup')
+
+    const result = openAiResponseToResponses({
+      id: 'chat_2',
+      choices: [{
+        message: {
+          content: null,
+          tool_calls: [
+            { id: 'call_1', function: { name: 'crm__lookup', arguments: '{}' } },
+            // 顶层工具名查不到映射，原样输出
+            { id: 'call_2', function: { name: 'plain', arguments: '{}' } },
+            // 模型自己编的工具名也没有映射，不能被当成命名空间工具
+            { id: 'call_3', function: { name: 'hallucinated', arguments: '{}' } },
+          ],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    }, toolNames)
+
+    expect(result.output).toEqual([
+      { id: 'chat_2_fc_0', type: 'function_call', status: 'completed', call_id: 'call_1', name: 'lookup', namespace: 'crm', arguments: '{}' },
+      { id: 'chat_2_fc_1', type: 'function_call', status: 'completed', call_id: 'call_2', name: 'plain', arguments: '{}' },
+      { id: 'chat_2_fc_2', type: 'function_call', status: 'completed', call_id: 'call_3', name: 'hallucinated', arguments: '{}' },
     ])
   })
 
@@ -308,6 +338,31 @@ describe('openAiChunkToResponsesEvents', () => {
     })
     expect(tail[3].response).not.toHaveProperty('incomplete_details')
     expect(finishOpenAiToResponses(streamState)).toEqual([])
+  })
+
+  it('restores namespace addressing in the streamed function_call item', () => {
+    const toolNames = new ToolNameRegistry()
+    toolNames.flatten('crm', 'lookup')
+    const streamState = createOpenAiToResponsesState(toolNames)
+    const events = [
+      ...openAiChunkToResponsesEvents({ id: 'chat_2', choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'crm__lookup' } }] } }] }, streamState),
+      ...openAiChunkToResponsesEvents({
+        choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }, streamState),
+    ]
+
+    expect(events[2]).toEqual({
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { id: 'chat_2_fc_0', type: 'function_call', status: 'in_progress', call_id: 'call_1', name: 'lookup', namespace: 'crm', arguments: '' },
+    })
+    expect(events[4]).toMatchObject({ type: 'response.output_item.done', item: { name: 'lookup', namespace: 'crm' } })
+    expect(events[events.length - 1]).toMatchObject({
+      response: {
+        output: [{ id: 'chat_2_fc_0', type: 'function_call', status: 'completed', call_id: 'call_1', name: 'lookup', namespace: 'crm' }],
+      },
+    })
   })
 
   it('keeps the text item completed when a later truncation only affects the response', () => {

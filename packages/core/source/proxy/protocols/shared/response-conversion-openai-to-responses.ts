@@ -1,4 +1,5 @@
 import { asArray, asNumber, asObject, asString, type Json } from './conversion-utils'
+import type { ToolNameRegistry } from './tool-name-registry'
 
 /**
  * OpenAI Chat Completions 响应 → OpenAI Responses 响应。
@@ -9,6 +10,10 @@ import { asArray, asNumber, asObject, asString, type Json } from './conversion-u
  * 非流式返回 `output[]` 项列表，流式则要补齐 output_item / content_part /
  * output_text / function_call_arguments 的完整生命周期事件。转换器据此重建一套
  * 合法的 Responses 事件序列，而不是只翻译文本增量。
+ *
+ * 请求侧的 namespace 工具组被展平成顶层工具名（见 `tool-name-registry.ts`），
+ * 所以这里发 function_call 项时要拿着同一个 `toolNames` 把名字还原成
+ * `(namespace, name)` 寻址，否则客户端认不出这是它声明的哪个工具。
  */
 
 type ResponsesStatus = 'in_progress' | 'completed' | 'incomplete'
@@ -79,7 +84,17 @@ function messageItem(id: string, text: string, status: ResponsesStatus): Json {
   return { id, type: 'message', status, role: 'assistant', content: status === 'in_progress' ? [] : [outputTextPart(text)] }
 }
 
-export function openAiResponseToResponses(body: Json): Json {
+/**
+ * 工具名 → Responses 的 `(namespace, name)` 寻址。
+ * 请求转换登记过的命名空间工具才查得到；非命名空间工具、模型臆造的工具名原样输出。
+ */
+function restoreFunctionName(name: string, toolNames?: ToolNameRegistry): { name: string, namespace?: string } {
+  const identity = toolNames?.restore(name)
+  if (!identity) return { name }
+  return { name: identity.name, namespace: identity.namespace }
+}
+
+export function openAiResponseToResponses(body: Json, toolNames?: ToolNameRegistry): Json {
   const id = asString(body.id) ?? ''
   const first = asObject(asArray(body.choices)[0])
   const message = asObject(first?.message)
@@ -102,7 +117,7 @@ export function openAiResponseToResponses(body: Json): Json {
       type: 'function_call',
       status: itemStatus,
       call_id: asString(call.id) ?? '',
-      name,
+      ...restoreFunctionName(name, toolNames),
       arguments: asString(fn.arguments) ?? '',
     })
   })
@@ -149,9 +164,11 @@ export interface OpenAiToResponsesState {
   nextOutputIndex: number
   usage?: Json
   finishReason?: string
+  /** 本次尝试的请求上下文：把展平的工具名还原回 `(namespace, name)` */
+  toolNames?: ToolNameRegistry
 }
 
-export function createOpenAiToResponsesState(): OpenAiToResponsesState {
+export function createOpenAiToResponsesState(toolNames?: ToolNameRegistry): OpenAiToResponsesState {
   return {
     started: false,
     completed: false,
@@ -165,6 +182,19 @@ export function createOpenAiToResponsesState(): OpenAiToResponsesState {
     text: '',
     toolItems: new Map(),
     nextOutputIndex: 0,
+    ...(toolNames ? { toolNames } : {}),
+  }
+}
+
+/** 组装一个 function_call 输出项（名字已还原成 Responses 的寻址）。 */
+function functionCallItem(item: ResponsesToolItemState, status: ResponsesStatus, toolNames?: ToolNameRegistry): Json {
+  return {
+    id: item.itemId,
+    type: 'function_call',
+    status,
+    call_id: item.callId,
+    ...restoreFunctionName(item.name, toolNames),
+    arguments: item.arguments,
   }
 }
 
@@ -174,10 +204,7 @@ function buildOutput(state: OpenAiToResponsesState): Json[] {
   if (state.textStarted) items.push({ index: state.messageOutputIndex, item: messageItem(state.messageItemId, state.text, state.textStatus ?? fallbackStatus) })
   for (const item of state.toolItems.values()) {
     if (!item.added) continue
-    items.push({
-      index: item.outputIndex,
-      item: { id: item.itemId, type: 'function_call', status: item.status ?? fallbackStatus, call_id: item.callId, name: item.name, arguments: item.arguments },
-    })
+    items.push({ index: item.outputIndex, item: functionCallItem(item, item.status ?? fallbackStatus, state.toolNames) })
   }
   return items.sort((left, right) => left.index - right.index).map(entry => entry.item)
 }
@@ -221,7 +248,7 @@ function closeTextItem(state: OpenAiToResponsesState, events: Json[], status: Ex
   events.push({ type: 'response.output_item.done', output_index: state.messageOutputIndex, item: messageItem(state.messageItemId, state.text, status) })
 }
 
-function closeToolItem(item: ResponsesToolItemState, events: Json[], status: Exclude<ResponsesStatus, 'in_progress'>): void {
+function closeToolItem(item: ResponsesToolItemState, events: Json[], status: Exclude<ResponsesStatus, 'in_progress'>, toolNames?: ToolNameRegistry): void {
   if (!item.added || item.closed) return
   item.closed = true
   item.status = status
@@ -229,14 +256,14 @@ function closeToolItem(item: ResponsesToolItemState, events: Json[], status: Exc
   events.push({
     type: 'response.output_item.done',
     output_index: item.outputIndex,
-    item: { id: item.itemId, type: 'function_call', status, call_id: item.callId, name: item.name, arguments: item.arguments },
+    item: functionCallItem(item, status, toolNames),
   })
 }
 
 function closeOpenItems(state: OpenAiToResponsesState, events: Json[]): void {
   const status = terminalItemStatus(state.finishReason)
   closeTextItem(state, events, status)
-  for (const item of state.toolItems.values()) closeToolItem(item, events, status)
+  for (const item of state.toolItems.values()) closeToolItem(item, events, status, state.toolNames)
 }
 
 function complete(state: OpenAiToResponsesState, events: Json[]): void {
@@ -292,10 +319,12 @@ export function openAiChunkToResponsesEvents(chunk: Json, state: OpenAiToRespons
     }
     if (!item.added) {
       item.added = true
+      // 流式下名字可能被拆成多个 delta；能查到映射就还原，查不到就先给原始名字，
+      // 收尾的 output_item.done 里一定会是还原后的完整寻址。
       events.push({
         type: 'response.output_item.added',
         output_index: item.outputIndex,
-        item: { id: item.itemId, type: 'function_call', status: 'in_progress', call_id: item.callId, name: item.name, arguments: '' },
+        item: functionCallItem(item, 'in_progress', state.toolNames),
       })
     }
     const argumentsDelta = asString(asObject(call.function)?.arguments)
