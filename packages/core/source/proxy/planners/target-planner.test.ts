@@ -130,6 +130,22 @@ describe('端点匹配', () => {
     // 报错不能把原因说成「未开启协议转换」：转换是开的，拦住它的是形态。
     expect(result.detail).toContain('cross-shape conversion is out of scope')
   })
+
+  it('never plans an endpoint that has no address', async () => {
+    mocks.models = [candidate('model_alpha', [
+      { protocol: 'openai-responses', url: '' },
+    ])]
+
+    const result = await plan('openai-responses')
+
+    // 空地址是「这个协议还没填地址」（协议端点行的地址为空），不是「地址写错了」：
+    // 交给传输层只会得到一次必然失败的尝试，没有任何重试或健康冷却能救，所以按未配置处理。
+    expect(result.targets).toHaveLength(0)
+    expect(result.reason).toBe('no-available-provider')
+    // 也不能说成「没配这个协议」——它明明配了，只是没有地址。
+    expect(result.detail).toContain('bind the openai-responses protocol but have no upstream url configured')
+    expect(result.detail).toContain('prov_alpha/model_alpha-upstream')
+  })
 })
 
 describe('候选为空时的原因', () => {

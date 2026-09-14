@@ -1,5 +1,6 @@
 import type { RequestLogEntryAttempt } from '@common/schemas'
 import type { UiCatalogKey } from '@common/i18n/catalogs'
+import { PROTOCOL_DISPLAY_NAMES } from '@common/protocols'
 import type { AppTranslator } from '@/i18n/provider'
 
 /**
@@ -7,13 +8,13 @@ import type { AppTranslator } from '@/i18n/provider'
  *
  * 用全名而不是缩写：`OpenAI Completions` / `OpenAI Responses` 是这两个接口的正式叫法，
  * `Responses`、`OpenAI` 这类缩写要靠读者自己补回被省掉的那一段，而协议列本来就是给
- * 「这次请求走的是哪条接口」看的。协议名是供应商的产品名，两种界面语言下写法相同，因此不进翻译目录。
+ * 「这次请求走的是哪条接口」看的。协议名是供应商的产品名，两种界面语言下写法相同，因此不进翻译目录；
+ * 名字本身取自契约层（见 `PROTOCOL_DISPLAY_NAMES`），与服务端错误文案里的叫法同源。
+ *
+ * 类型放宽成 `Record<string, string>` 是因为这里查的是日志里的原始值：老日志可能带着
+ * 已经不认识的协议名，调用方自己拿 `?? 原值` 兜底。
  */
-export const PROTOCOL_LABEL: Record<string, string> = {
-  'openai-completions': 'OpenAI Completions',
-  'openai-responses': 'OpenAI Responses',
-  'anthropic-messages': 'Anthropic Messages',
-}
+export const PROTOCOL_LABEL: Record<string, string> = { ...PROTOCOL_DISPLAY_NAMES }
 
 /** 状态只存文案 key：同一枚徽标在两种界面语言下都要读得通。 */
 export const STATUS_LABEL_KEY: Record<string, UiCatalogKey> = {

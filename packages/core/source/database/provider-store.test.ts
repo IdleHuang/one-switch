@@ -18,6 +18,7 @@ import {
   updateProvider,
   upsertProviderSetting,
 } from './provider-store'
+import { createProviderModelRoute, getProviderModelRoute, listProviderModelRoutesByProvider } from './model-store'
 
 let temporaryDirectory: string
 
@@ -94,6 +95,92 @@ describe('provider store', () => {
 
     await deleteProviderSetting(provider.id, 'custom.label')
     expect(await getProviderSetting(provider.id, 'custom.label')).toBeUndefined()
+  })
+
+  it('keeps an addressless protocol carrier endpoint when provider endpoints are replaced', async () => {
+    const provider = await createProvider({
+      name: 'Carrier Provider',
+      apiKeyReference: 'key_carrier_provider',
+      timeoutMilliseconds: 30_000,
+      enabled: true,
+    })
+    // 只有协议、没有地址的载体行（模型绑定协议的落脚点，见 `./model-store.ts`）。
+    await createProviderEndpoint({ providerId: provider.id, protocol: 'openai-responses', url: '', enabled: true })
+    await createProviderEndpoint({ providerId: provider.id, protocol: 'anthropic-messages', url: 'https://api.example.com/anthropic', enabled: true })
+
+    // 用户只填了一个协议就保存：没提到的行被停用（地址是用户填过的可见状态），
+    // 但载体行不在「全集」的管辖范围内——停用它会让模型侧的绑定凭空消失。
+    await replaceProviderEndpoints(provider.id, { 'openai-completions': 'https://api.example.com/v1' })
+
+    expect((await listProviderEndpoints(provider.id)).map(({ protocol, url, enabled }) => ({ protocol, url, enabled }))).toEqual([
+      { protocol: 'anthropic-messages', url: 'https://api.example.com/anthropic', enabled: false },
+      { protocol: 'openai-completions', url: 'https://api.example.com/v1', enabled: true },
+      { protocol: 'openai-responses', url: '', enabled: true },
+    ])
+  })
+
+  it('refuses to drop a provider address that models still fall back to', async () => {
+    const provider = await createProvider({
+      name: 'Address In Use',
+      apiKeyReference: 'key_address_in_use',
+      timeoutMilliseconds: 30_000,
+      enabled: true,
+    })
+    await replaceProviderEndpoints(provider.id, { 'openai-completions': 'https://api.example.com/v1' })
+    // 模型自己没写地址 ⇒ 它的上游地址就是供应商这一层的地址。
+    await createProviderModelRoute({
+      providerId: provider.id,
+      modelName: 'gpt-4o-mini',
+      priority: 1,
+      endpoints: [{ protocol: 'openai-completions', endpointUrl: '', customAuthHeader: null, protocolConversionEnabled: false }],
+    })
+
+    // 用户以为只是「把供应商地址清掉」，实际会连带撤掉那个模型的地址。
+    await expect(replaceProviderEndpoints(provider.id, {})).rejects.toMatchObject({
+      code: 'ENDPOINT_URL_IN_USE',
+      statusCode: 400,
+      details: { providerName: 'Address In Use', protocols: 'OpenAI Completions', count: 1, models: 'gpt-4o-mini' },
+    })
+
+    // 事务回滚：地址还在，模型仍然可用。
+    expect(await listProviderEndpoints(provider.id)).toEqual([
+      expect.objectContaining({ protocol: 'openai-completions', url: 'https://api.example.com/v1', enabled: true }),
+    ])
+    expect((await getProviderModelRoute((await listProviderModelRoutesByProvider(provider.id))[0].id))!.endpoints).toEqual([
+      expect.objectContaining({ protocol: 'openai-completions', endpointUrl: 'https://api.example.com/v1' }),
+    ])
+  })
+
+  it('refuses to drop a provider protocol that models are still attached to', async () => {
+    const provider = await createProvider({
+      name: 'Protocol In Use',
+      apiKeyReference: 'key_protocol_in_use',
+      timeoutMilliseconds: 30_000,
+      enabled: true,
+    })
+    await replaceProviderEndpoints(provider.id, { 'openai-completions': 'https://api.example.com/v1' })
+    // 模型自带地址，也不用供应商的默认值——但端点的 `enabled` 是协议级开关，
+    // 撤掉供应商这一行照样会让模型读不出这个协议（`mapProviderModelRoute` 要求端点 enabled）。
+    await createProviderModelRoute({
+      providerId: provider.id,
+      modelName: 'gpt-4o-mini',
+      priority: 1,
+      endpoints: [{ protocol: 'openai-completions', endpointUrl: 'https://api.example.com/v1/custom', customAuthHeader: null, protocolConversionEnabled: false }],
+    })
+
+    await expect(replaceProviderEndpoints(provider.id, {})).rejects.toMatchObject({
+      code: 'ENDPOINT_URL_IN_USE',
+      statusCode: 400,
+      details: { providerName: 'Protocol In Use', protocols: 'OpenAI Completions', count: 1, models: 'gpt-4o-mini' },
+    })
+
+    // 事务回滚：地址与模型绑定都没被改动。
+    expect(await listProviderEndpoints(provider.id)).toEqual([
+      expect.objectContaining({ protocol: 'openai-completions', url: 'https://api.example.com/v1', enabled: true }),
+    ])
+    expect((await getProviderModelRoute((await listProviderModelRoutesByProvider(provider.id))[0].id))!.endpoints).toEqual([
+      expect.objectContaining({ endpointUrl: 'https://api.example.com/v1/custom' }),
+    ])
   })
 
   it('soft-deletes providers and keeps deleted rows available when requested', async () => {

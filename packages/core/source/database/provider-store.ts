@@ -1,7 +1,8 @@
-import { and, desc, eq, inArray, isNull, notInArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, ne, notInArray } from 'drizzle-orm'
 import { ProviderEndpointSchema, ProviderSchema, ProviderSettingSchema } from '@common/schemas'
 import type { Provider, ProviderEndpoint, ProviderSetting } from '@common/schemas'
 import { generateId, now } from '@common/utils'
+import { endpointUrlInUseError } from '../errors'
 import { getConfigDb } from './index'
 import {
   providerEndpoints,
@@ -149,17 +150,60 @@ export async function replaceProviderEndpoints(providerId: string, endpoints: Pa
  * `replaceProviderEndpoints` 只接受「启用的 protocol → url」映射，表达不了「这一行地址还在，只是被
  * 停用了」——那条行带着用户填过的 URL，是用户可见状态而不是缓存。供应商导入导出需要完整往返，
  * 所以这里额外接收 `enabled`。传入的端点集合即该供应商的端点全集：没提到的协议一律置为禁用。
+ *
+ * **例外是地址为空的协议载体行。** 这类行是模型绑定协议的落脚点（见 `./model-store.ts`），
+ * 它不代表用户配过什么、也没有地址可以被停用，因此不在「全集」的管辖范围内：供应商配置保存时
+ * 不会把它连带停用，模型那侧的绑定也不会因为一次无关的保存而消失。
+ *
+ * 写之前还要确认这次改动不会**连累**别的模型。端点行的 `enabled` 是协议级开关：读取侧
+ * （`mapProviderModelRoute`）要求它 `= true`，所以清空或停用一个协议的默认地址，等于把该协议
+ * 从所有正挂着它的模型上一起撤掉——**哪怕模型自己在绑定上写了地址也一样**。这是用户完全看不见的
+ * 连带影响，所以命中时直接抛错，一个字节都不落库（见 `endpointUrlInUseError`）。
+ *
+ * `allowDetachingModels` 给「整体替换」场景用（供应商包导入）：那次调用连模型一起换掉了，
+ * 不存在「只改了供应商、模型莫名失效」的错觉，所以不该被这道守卫挡在门外。
  */
-export async function replaceProviderEndpointStates(providerId: string, endpoints: Array<Pick<ProviderEndpoint, 'protocol' | 'url' | 'enabled'>>): Promise<ProviderEndpoint[]> {
+type ReplaceProviderEndpointStatesOptions = {
+  allowDetachingModels?: boolean
+}
+
+export async function replaceProviderEndpointStates(providerId: string, endpoints: Array<Pick<ProviderEndpoint, 'protocol' | 'url' | 'enabled'>>, options: ReplaceProviderEndpointStatesOptions = {}): Promise<ProviderEndpoint[]> {
   const db = getConfigDb()
   const time = now()
   db.transaction(transaction => {
     const activeRows = transaction.select().from(providerEndpoints)
       .where(and(eq(providerEndpoints.providerId, providerId), isNull(providerEndpoints.deletedTime))).all()
     const activeByProtocol = new Map(activeRows.map(row => [row.protocol, row]))
+
+    // 保存后仍然可用的协议：地址非空**且**启用。判断口径必须与读取侧完全一致，否则守卫会在
+    // 真出事的时候放行。
+    const usableProtocols = new Set<string>(endpoints.filter(entry => entry.url.trim().length > 0 && entry.enabled).map(entry => entry.protocol))
+    const losingAddress = activeRows.filter(row => row.enabled && row.url.trim().length > 0 && !usableProtocols.has(row.protocol))
+    if (!options.allowDetachingModels && losingAddress.length > 0) {
+      const affectedIds = losingAddress.map(row => row.id)
+      // 只要有启用中的绑定挂在这些端点上就拦：供应商这一层一撤，绑定再有自己的地址也读不出来。
+      const dependents = transaction.select({ endpointId: providerModelEndpoints.providerEndpointId, modelName: providerModels.modelName })
+        .from(providerModelEndpoints)
+        .innerJoin(providerModels, eq(providerModels.id, providerModelEndpoints.providerModelId))
+        .where(and(
+          inArray(providerModelEndpoints.providerEndpointId, affectedIds),
+          eq(providerModelEndpoints.enabled, true),
+          isNull(providerModelEndpoints.deletedTime),
+          isNull(providerModels.deletedTime),
+        )).all()
+      const blockedProtocols = losingAddress
+        .filter(row => dependents.some(item => item.endpointId === row.id))
+        .map(row => row.protocol as ProviderEndpoint['protocol'])
+      if (blockedProtocols.length > 0) {
+        const providerName = transaction.select({ name: providers.name }).from(providers).where(eq(providers.id, providerId)).get()?.name ?? providerId
+        throw endpointUrlInUseError(providerName, blockedProtocols, [...new Set(dependents.map(item => item.modelName))])
+      }
+    }
+
     const retainedProtocols: string[] = []
     for (const { protocol, url, enabled } of endpoints) {
       const trimmed = url.trim()
+      // 空地址不进入「全集」：它表达的是「还没有默认地址」（见上面的例外说明）。
       if (!trimmed) continue
       retainedProtocols.push(protocol)
       const active = activeByProtocol.get(protocol)
@@ -171,6 +215,7 @@ export async function replaceProviderEndpointStates(providerId: string, endpoint
       .where(and(
         eq(providerEndpoints.providerId, providerId),
         isNull(providerEndpoints.deletedTime),
+        ne(providerEndpoints.url, ''),
         retainedProtocols.length === 0 ? undefined : notInArray(providerEndpoints.protocol, retainedProtocols),
       )).run()
   })

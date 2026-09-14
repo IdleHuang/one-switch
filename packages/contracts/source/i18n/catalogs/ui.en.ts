@@ -1209,6 +1209,8 @@ export const uiEn = {
   'errors.DATABASE_UNAVAILABLE': 'Local database is unavailable',
   'errors.SECRET_STORE_UNAVAILABLE': 'System keychain is unavailable',
   'errors.TRANSPORT_NOT_IMPLEMENTED': 'This transport is not implemented yet',
+  'errors.ENDPOINT_URL_MISSING': 'No upstream url is configured for {protocols} on provider {providerName}: set the address on the provider, or give the model a custom address',
+  'errors.ENDPOINT_URL_IN_USE': 'The {protocols} protocol on provider {providerName} is still used by {count} model(s) ({models}): without an address here those models lose the protocol too — give the models their own address first, or keep this address',
 
   // ========== 设置页 ==========
   'settings.title': 'Settings',

@@ -122,7 +122,14 @@ export const ProviderEndpointSchema = z.object({
   id: z.string(),
   providerId: z.string().startsWith('prov_'),
   protocol: ProtocolSchema,
-  url: z.string().url(),
+  /**
+   * 这个协议在供应商这一层的默认地址。
+   *
+   * **空串表示「还没有默认地址」**，不是缺字段：模型先绑定了协议、用户还没在供应商上填地址时
+   * 就是这种状态。它是协议的载体，不能被当成可用地址（路由、探测、模型列表都不认它）；
+   * 模型自己也没写地址时保存会直接报 `ENDPOINT_URL_MISSING`，而不是存下一个打不出去的模型。
+   */
+  url: z.string().url().or(z.literal('')),
   enabled: z.boolean().default(true),
   createdTime: z.number().int(),
   updatedTime: z.number().int(),
@@ -566,6 +573,9 @@ export const ApiErrorCodeSchema = z.enum([
   'RESOURCE_NOT_FOUND',
   'DUPLICATE_RESOURCE',
   'RESOURCE_CONFLICT',
+  // 供应商/模型端点配置：保存与探测时就能判定，不必等到发出请求
+  'ENDPOINT_URL_MISSING',
+  'ENDPOINT_URL_IN_USE',
   // 存储
   'DATABASE_UNAVAILABLE',
   'SECRET_STORE_UNAVAILABLE',

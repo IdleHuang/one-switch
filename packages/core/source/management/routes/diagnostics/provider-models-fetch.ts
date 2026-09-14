@@ -4,7 +4,7 @@ import { ProtocolSchema, type Protocol } from '@common/schemas'
 import { getProvider, listProviderEndpoints } from '@server/database/provider-store'
 import { getSecretStore } from '@server/infrastructure/secrets/secret-store'
 import { coreNetworkClient } from '@server/infrastructure/network/core-network'
-import { createProtocolAuthHeaders } from '@common/protocols'
+import { createProtocolAuthHeaders, PROTOCOL_DISPLAY_NAMES } from '@common/protocols'
 import { HttpRouter } from '@server/http-router'
 import type { ManagementHandler } from '../../core/response'
 import { sendError, sendSuccess } from '../../core/response'
@@ -46,6 +46,7 @@ async function handleFetchProviderModels(req: IncomingMessage, res: ServerRespon
   let baseUrl = input.baseUrl ?? ''
   let apiKey = input.apiKey ?? null
   let timeout = 10000
+  let providerName = ''
 
   if (input.providerId) {
     const provider = await getProvider(input.providerId)
@@ -53,16 +54,24 @@ async function handleFetchProviderModels(req: IncomingMessage, res: ServerRespon
       sendError(res, 'NOT_FOUND', `Provider not found: ${input.providerId}`, 404, { providerId: input.providerId })
       return
     }
+    providerName = provider.name
     if (!baseUrl) {
       const endpoint = (await listProviderEndpoints(provider.id)).find(candidate => candidate.enabled && candidate.protocol === input.protocol)
-      baseUrl = endpoint?.url ?? ''
+      // 空串是「还没有默认地址」（供应商端点的协议载体行），不能当成一个可用地址去探测。
+      baseUrl = endpoint?.url.trim() ?? ''
     }
     if (!apiKey) apiKey = await getSecretStore().get(provider.apiKeyReference)
     timeout = provider.timeoutMilliseconds
   }
 
+  // 没有地址是「用户还没配」，不是「上游挂了」：给一句能直接照做的报错，不要用别的错误码含混过去
+  // （`VALIDATION_ERROR` 在界面上是一句「输入内容不合法」，等于没说），更不要拿占位地址去探测。
+  // 走到这里 `providerId` 一定存在：`baseUrl` 有值时进不来，而 schema 要求两者至少有其一。
   if (!baseUrl) {
-    sendError(res, 'VALIDATION_ERROR', 'No usable upstream base URL was resolved', 400)
+    sendError(res, 'ENDPOINT_URL_MISSING', `Provider ${providerName} has no upstream url for ${input.protocol}`, 400, {
+      providerName,
+      protocols: PROTOCOL_DISPLAY_NAMES[input.protocol],
+    })
     return
   }
 

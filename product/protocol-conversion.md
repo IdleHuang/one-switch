@@ -92,7 +92,8 @@
 ## 数据模型变更
 
 - 新增 `provider_endpoints`：Provider 按原生协议维护默认端点。
-- `provider_model_endpoints`：将 ProviderModel 绑定到 ProviderEndpoint，可选配置模型专属 `url`；为空时回退到 `provider_endpoints.url`。
+- `provider_model_endpoints`：将 ProviderModel 绑定到 ProviderEndpoint，可选配置模型专属 `url`；为空时回退到 `provider_endpoints.url`，供应商端点也没有地址时保存会被拒绝（`ENDPOINT_URL_MISSING`）。
+- 反向同样受保护：撤销或停用供应商上某个协议的地址会连带摘掉所有挂在该协议上的模型（哪怕模型自己有地址），因此供应商保存也会拒绝（`ENDPOINT_URL_IN_USE`）。
 - 新增 `protocol_converters`：按 ProviderModel 端点绑定和客户端协议配置 `enabled`；目标 upstream 协议通过 `provider_model_endpoints.providerEndpointId -> provider_endpoints.protocol` 得到。
 - `request_logs.clientProtocol` 记录客户端协议；请求级不再保存 upstream 协议摘要；每次 attempt 的真实 upstream 协议必须记录在 `request_attempts.upstreamProtocol`，与客户端协议不同即表示发生了转换。
 - Token 和其他用量按视角保存到 `request_usages`（请求级）与 `attempt_usages`（尝试级），原始 `usage` 报文以 `type = 'raw'` 的行保存在同一组表里；不再有通用指标 KV 表。

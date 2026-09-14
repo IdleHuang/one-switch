@@ -96,13 +96,23 @@ export function buildUpstreamTarget(candidate: ModelWithProvider, protocol: Prot
  *
  * 判据是**端点自己的地址**，不是客户端的偏好：换成客户端传什么都要看这个端点能不能用，
  * 客户端说要 WS 也不会让一个 `https://` 端点变成转换候选。
+ *
+ * **没有地址的端点不算端点。** 供应商端点行可以只作为「协议载体」存在（地址为空串，
+ * 见 `../../database/model-store.ts`），供应商包导入导出时也会短暂出现这种行。它一旦被选中，
+ * 交给传输层的就是一个空地址——那既不是「写错的地址」，也没有任何重试或健康冷却能救，
+ * 只会让这个候选白白消耗一次尝试。没有可用地址就当这个协议没配。
  */
 function selectEndpoint(model: ProviderModelRoute, protocol: Protocol): ProviderModelRouteEndpoint | undefined {
   const native = findEndpoint(model, protocol)
-  if (native) return native
+  if (native && isDialableEndpoint(native)) return native
   const convertible = findConvertibleEndpoint(model, protocol)
-  if (convertible && isWebSocketEndpoint(convertible.endpointUrl)) return undefined
+  if (!convertible || !isDialableEndpoint(convertible)) return undefined
+  if (isWebSocketEndpoint(convertible.endpointUrl)) return undefined
   return convertible
+}
+
+function isDialableEndpoint(endpoint: ProviderModelRouteEndpoint): boolean {
+  return endpoint.endpointUrl.trim().length > 0
 }
 
 /**
@@ -146,6 +156,15 @@ function describeCandidates(availableModels: ModelWithProvider[], protocol: Prot
     .map(endpoint => endpoint.protocol)))]
   if (crossShapeProtocols.length > 0) {
     return `Available provider models do not natively configure the ${protocol} protocol, the convertible endpoints are WebSocket and cross-shape conversion is out of scope (convertible protocols: ${crossShapeProtocols.join(', ')})${suffix}`
+  }
+
+  // 「绑了协议但没填地址」也得单独说：说成「没配这个协议」会和后面那行 configured protocols 自相矛盾，
+  // 而那行恰恰会把这个协议列出来。
+  const addressless = availableModels
+    .filter(candidate => candidate.model.endpoints.some(endpoint => endpoint.protocol === protocol && !isDialableEndpoint(endpoint)))
+    .map(candidate => `${candidate.provider.name}/${candidate.model.modelName}`)
+  if (addressless.length > 0) {
+    return `Available provider models bind the ${protocol} protocol but have no upstream url configured: ${addressless.join(', ')}`
   }
 
   const configuredProtocols = [...new Set(availableModels.flatMap(candidate => candidate.model.endpoints.map(endpoint => endpoint.protocol)))]

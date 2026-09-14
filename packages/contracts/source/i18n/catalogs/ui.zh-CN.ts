@@ -1207,6 +1207,8 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'errors.DATABASE_UNAVAILABLE': '本地数据库不可用',
   'errors.SECRET_STORE_UNAVAILABLE': '系统密钥库不可用',
   'errors.TRANSPORT_NOT_IMPLEMENTED': '该传输形态尚未实现',
+  'errors.ENDPOINT_URL_MISSING': '供应商「{providerName}」还没有配置 {protocols} 协议的上游地址：请先在供应商里填写该协议的地址，或者给模型填写自定义地址',
+  'errors.ENDPOINT_URL_IN_USE': '供应商「{providerName}」的 {protocols} 协议还有 {count} 个模型在用（{models}）：这里没有可用的地址，这些模型会一起失去该协议，请先给模型填写自定义地址，或者保留这个地址',
 
   // ========== 设置页 ==========
   'settings.title': '设置',

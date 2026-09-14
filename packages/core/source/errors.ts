@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import type { ApiErrorCode } from '@common/schemas'
+import { PROTOCOL_DISPLAY_NAMES } from '@common/protocols'
+import type { ApiErrorCode, Protocol } from '@common/schemas'
 
 /**
  * 服务端错误码就是 §`ApiErrorCodeSchema` 那一套：
@@ -67,4 +68,50 @@ export function getErrorParams(error: AppError): ErrorParams | undefined {
 
 export function isErrorCode(error: unknown, code: ErrorCode): boolean {
   return error instanceof AppError && error.code === code
+}
+
+/**
+ * 「这个协议没有可用的上游地址」。
+ *
+ * 供应商与模型两层都没地址时必须**报错**，不能编一个占位地址顶上：占位值会被当成用户自己
+ * 配的地址展示在供应商配置里、被模型列表探测、被真实请求打出去，而用户看到的只是一串自己
+ * 没写过的 URL —— 完全不知道问题出在哪。
+ *
+ * 供应商名与协议展示名作为 `errorParams` 出去，界面按 `errors.ENDPOINT_URL_MISSING` 拼文案；
+ * 服务端自己那句只是给日志与外部工具看的英文诊断。
+ */
+export function endpointUrlMissingError(providerName: string, protocols: readonly Protocol[]): AppError {
+  return new AppError(
+    'ENDPOINT_URL_MISSING',
+    400,
+    `Provider ${providerName} has no upstream url for ${protocols.join(', ')}`,
+    { details: { providerName, protocols: protocols.map(protocol => PROTOCOL_DISPLAY_NAMES[protocol]).join(', ') } },
+  )
+}
+
+/**
+ * 「这个协议还有模型在用，不能就这么撤掉」。
+ *
+ * 端点行的 `enabled` 是协议级开关（读取侧要求它为 true），所以把供应商那一层的地址清空或停用，
+ * 等于把该协议从所有正挂着它的模型上一起撤掉——**哪怕模型自己在绑定上写了地址也一样**。
+ * 用户以为自己只改了供应商配置，实际却让一批模型没法用了，而且界面上没有任何提示。
+ *
+ * 所以这里同样在事务里拒绝，把「哪些模型在用」一并说清楚，让用户自己决定是先给模型填地址
+ * 还是保留这个地址。与 `endpointUrlMissingError` 分开成两个错误码，是因为两边的下一步动作不同：
+ * 那边要去**补**地址，这边要先去**拆**依赖（或放弃这次修改）。
+ */
+export function endpointUrlInUseError(providerName: string, protocols: readonly Protocol[], modelNames: readonly string[]): AppError {
+  return new AppError(
+    'ENDPOINT_URL_IN_USE',
+    400,
+    `Provider ${providerName} still has models on ${protocols.join(', ')} (${modelNames.length}): ${modelNames.join(', ')}`,
+    {
+      details: {
+        providerName,
+        protocols: protocols.map(protocol => PROTOCOL_DISPLAY_NAMES[protocol]).join(', '),
+        count: modelNames.length,
+        models: modelNames.join(', '),
+      },
+    },
+  )
 }
