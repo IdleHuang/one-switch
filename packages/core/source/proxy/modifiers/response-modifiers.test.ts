@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Frame, FrameSink, HeadFrame, ModifierContext } from '@server/proxy/contracts'
 import type { RequestRewriteRule } from '@common/schemas'
-import type { NativeProtocolAdapter, ProtocolAdapter, ProtocolConversionAdapter } from '@server/proxy/protocols/shared/types'
+import type { ProtocolAdapter } from '@server/proxy/protocols/shared/types'
+import type { ProtocolConversionAdapter, NativeProtocolAdapter } from '@server/proxy/protocols/shared/types'
+import { ToolNameRegistry } from '@server/proxy/protocols/shared/tool-name-registry'
 import { pipeFrames } from '@server/proxy/kernel/frame-pipe'
 import { selectCandidates } from '@server/proxy/kernel/modifier-selection'
 import { createResponseModifiers, type AttemptRouting } from './response-modifiers'
@@ -125,6 +127,7 @@ async function run(input: RunInput) {
     adapter: input.adapter,
     routing: input.routing,
     rules: input.rules ?? [],
+    toolNames: new ToolNameRegistry(),
     onRewriteEvaluated,
     onConversionError: vi.fn(),
   })
@@ -205,6 +208,7 @@ describe('response rewrite modifier', () => {
       adapter: nativeAdapter(),
       routing: DELIVERED,
       rules: [],
+      toolNames: new ToolNameRegistry(),
       onRewriteEvaluated: vi.fn(),
       onConversionError: vi.fn(),
     })

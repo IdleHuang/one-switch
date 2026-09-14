@@ -1,6 +1,7 @@
 import type { Frame, HeadFrame, Modifier, ModifierContext } from '@server/proxy/contracts'
 import type { RequestRewriteRule } from '@common/schemas'
 import type { ProtocolAdapter, ProtocolConversionAdapter, StreamConverter } from '@server/proxy/protocols/shared/types'
+import type { ToolNameRegistry } from '@server/proxy/protocols/shared/tool-name-registry'
 import { isEventStreamResponse } from '@server/proxy/adapters/http-response-sink'
 import { createDownstreamHeaders } from '@server/proxy/response/headers'
 import { applyRequestRewriteRules } from '@server/proxy/request-rewrite/request-rewrite-engine'
@@ -24,6 +25,8 @@ export interface ResponseModifierOptions {
   adapter: ProtocolAdapter
   routing: AttemptRouting
   rules: readonly RequestRewriteRule[]
+  /** 本次尝试的请求上下文，与请求侧共享同一个实例；响应体转换靠它还原展平过的工具名。 */
+  toolNames: ToolNameRegistry
   onRewriteEvaluated(result: RewriteEvaluation): void
   onConversionError(error: Error): void
 }
@@ -105,7 +108,7 @@ function createConversionModifier(options: ResponseModifierOptions): Modifier {
     const raw = Buffer.from(wholeBody)
     // 整体转换只在拿到完整正文后做一次；转不动就退回原文，绝不让客户端收到空响应。
     try {
-      return [{ kind: 'data', body: adapter.convertResponse(raw) }, frame]
+      return [{ kind: 'data', body: adapter.convertResponse(raw, options.toolNames) }, frame]
     } catch (error) {
       options.onConversionError(error instanceof Error ? error : new Error(String(error)))
       return [{ kind: 'data', body: raw }, frame]
@@ -127,7 +130,7 @@ function createConversionModifier(options: ResponseModifierOptions): Modifier {
   function requireConverter(adapter: ProtocolConversionAdapter): StreamConverter {
     const existing = streamConverter
     if (existing) return existing
-    const created = adapter.createStreamConverter()
+    const created = adapter.createStreamConverter(options.toolNames)
     streamConverter = created
     return created
   }

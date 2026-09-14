@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { responsesToOpenAiRequest } from './request-conversion-responses-to-openai'
+import { ToolNameRegistry } from './tool-name-registry'
 
 describe('responsesToOpenAiRequest', () => {
   it('converts instructions, text, images, and request options', () => {
@@ -146,6 +147,95 @@ describe('responsesToOpenAiRequest', () => {
       prompt_cache_key: 'key',
       prompt_cache_retention: '24h',
     })
+  })
+
+  it('flattens namespace tool groups and registers the reverse mapping', () => {
+    const toolNames = new ToolNameRegistry()
+    const result = responsesToOpenAiRequest({
+      input: [
+        { type: 'function_call', call_id: 'call_1', name: 'lookup', namespace: 'crm', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call_1', namespace: 'crm', output: 'ok' },
+      ],
+      tools: [
+        { type: 'namespace', name: 'crm', description: 'CRM tools', tools: [{ type: 'function', name: 'lookup', description: 'Look up' }] },
+        { type: 'function', name: 'plain', parameters: { type: 'object' } },
+      ],
+    }, 'm', toolNames)
+
+    expect(result.tools).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: 'crm__lookup',
+          // 命名空间描述拼进组内工具的描述：Chat 没有分组维度，不拼这段语义就丢了
+          description: 'CRM tools\n\nLook up',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+      { type: 'function', function: { name: 'plain', description: '', parameters: { type: 'object' } } },
+    ])
+    // 历史里的 namespace 限定调用要换成模型看到过的展平名，`call_id` 关联不受影响
+    expect(result.messages).toEqual([
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'crm__lookup', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
+    ])
+    expect(toolNames.restore('crm__lookup')).toEqual({ namespace: 'crm', name: 'lookup' })
+    // 顶层工具名原样保留，不在映射表里
+    expect(toolNames.restore('plain')).toBeUndefined()
+  })
+
+  it('keeps namespace-qualified calls consistent with the flattened tool definitions', () => {
+    const result = responsesToOpenAiRequest({
+      input: [{ type: 'function_call', call_id: 'call_1', name: 'lookup', namespace: 'crm' }],
+      tools: [{ type: 'namespace', name: 'crm', tools: [{ type: 'function', name: 'lookup' }] }],
+    }, 'm')
+
+    const messages = result.messages as Array<{ tool_calls: Array<{ function: { name: string } }> }>
+    const tools = result.tools as Array<{ function: { name: string } }>
+    expect(messages[0].tool_calls[0].function.name).toBe('crm__lookup')
+    expect(tools[0].function.name).toBe('crm__lookup')
+  })
+
+  it('keeps same-named tools from different namespaces apart', () => {
+    const result = responsesToOpenAiRequest({
+      input: 'hi',
+      tools: [
+        { type: 'namespace', name: 'crm', tools: [{ type: 'function', name: 'lookup' }] },
+        { type: 'namespace', name: 'billing', tools: [{ type: 'function', name: 'lookup' }] },
+      ],
+    }, 'm')
+
+    expect(result.tools).toEqual([
+      { type: 'function', function: { name: 'crm__lookup', description: '', parameters: { type: 'object', properties: {} } } },
+      { type: 'function', function: { name: 'billing__lookup', description: '', parameters: { type: 'object', properties: {} } } },
+    ])
+  })
+
+  it('lets a top-level tool name win over an identical flattened name', () => {
+    const result = responsesToOpenAiRequest({
+      input: 'hi',
+      tools: [
+        // 顶层工具名必须原样保留，因此展平结果让位
+        { type: 'function', name: 'crm__lookup', parameters: { type: 'object' } },
+        { type: 'namespace', name: 'crm', tools: [{ type: 'function', name: 'lookup' }] },
+      ],
+    }, 'm')
+
+    expect((result.tools as Array<{ function: { name: string } }>).map(tool => tool.function.name))
+      .toEqual(['crm__lookup', 'crm__lookup__2'])
+  })
+
+  it('drops non-function members of a namespace and skips malformed groups', () => {
+    const result = responsesToOpenAiRequest({
+      input: 'hi',
+      tools: [
+        { type: 'namespace', tools: [{ type: 'function', name: 'orphan' }] },
+        { type: 'namespace', name: 'crm', tools: [null, { type: 'custom', name: 'raw' }, { type: 'function' }] },
+      ],
+    }, 'm')
+
+    // 无名的命名空间整组跳过；组内非 function 成员与无名 function 各自丢弃
+    expect(result).not.toHaveProperty('tools')
   })
 
   it('maps every tool choice variant and simple text format', () => {

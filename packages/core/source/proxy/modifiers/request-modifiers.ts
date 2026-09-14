@@ -2,6 +2,7 @@ import type { Modifier, ModifierContext } from '@server/proxy/contracts'
 import type { ProtocolAuthHeaders } from '@common/protocols'
 import type { RequestRewriteRule } from '@common/schemas'
 import type { ProtocolAdapter } from '@server/proxy/protocols/shared/types'
+import type { ToolNameRegistry } from '@server/proxy/protocols/shared/tool-name-registry'
 import type { RequestContext } from '@server/proxy/request/request-context'
 import { createUpstreamRequestHeaders } from '@server/proxy/response/headers'
 import { applyRequestRewriteRules } from '@server/proxy/request-rewrite/request-rewrite-engine'
@@ -27,6 +28,11 @@ export interface RequestModifierOptions {
    */
   auth: ProtocolAuthHeaders
   rules: readonly RequestRewriteRule[]
+  /**
+   * 本次尝试的请求上下文，与响应侧共享同一个实例：请求体转换在里面登记
+   * 「命名空间工具 ↔ 目标协议工具名」的对应关系（见 `tool-name-registry.ts`）。
+   */
+  toolNames: ToolNameRegistry
   onRewriteEvaluated(result: RewriteEvaluation): void
 }
 
@@ -75,7 +81,7 @@ function createBodyPrepareModifier(options: RequestModifierOptions): Modifier {
     match: () => true,
     applyBuffered(_context: ModifierContext, payload) {
       // 适配器读的是客户端原文，不是上一步的产物：模型改写与协议转换都以原始请求为输入。
-      return { body: options.adapter.prepareRequest(options.requestContext, options.providerModelName), headers: payload.headers }
+      return { body: options.adapter.prepareRequest(options.requestContext, options.providerModelName, options.toolNames), headers: payload.headers }
     },
   }
 }

@@ -5,6 +5,7 @@ import { resolveProtocolAuthHeaders } from '@common/protocols'
 import { getSecretStore } from '@server/infrastructure/secrets/secret-store'
 import { createRequestContext, type RequestContext } from '@server/proxy/request/request-context'
 import { protocolAdapters } from '@server/proxy/protocols/registry'
+import { ToolNameRegistry } from '@server/proxy/protocols/shared/tool-name-registry'
 import type { ProxyObservationHooks } from '@server/proxy/observability/hooks'
 import { runAttempts } from '@server/proxy/execution/attempt-runner'
 import type { ProxyResponse } from '@server/proxy/response/proxy-response'
@@ -112,6 +113,15 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
     const apiKey = await getSecretStore().get(target.apiKeyReference)
     const rules = await listRulesForProviderModel(target.providerModelId)
 
+    /**
+     * 本次尝试的协议转换上下文：请求体转换往里登记展平过的命名空间工具名，
+     * 响应转换拿同一个实例把名字还原回 `(namespace, name)`。
+     *
+     * 生命周期必须与「一次尝试」对齐，不能更短（响应转换晚于请求转换）也不能更长
+     * （适配器是全局单例，挂到适配器上就跨请求串味了）。
+     */
+    const toolNames = new ToolNameRegistry()
+
     const attempt: AttemptView = { index: attemptIndex, endpointId: target.endpointId, endpointProtocol }
     const exchange: ExchangeView = {
       requestId,
@@ -146,12 +156,14 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
       providerModelName: target.providerModelName,
       auth: resolveProtocolAuthHeaders(endpointProtocol, apiKey, target.customAuthHeader),
       rules,
+      toolNames,
       onRewriteEvaluated: result => { Object.assign(requestEvaluation, result) },
     })
     const responseModifiers = createResponseModifiers({
       adapter,
       routing,
       rules,
+      toolNames,
       onRewriteEvaluated: result => { Object.assign(responseEvaluation, result) },
       onConversionError: error => {
         console.warn(`[proxy] response conversion failed requestId=${requestId} attempt=${attemptIndex} providerModelId=${target.providerModelId} clientProtocol=${protocol} upstreamProtocol=${endpointProtocol} transport=${context.transport} error=${error.message}`)

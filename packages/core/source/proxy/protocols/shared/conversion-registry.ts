@@ -20,6 +20,7 @@ import {
   createAnthropicToOpenAiState,
   finishAnthropicToOpenAiChunks,
 } from './response-conversion-anthropic-to-openai'
+import type { ToolNameRegistry } from './tool-name-registry'
 
 /**
  * 协议转换方向注册表。
@@ -30,13 +31,16 @@ import {
  *
  * 两张表分开的原因：请求方向按「客户端协议 → 上游协议」索引，响应方向按
  * 「上游协议 → 客户端协议」索引，二者恰好相反，混在一张表里只会制造二次判断。
+ *
+ * `toolNames` 是本次上游尝试的转换上下文（见 `tool-name-registry.ts`）：请求转换往里写，
+ * 响应转换往里查。只有 Responses 方向会真正用到它，其余方向接住不用即可。
  */
 
 type Json = Record<string, unknown>
 
 /** 某个方向的请求体转换。 */
 interface RequestDirection {
-  convert(payload: Json, providerModelName: string): Json
+  convert(payload: Json, providerModelName: string, toolNames: ToolNameRegistry): Json
 }
 
 /** 某个方向的 SSE 逐事件转换器。状态由实现自己持有（闭包），调用方只看到载荷与事件。 */
@@ -47,8 +51,8 @@ interface SseDirection {
 
 /** 某个方向的响应转换：非流式整体转换 + 流式逐事件转换。 */
 interface ResponseDirection {
-  convert(payload: Json): Json
-  createSseConverter(): SseDirection
+  convert(payload: Json, toolNames: ToolNameRegistry): Json
+  createSseConverter(toolNames: ToolNameRegistry): SseDirection
 }
 
 function directionKey(from: Protocol, to: Protocol): string {
@@ -60,7 +64,7 @@ const requestDirections = new Map<string, RequestDirection>([
     convert: (payload, providerModelName) => anthropicToOpenAiRequest(payload as never, providerModelName) as unknown as Json,
   }],
   [directionKey('openai-responses', 'openai-completions'), {
-    convert: (payload, providerModelName) => responsesToOpenAiRequest(payload as never, providerModelName) as unknown as Json,
+    convert: (payload, providerModelName, toolNames) => responsesToOpenAiRequest(payload as never, providerModelName, toolNames) as unknown as Json,
   }],
   [directionKey('openai-completions', 'anthropic-messages'), {
     convert: (payload, providerModelName) => openAiToAnthropicRequest(payload as never, providerModelName) as unknown as Json,
@@ -79,9 +83,9 @@ const responseDirections = new Map<string, ResponseDirection>([
     },
   }],
   [directionKey('openai-completions', 'openai-responses'), {
-    convert: payload => openAiResponseToResponses(payload) as unknown as Json,
-    createSseConverter: () => {
-      const state = createOpenAiToResponsesState()
+    convert: (payload, toolNames) => openAiResponseToResponses(payload, toolNames) as unknown as Json,
+    createSseConverter: toolNames => {
+      const state = createOpenAiToResponsesState(toolNames)
       return {
         push: payload => openAiChunkToResponsesEvents(payload, state) as unknown as Json[],
         finish: () => finishOpenAiToResponses(state) as unknown as Json[],

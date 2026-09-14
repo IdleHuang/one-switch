@@ -3,6 +3,7 @@ import type { Protocol } from '@common/schemas'
 import { CONVERTIBLE_PROTOCOLS, isConvertible } from '@common/protocols'
 import { convertRequestBody } from './request-conversion'
 import { convertResponseBody, createSseConverter, parseSseIncremental, serializeSseEvent } from './response-conversion'
+import { ToolNameRegistry } from './tool-name-registry'
 
 function request(protocol: Protocol, body: Record<string, unknown>): Buffer {
   return Buffer.from(JSON.stringify({ ...body, _protocol: protocol }))
@@ -672,5 +673,72 @@ describe('tool and edge-case conversions', () => {
     expect(parseSseIncremental(': keepalive\r\nevent:message\r\ndata:{"ok":true}\r\n\r\n')).toEqual([
       [{ event: 'message', data: '{"ok":true}' }], '',
     ])
+  })
+})
+
+/**
+ * 命名空间工具的可逆展平是请求转换与响应转换**共享一个内存表**才成立的，
+ * 所以必须有一条穿过两个入口（`convertRequestBody` / `convertResponseBody`）的往返用例，
+ * 各自单测都过也可能在链路断开时静默失效。
+ */
+describe('namespace tool flattening round-trip', () => {
+  const namespaceRequest = {
+    input: 'find the account',
+    tools: [
+      { type: 'function', name: 'plain', parameters: { type: 'object' } },
+      {
+        type: 'namespace',
+        name: 'crm',
+        tools: [{ type: 'function', name: 'lookup', parameters: { type: 'object' }, strict: true }],
+      },
+    ],
+  }
+
+  function flattenRequest(toolNames?: ToolNameRegistry): Record<string, unknown> {
+    return parseBody(convertRequestBody('openai-responses', 'openai-completions', request('openai-responses', namespaceRequest), 'upstream-model', toolNames))
+  }
+
+  /** 让上游「调用」展平后的第一个工具，并转换回 Responses 响应。 */
+  function callFirstTool(toolNames?: ToolNameRegistry): Record<string, unknown> {
+    const tools = flattenRequest(toolNames).tools as Array<{ function: { name: string } }>
+    return parseBody(convertResponseBody('openai-responses', 'openai-completions', Buffer.from(JSON.stringify({
+      id: 'chat_1',
+      choices: [{ message: { content: null, tool_calls: [{ id: 'call_1', function: { name: tools[1].function.name, arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+    })), toolNames))
+  }
+
+  it('sends a legal flattened name upstream and restores (namespace, name) downstream', () => {
+    const result = callFirstTool(new ToolNameRegistry())
+
+    expect(result.output).toEqual([
+      { id: 'chat_1_fc_0', type: 'function_call', status: 'completed', call_id: 'call_1', name: 'lookup', namespace: 'crm', arguments: '{}' },
+    ])
+  })
+
+  it('falls back to the flattened name when the response side has no context', () => {
+    // 两边各自新建表时响应侧查不到映射，只能给出展平名（上游协议里它本来就叫这个）
+    const result = callFirstTool()
+
+    expect(result.output).toEqual([
+      { id: 'chat_1_fc_0', type: 'function_call', status: 'completed', call_id: 'call_1', name: 'crm__lookup', arguments: '{}' },
+    ])
+  })
+
+  it('restores namespace addressing in the streamed response too', () => {
+    const toolNames = new ToolNameRegistry()
+    const tools = flattenRequest(toolNames).tools as Array<{ function: { name: string } }>
+    const converter = createSseConverter('openai-responses', 'openai-completions', toolNames)
+    const upstream = [
+      { id: 'chat_1', choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: tools[1].function.name } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+    ]
+
+    const downstream = upstream
+      .map(chunk => converter.push(`data: ${JSON.stringify(chunk)}\n\n`))
+      .join('') + converter.flush() + (converter.finish?.() ?? '')
+
+    expect(downstream).toContain('"name":"lookup"')
+    expect(downstream).toContain('"namespace":"crm"')
+    expect(downstream).not.toContain('crm__lookup')
   })
 })
