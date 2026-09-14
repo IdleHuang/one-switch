@@ -241,7 +241,7 @@ export const uiEn = {
   'requestLogs.transport.websocket': 'WebSocket',
   'requestLogs.table.status': 'Status',
   'requestLogs.table.time': 'Time',
-  'requestLogs.table.logicalModel': 'Logical model',
+  'requestLogs.table.providerModel': 'Channel model',
   'requestLogs.table.protocol': 'Protocol',
   'requestLogs.table.transport': 'Transport',
   'requestLogs.table.input': 'Input',

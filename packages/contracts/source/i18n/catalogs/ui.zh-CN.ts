@@ -243,7 +243,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'requestLogs.transport.websocket': 'WebSocket',
   'requestLogs.table.status': '状态',
   'requestLogs.table.time': '时间',
-  'requestLogs.table.logicalModel': '逻辑模型',
+  'requestLogs.table.providerModel': '供应商模型',
   'requestLogs.table.protocol': '协议',
   'requestLogs.table.transport': '传输形态',
   'requestLogs.table.input': '输入',

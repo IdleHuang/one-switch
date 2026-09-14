@@ -2,9 +2,16 @@ import type { RequestLogEntryAttempt } from '@common/schemas'
 import type { UiCatalogKey } from '@common/i18n/catalogs'
 import type { AppTranslator } from '@/i18n/provider'
 
+/**
+ * 协议的展示名。
+ *
+ * 用全名而不是缩写：`OpenAI Completions` / `OpenAI Responses` 是这两个接口的正式叫法，
+ * `Responses`、`OpenAI` 这类缩写要靠读者自己补回被省掉的那一段，而协议列本来就是给
+ * 「这次请求走的是哪条接口」看的。协议名是供应商的产品名，两种界面语言下写法相同，因此不进翻译目录。
+ */
 export const PROTOCOL_LABEL: Record<string, string> = {
-  'openai-responses': 'OpenAI Responses',
   'openai-completions': 'OpenAI Completions',
+  'openai-responses': 'OpenAI Responses',
   'anthropic-messages': 'Anthropic Messages',
 }
 
@@ -33,18 +40,6 @@ export const TRANSPORT_LABEL_KEY: Record<string, UiCatalogKey> = {
   'http': 'requestLogs.transport.http',
   'http-stream': 'requestLogs.transport.httpStream',
   websocket: 'requestLogs.transport.websocket',
-}
-
-/**
- * 协议在列表里的短名。
- *
- * 列表一行要放下 11 列，`OpenAI Completions` 这种全名会把逻辑模型名挤成省略号；
- * 短名只保留区分三个取值所需的那一段：`Responses` 只存在于 OpenAI 系，不必再重复品牌名。
- */
-export const PROTOCOL_SHORT_LABEL: Record<string, string> = {
-  'openai-completions': 'OpenAI',
-  'openai-responses': 'Responses',
-  'anthropic-messages': 'Anthropic',
 }
 
 export function formatTransport(t: AppTranslator, transport: string | null | undefined): string {

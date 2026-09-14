@@ -47,17 +47,17 @@
 | createdTime | `request_logs.createdTime` | Unix 毫秒时间戳 |
 | clientProtocol | `request_logs.clientProtocol` | 客户端协议；协议无法识别时为 `null` |
 | transport | `request_logs.transport` | 客户端跳的传输形态（`http` / `http-stream` / `websocket`，界面上分别写作“非流式” / “流式” / “WebSocket”），即“字节怎么回来”的预期 |
-| logicalModelId | `request_logs.logicalModelId` | 逻辑模型 ID；尚未解析到时为 `null` |
+| providerModel | `request_attempts` | 最后一次尝试的 `providerName`/`providerModelName`；请求一次尝试都没走到时为空 |
 | status | `request_logs.status` | `pending`、`success`、`failed` 或 `cancelled` |
 | durationMilliseconds | `request_logs.totalDurationMilliseconds` | 从收到请求到写完响应的总耗时 |
 | ttftMilliseconds | `request_attempts` 派生 | 取服务该请求的那次尝试（尝试顺序里恒为最后一次）的 `ttftMilliseconds`；无样本时为空。不落库，避免出现会漂移的第二份首字延迟 |
-| attemptCount | `request_attempts` | 按 `requestId` 汇总尝试数量 |
+| failoverCount | `request_attempts` | 按 `requestId` 汇总尝试数量减一 |
 | contentCaptured | `request_contents.captureStatus` | 由正文记录状态派生 |
 
 列表只列**本次请求的结果特征**，不列尝试级细节：
 
-- **列逻辑模型，不列供应商模型**：一次请求可能先后落到多个供应商模型（故障转移），列表只回答「客户端要的那个逻辑模型」；具体每一次落在哪个供应商模型上是尝试级事实，展开详情看。逻辑模型名后面**固定**挂这个请求的尝试次数（`request_attempts` 汇总数量，只走一次也照挂 `×1`）——每行同一个形状，横向扫一眼就能比出谁多试了几次。
-- **协议与传输形态各占一列**：`clientProtocol` 与 `transport` 是请求刚一进来就定下的事实，列出来是为了「这是哪种客户端协议、要流式还是要非流式」一眼可见。
+- **列供应商模型，不列逻辑模型**：逻辑模型是客户端的入参，请求进来时就已经知道，列表里没有信息量；一次请求可能先后落到多个供应商模型（故障转移），列表只有一行能说这件事，所以取**最后一次尝试**——客户端拿到的响应或最终的错误都由它产生，前几次只说明「本来想找谁」。完整尝试链是尝试级细节，展开详情看。最后一次尝试后面只挂 `+n`（`request_attempts` 汇总数量减一，仅故障转移时出现），说明还多试了几次。
+- **协议与传输形态各占一列**：`clientProtocol` 与 `transport` 是请求刚一进来就定下的事实，列出来是为了「这是哪种客户端协议、要流式还是要非流式」一眼可见。协议列展示协议**全名**（`OpenAI Completions` / `OpenAI Responses` / `Anthropic Messages`），不缩写。
 - **总耗时不在列表里**：延迟特征已经由 TTFT（首字多快）与 TPS（出字多快）表达，总耗时回答的是「整条链路一共花了多久」，在详情里展示。
 
 ### 请求详情
