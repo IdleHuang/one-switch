@@ -82,13 +82,13 @@ describe('first output detection', () => {
     expect(tracker.consumeSseChunk('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n')).toBe(true)
   })
 
-  it('recognizes text output for Anthropic streams only', () => {
+  it('recognizes text output in Anthropic streams', () => {
     const tracker = createUsageTracker()
     expect(tracker.consumeSseChunk('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n')).toBe(false)
     expect(tracker.consumeSseChunk('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}\n\n')).toBe(true)
   })
 
-  it('recognizes text output for Responses streams only', () => {
+  it('recognizes text output in Responses streams', () => {
     const tracker = createUsageTracker()
     expect(tracker.consumeSseChunk('data: {"type":"response.created"}\n\n')).toBe(false)
     expect(tracker.consumeSseChunk('data: {"type":"response.output_text.delta","delta":"hello"}\n\n')).toBe(true)
@@ -98,6 +98,21 @@ describe('first output detection', () => {
     expect(hasOutput({ choices: [{ message: { content: 'hello' } }] })).toBe(true)
     expect(hasOutput({ choices: [{ message: { content: '' } }] })).toBe(false)
     expect(hasOutput({ usage: { prompt_tokens: 3 } })).toBe(false)
+  })
+
+  it('counts reasoning content as real output on every protocol', () => {
+    // 推理 Token 也是上游生成的内容，也会流到客户端：只认正文会让推理模型的首字延迟
+    // 虚高到整段思考结束，而上游报的输出 Token 本来就含推理 Token，两个量会对不上。
+    expect(hasOutput({ choices: [{ delta: { reasoning_content: '嗯' } }] })).toBe(true)
+    expect(hasOutput({ choices: [{ message: { reasoning_content: '嗯' } }] })).toBe(true)
+    expect(hasOutput({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '嗯' } })).toBe(true)
+    expect(hasOutput({ type: 'response.reasoning_text.delta', delta: '嗯' })).toBe(true)
+  })
+
+  it('still ignores empty reasoning and non-content deltas', () => {
+    expect(hasOutput({ choices: [{ delta: { reasoning_content: '' } }] })).toBe(false)
+    expect(hasOutput({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '' } })).toBe(false)
+    expect(hasOutput({ choices: [{ delta: { role: 'assistant' } }] })).toBe(false)
   })
 })
 

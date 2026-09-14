@@ -147,8 +147,8 @@ function mapModelStat(model: DatabaseModelStat): ModelStat {
     avgLatencyMs: model.avgLatencyMs,
     avgTtftMs: model.avgTtftMs,
     // 输出速度的公式只写在 `@common/metrics` 里，这里只是把同一批尝试的两个合计值送进去。
-    // 参数由数据库成对选出：分子是这批尝试的输出 Token，分母是同一批尝试的生成时段。
-    avgTps: tokensPerSecondFromTotals(model.speedOutputTokens, model.speedGenerationDurationMs),
+    // 参数由数据库成对选出：分子是这批尝试的输出 Token，分母是同一批尝试的整段耗时。
+    avgTps: tokensPerSecondFromTotals(model.speedOutputTokens, model.speedDurationMs),
     successRate: model.attempts > 0 ? model.success / model.attempts : 0,
     // 缓存读取量本就是输入量的一部分，同口径相除才是命中率。
     cacheHitRate: model.inputTokens > 0 ? model.cachedInputTokens / model.inputTokens : null,

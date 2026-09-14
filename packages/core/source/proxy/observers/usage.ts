@@ -87,7 +87,15 @@ export function createUsageTracker(): UsageTracker {
   }
 }
 
-/** Only count an actual generated delta, not role-only, usage, or [DONE] events. */
+/**
+ * 这一段报文里有没有**真实生成内容**——首字延迟靠它打点。
+ *
+ * 「真实内容」既包括正文，也包括推理内容：推理 Token 同样是上游生成的、同样会流到客户端，
+ * 只认正文会让推理模型的首字延迟虚高到整段思考结束。上游报的输出 Token 本来就含推理 Token，
+ * 分子认它、首字却不认它，两个量就对不上了。
+ *
+ * 只说明「连接还活着」或「我结束了」的帧——纯角色帧、纯用量帧、`[DONE]`——一律不算。
+ */
 export function hasOutput(data: Record<string, unknown>): boolean {
   const choices = Array.isArray(data.choices) ? data.choices : []
   for (const choice of choices) {
@@ -95,15 +103,19 @@ export function hasOutput(data: Record<string, unknown>): boolean {
     const delta = asRecord(record?.delta)
     const message = asRecord(record?.message)
     if (hasValue(delta?.content) || hasValue(delta?.tool_calls) || hasValue(delta?.function_call) || hasValue(delta?.refusal)
-      || hasValue(record?.text) || hasValue(message?.content)) return true
+      || hasValue(delta?.reasoning_content) || hasValue(delta?.reasoning)
+      || hasValue(record?.text) || hasValue(message?.content)
+      || hasValue(message?.reasoning_content) || hasValue(message?.reasoning)) return true
   }
 
   const type = typeof data.type === 'string' ? data.type : ''
   if (type === 'content_block_delta') {
     const delta = asRecord(data.delta)
-    return delta?.type === 'text_delta' && hasValue(delta.text)
+    if (!delta) return false
+    // Anthropic 的思考块走 `thinking_delta`，与正文块平级，同样是真实内容。
+    return (delta.type === 'text_delta' && hasValue(delta.text)) || (delta.type === 'thinking_delta' && hasValue(delta.thinking))
   }
-  if (type === 'response.output_text.delta' || type === 'response.reasoning_summary_text.delta') {
+  if (type === 'response.output_text.delta' || type === 'response.reasoning_summary_text.delta' || type === 'response.reasoning_text.delta') {
     return hasValue(data.delta)
   }
   if (type === 'response.function_call_arguments.delta') {

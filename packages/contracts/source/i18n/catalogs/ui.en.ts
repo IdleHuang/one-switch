@@ -423,7 +423,7 @@ export const uiEn = {
   'logicalModels.summary.avgDuration': 'Average response time',
   'logicalModels.summary.avgDurationHint': 'Full time of the attempt that served the request, first-token wait included',
   'logicalModels.summary.avgTps': 'Average TPS',
-  'logicalModels.summary.avgTpsHint': 'Output tokens ÷ generation time, first-token wait excluded',
+  'logicalModels.summary.avgTpsHint': 'Output tokens ÷ the attempt duration, first-token wait included',
   'logicalModels.summary.availableModels': 'Models available now',
   'logicalModels.summary.failoverHint': '{count} failovers recently',
   'logicalModels.summary.noFailover': 'No failover right now',

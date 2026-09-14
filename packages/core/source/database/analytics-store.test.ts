@@ -228,11 +228,11 @@ describe('getModelStats', () => {
     expect(second.map(stat => stat.providerModelId)).toEqual(first.map(stat => stat.providerModelId))
   })
 
-  it('measures speed over the generation window, and keeps numerator and denominator on the same samples', async () => {
-    // 四条尝试里只有第一条能算出速度：
-    // 1) 2000ms 耗时、500ms 首字 → 生成时段 1500ms，20 Token；
-    // 2) 800ms 耗时、800ms 首字 → 生成时段为 0，它那 24 Token 一个也不能进分子；
-    // 3) 没有输出 Token → 没有分子；
+  it('measures speed over the whole attempt duration, and keeps numerator and denominator on the same samples', async () => {
+    // 四条尝试里只有前两条能算出速度：
+    // 1) 2000ms 耗时、500ms 首字 → 分母是整段 2000ms（首字等待不扣），20 Token；
+    // 2) 800ms 耗时、800ms 首字 → 旧口径会把分母扣成 0 再除出天文数字，现在分母就是 800ms，24 Token；
+    // 3) 没有输出 Token → 没有分子，耗时也不进分母；
     // 4) 失败的尝试 → 没有完整输出，整个样本都不该参与。
     const normalId = await createRankedAttempt({ providerId: 'prov_speed', providerName: '速度提供方', durationMilliseconds: 2000, ttftMilliseconds: 500 })
     const waitedId = await createRankedAttempt({ providerId: 'prov_speed', providerName: '速度提供方', durationMilliseconds: 800, ttftMilliseconds: 800 })
@@ -244,8 +244,8 @@ describe('getModelStats', () => {
     await recordAttemptUsage({ attemptId: attemptIdOf(failedId), servesRequest: false, ...EMPTY_USAGE, inputTokens: 100, outputTokens: 999 })
 
     const [stats] = await getModelStats(0)
-    // 分母是 2000 - 500，不是整段 2000，也不是四次尝试相加。
-    expect(stats.speedOutputTokens).toBe(20)
-    expect(stats.speedGenerationDurationMs).toBe(1500)
+    // 分母是 2000 + 800，不是扣首字之后的 1500 + 0，也不是四次尝试相加。
+    expect(stats.speedOutputTokens).toBe(44)
+    expect(stats.speedDurationMs).toBe(2800)
   })
 })

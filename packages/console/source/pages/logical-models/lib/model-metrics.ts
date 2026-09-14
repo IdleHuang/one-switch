@@ -30,11 +30,10 @@ export function providerModelMetricKey(providerId: string, providerModelId: stri
 export function calculateLogicalModelSummaryMetrics(logs: RequestLogEntry[]): LogicalModelSummaryMetrics {
   const completedLogs = logs.filter(log => log.status === 'success' || log.status === 'failed' || log.status === 'cancelled')
   const successfulLogs = completedLogs.filter(log => log.status === 'success')
-  // 成功请求的耗时取「服务该请求的那次尝试」的端到端耗时，没有尝试可用时才退回请求级总耗时。
-  // 这条回落规则连同速度样本一起由 `@common/metrics` 定义，这里不重写一份。
-  const durations = successfulLogs
-    .map(log => outputSpeedSampleOf(log).attemptDurationMilliseconds)
-    .filter(duration => duration > 0)
+  // 平均耗时与平均速度取自**同一批样本**：样本的耗时是「服务该请求的那次尝试」的端到端耗时，
+  // 没有尝试可用时才退回请求级总耗时——这条回落规则由 `@common/metrics` 定义，这里不重写一份。
+  const speedSamples = successfulLogs.map(outputSpeedSampleOf)
+  const durations = speedSamples.map(sample => sample.attemptDurationMilliseconds).filter(duration => duration > 0)
 
   return {
     completedRequestCount: completedLogs.length,
@@ -43,7 +42,7 @@ export function calculateLogicalModelSummaryMetrics(logs: RequestLogEntry[]): Lo
     avgDurationMilliseconds: durations.length > 0 ? durations.reduce((total, duration) => total + duration, 0) / durations.length : null,
     // 平均速度由 `@common/metrics` 用「先求和再相除」算出：先算每个请求的速度再取算术平均
     // 会让 20 Token 的短响应与 4000 Token 的长响应一样重，均值被短样本主导。
-    avgTps: averageOutputTokensPerSecond(successfulLogs.map(outputSpeedSampleOf)),
+    avgTps: averageOutputTokensPerSecond(speedSamples),
     failoverCount: successfulLogs.filter(log => log.attempts.some(attempt => attempt.status === 'success' && attempt.attemptIndex > 0)).length,
   }
 }
@@ -72,11 +71,10 @@ export function calculateProviderModelMetrics(logs: RequestLogEntry[]): Record<s
     }
 
     // 速度样本与首字延迟取自同一次尝试，同一个模型行上的两个指标才不会错位。
-    // 分子是请求级输出 Token（它本来就是这次尝试镜像过来的一份），分母是这次尝试的耗时。
+    // 分子是请求级输出 Token（它本来就是这次尝试镜像过来的一份），分母是这次尝试的整段耗时。
     accumulator.speedSamples.push({
       outputTokens: log.outputTokens,
       attemptDurationMilliseconds: successfulAttempt.durationMilliseconds,
-      ttftMilliseconds: successfulAttempt.ttftMilliseconds,
     })
 
     accumulators.set(key, accumulator)
