@@ -105,7 +105,7 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
   // 卡片头分两行：上行是身份（名称 + 状态）与调度模式，下行是说明。
   // 单行放不下「标题 + 添加模型 + 模式切换」——瀑布流最窄 420px，标题会被挤断。
   const renderHeader = () => (
-    <CardHeader className="group/header border-b border-border/50 pb-3">
+    <CardHeader className="group/header relative border-b border-border/50 pb-3">
       {/* 手柄跟着标题所在的那一行：拆成「手柄列 + 两行文字」时它会按整块高度居中，
           而这一行被右侧的模式标签页撑高了，图标就比标题低半个字。 */}
       <div className="flex w-full items-center">
@@ -129,7 +129,19 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
             {builtIn && <Badge variant="muted" className="shrink-0">{t('logicalModels.card.builtIn')}</Badge>}
             {coolingCount > 0 && <Badge variant="destructive" className="shrink-0">{t('logicalModels.card.cooling', { count: coolingCount })}</Badge>}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className={cn(
+            'flex shrink-0 items-center gap-2 transition-[padding] duration-150',
+            // 空位只在浮入期间存在：编辑、删除静止时不显示，也就不该预先占着地方。
+            // 宽度也只按真正存在的按钮算——图标 28px + 彼此 4px 间距 + 左缘 8px 淡出边
+            // （遮罩的 pl-2）→ 一个按钮 36px、两个 68px。内建默认没有删除入口，
+            // 就只留编辑那一格，不留它本该在的空位，否则图标左边会多出一块看着像占位的空白。
+            // 让路而不是让遮罩压住标签页，是因为遮罩的触发区是整个卡片头——盖到谁，谁在浮入
+            // 期间就点不动；所以标签页必须待在遮罩左边，而空位只在浮入时才出现。
+            // 键盘不走 hover：焦点落进遮罩里的按钮时（has-…）同样让开。
+            (onEdit || onDelete) && (onDelete
+              ? 'group-hover/header:pr-[68px] has-[[data-slot=card-header-actions]:focus-within]:pr-[68px]'
+              : 'group-hover/header:pr-[36px] has-[[data-slot=card-header-actions]:focus-within]:pr-[36px]'),
+          )}>
             {onAddModel && <Button variant="outline" size="sm" onClick={onAddModel}>{t('logicalModels.card.addModel')}</Button>}
             <Tabs value={mode} onValueChange={value => onModeChange(value as 'auto' | 'manual')}>
               <TabsList>
@@ -137,35 +149,41 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
                 <TabsTrigger value="manual" disabled={switchingMode} className="px-2.5 system-xs-medium"><Target size={12} /> {t('logicalModels.card.mode.manual')}</TabsTrigger>
               </TabsList>
             </Tabs>
+            {/* 编辑与删除挂在卡片头右侧的一整条模糊遮罩上（同供应商模型行的做法）：静止时不显示，
+                浮入时也只压住让开后的空位，不会盖住「添加模型」与模式标签页。
+                遮罩按整个卡片头铺满（inset-y-0），按钮却对齐上面那一行：编辑与删除是对「这张卡片」
+                的操作，与名称同一水平线才读得出归属，落在说明行上会被读成说明的一部分。
+                左缘只留 8px 淡出边（pl-2，渐变的实心部分刚好铺满按钮）：浮出时图标左边
+                不再多出一块看着像占位的空白。
+                挂在这一组里，是为了让「焦点落进遮罩按钮」与「浮入」走同一条让位逻辑（见上）。 */}
+            {(onEdit || onDelete) && (
+              <div
+                data-slot="card-header-actions"
+                className={cn(
+                  'pointer-events-none absolute inset-y-0 right-(--card-spacing) flex flex-col bg-linear-to-l from-components-panel-bg-blur from-[calc(100%-8px)] to-transparent pl-2 opacity-0 backdrop-blur-[5px] transition-opacity',
+                  'group-hover/header:pointer-events-auto group-hover/header:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+                )}
+              >
+                {/* 这一格与上面那一行同高（模式标签页撑出的 32px），按钮在其中居中，
+                    于是与名称、模式标签页在同一条水平线上。 */}
+                <div className="flex h-8 shrink-0 items-center gap-1">
+                  {onEdit && (
+                    <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={t('logicalModels.card.editAria', { name: logicalModelName })} title={t('logicalModels.card.editTitle')}><Pencil size={16} /></Button>
+                  )}
+                  {onDelete && (
+                    <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={t('logicalModels.card.deleteAria', { name: logicalModelName })} title={t('logicalModels.card.deleteTitle')}><Trash2 size={16} /></Button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
-      {/* 说明与标题同一起点：手柄撑开多宽（28px）这里就补多少内边距，过渡与手柄同速，
-          于是手柄收起时两行都贴左、浮入时两行一起右移。
-          这一行只有 16px 高，而遮罩要装下 28px 的按钮：上下各补 6px 内边距、再用同量的负外边距抵消，
-          多出来的高度只属于遮罩，占位的布局高度不变。 */}
-      <div className="relative -my-1.5 w-full py-1.5">
-        <CardDescription className="w-full truncate transition-[padding] group-hover/header:pl-7" title={description || undefined}>
-          {description || '—'}
-        </CardDescription>
-        {/* 编辑与删除落在说明右侧的一条模糊遮罩上（同供应商模型行的做法）：静止时不占位置，
-            被盖住的只是说明的尾巴，在模糊里淡出，而不是滑出一块带边框的按钮区。 */}
-        {(onEdit || onDelete) && (
-          <div
-            className={cn(
-              'pointer-events-none absolute inset-y-0 right-0 flex items-center gap-1 bg-linear-to-l from-components-panel-bg-blur from-55% to-transparent pl-8 opacity-0 backdrop-blur-[5px] transition-opacity',
-              'group-hover/header:pointer-events-auto group-hover/header:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
-            )}
-          >
-            {onEdit && (
-              <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={t('logicalModels.card.editAria', { name: logicalModelName })} title={t('logicalModels.card.editTitle')}><Pencil size={16} /></Button>
-            )}
-            {onDelete && (
-              <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={t('logicalModels.card.deleteAria', { name: logicalModelName })} title={t('logicalModels.card.deleteTitle')}><Trash2 size={16} /></Button>
-            )}
-          </div>
-        )}
-      </div>
+      {/* 说明不跟着手柄挪：手柄只在浮入时撑开 28px，说明跟着缩会把整行的字往右推，
+          看着像自己在跳。它本来就贴左，保持贴左就好。 */}
+      <CardDescription className="w-full truncate" title={description || undefined}>
+        {description || '—'}
+      </CardDescription>
     </CardHeader>
   )
 
