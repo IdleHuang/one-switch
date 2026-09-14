@@ -111,7 +111,9 @@ async function handleTestModels(req: IncomingMessage, res: ServerResponse, body:
           providerName: provider.name,
           success: false,
           durationMilliseconds: Date.now() - startedAt,
-          errorMessage: `No usable endpoint for protocol ${protocol}`,
+          // 这里只会是「两层都没有地址」：保存时的校验会拦住它，所以只有从旧版本继承下来的
+          // 数据会走到这里（见 `packages/core/source/errors.ts` 的 `endpointUrlMissingError`）。
+          errorMessage: `No upstream url is configured for protocol ${protocol}`,
         })
         continue
       }

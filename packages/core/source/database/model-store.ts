@@ -9,11 +9,13 @@ import type {
 } from '@common/schemas'
 import { generateId, now } from '@common/utils'
 import { CONVERTIBLE_PROTOCOLS } from '@common/protocols'
+import { endpointUrlMissingError } from '../errors'
 import { getConfigDb } from './index'
 import {
   providerEndpoints,
   providerModelEndpoints,
   providerModels,
+  providers,
   protocolConverters,
   schedulingPolicies,
 } from './config-schema'
@@ -219,17 +221,48 @@ type Transaction = Parameters<Parameters<ReturnType<typeof getConfigDb>['transac
  * 「目标集合」是完整的：目标里没有的绑定一律软删除（连带它的转换器），
  * 目标里有的则原地更新——能重用就不新增，行的 id 保持稳定，
  * 因此频繁编辑模型不会每次都把全部绑定重建一遍。
+ *
+ * 写之前先确认每个协议都拿得到地址：模型自己没写地址、供应商那一层也没有同协议的可用地址时
+ * 直接抛错，一个字节都不落库（见 `endpointUrlMissingError`）。
  */
 function replaceRouteEndpoints(transaction: Transaction, modelId: string, providerId: string, endpoints: ProviderModelRouteEndpoint[], time: number): void {
   const activeBindings = transaction.select().from(providerModelEndpoints)
     .where(and(eq(providerModelEndpoints.providerModelId, modelId), isNull(providerModelEndpoints.deletedTime))).all()
   const retainedBindingIds = new Set<string>()
 
+  // 模型自己没写地址时，地址只能来自供应商那一层，而且必须是**带地址且启用**的行：
+  // `mapProviderModelRoute` 取 `binding.url ?? endpoint.url` 时要求供应商端点 `enabled = true`，
+  // 两边的判断必须一致，否则这里会放过一个读回来根本没地址的模型。
+  const addressedProtocols = new Set(
+    transaction.select({ protocol: providerEndpoints.protocol, enabled: providerEndpoints.enabled, url: providerEndpoints.url }).from(providerEndpoints)
+      .where(and(eq(providerEndpoints.providerId, providerId), isNull(providerEndpoints.deletedTime))).all()
+      .filter(row => row.enabled && row.url.trim().length > 0)
+      .map(row => row.protocol),
+  )
+  const unaddressedProtocols = endpoints
+    .filter(endpoint => endpoint.endpointUrl.trim().length === 0 && !addressedProtocols.has(endpoint.protocol))
+    .map(endpoint => endpoint.protocol)
+  // 两层都没地址就报错，**不保存**：这时无论落空串还是落一个占位地址，存下来的都是一个
+  // 打不出去的模型，而用户看不出是哪一步出的问题（见 `endpointUrlMissingError`）。
+  if (unaddressedProtocols.length > 0) {
+    const providerName = transaction.select({ name: providers.name }).from(providers).where(eq(providers.id, providerId)).get()?.name ?? providerId
+    throw endpointUrlMissingError(providerName, unaddressedProtocols)
+  }
+
   for (const endpoint of endpoints) {
     const endpointRow = transaction.select().from(providerEndpoints)
       .where(and(eq(providerEndpoints.providerId, providerId), eq(providerEndpoints.protocol, endpoint.protocol), isNull(providerEndpoints.deletedTime))).get()
     const endpointId = endpointRow?.id ?? generateId('end_')
-    if (!endpointRow) transaction.insert(providerEndpoints).values({ id: endpointId, providerId, protocol: endpoint.protocol, url: endpoint.endpointUrl || 'https://invalid.local', createdTime: time, updatedTime: time, deletedTime: null }).run()
+    // 走到这个分支说明供应商这一层还没有这个协议的行，而它只可能是「模型自己带地址」的那种：
+    // 模型没带地址的情况已经在上面被拦掉了（要么有供应商默认地址，要么直接报错）。
+    //
+    // 这一行是**协议载体**：绑定的协议只能记在供应商端点上（见 `product/data-model.md` §3.7），
+    // 所以哪怕地址全在模型自己身上也得先有这一行，它的地址恒为空串——**空串就是「还没有默认地址」**。
+    // 这里绝不能编地址：编一个假地址会让用户在自己的供应商配置里看到一个没写过的「已配置」地址，
+    // 请求也会真的打到那里去。也不要顺手把模型自己的地址提升成
+    // 供应商默认地址：那会让一个模型的自定义值悄悄变成所有同协议绑定的默认值。模型自己的地址
+    // 只记在绑定上（见下）。
+    if (!endpointRow) transaction.insert(providerEndpoints).values({ id: endpointId, providerId, protocol: endpoint.protocol, url: '', enabled: true, createdTime: time, updatedTime: time, deletedTime: null }).run()
 
     const binding = activeBindings.find(item => item.providerEndpointId === endpointId)
     const bindingId = binding?.id ?? generateId('pme_')

@@ -1,5 +1,7 @@
+import { ProtocolSchema } from '@common/schemas'
 import type { Protocol } from '@common/schemas'
 import type { UiCatalogKey } from '@common/i18n/catalogs'
+import { PROTOCOL_DISPLAY_NAMES } from '@common/protocols'
 
 export interface ProtocolExample {
   /** 品牌名，直接展示（不翻译） */
@@ -29,11 +31,12 @@ export const PROTOCOL_EXAMPLES: Record<Protocol, ProtocolExample[]> = {
   ],
 }
 
-export const PROTOCOL_OPTIONS = [
-  { value: 'openai-completions' as Protocol, label: 'OpenAI Completions' },
-  { value: 'openai-responses' as Protocol, label: 'OpenAI Responses' },
-  { value: 'anthropic-messages' as Protocol, label: 'Anthropic Messages' },
-]
+/**
+ * 协议下拉选项。展示名取自契约层（见 `PROTOCOL_DISPLAY_NAMES`）——服务端的错误文案也用它，
+ * 两边不能让同一份名字各写一遍。顺序就是枚举顺序，也就是协议在界面上出现的顺序。
+ */
+export const PROTOCOL_OPTIONS: Array<{ value: Protocol; label: string }> = ProtocolSchema.options
+  .map(value => ({ value, label: PROTOCOL_DISPLAY_NAMES[value] }))
 
 export const PROTOCOL_SHORT_LABELS: Record<Protocol, string> = {
   'openai-completions': 'OpenAI',

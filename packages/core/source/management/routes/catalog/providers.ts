@@ -103,10 +103,12 @@ async function handleUpdateProvider(_req: IncomingMessage, res: ServerResponse, 
     sendError(res, 'NOT_FOUND', `Provider not found: ${id}`, 404, { providerId: id })
     return
   }
+  // 端点排在最前：它是唯一会被守卫拒绝的一步（见 `endpointUrlInUseError`），先写才不会在报错时
+  // 留下「名字改了、地址没改」的半截状态。
+  if (endpoints !== undefined) await replaceProviderEndpoints(id, endpoints)
   if (apiKey) await getSecretStore().set(current.apiKeyReference, apiKey)
   const mergedUpdates: Partial<Pick<Provider, 'name' | 'timeoutMilliseconds' | 'enabled'>> = { ...updates }
   const provider = await updateProvider(id, mergedUpdates)
-  if (endpoints !== undefined) await replaceProviderEndpoints(id, endpoints)
   sendSuccess(res, provider)
 }
 

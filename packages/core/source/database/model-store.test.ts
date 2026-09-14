@@ -8,12 +8,14 @@ import {
   createProviderModelRoute,
   createProtocolConverter,
   getProviderModel,
+  getProviderModelRoute,
   listProviderModelRoutesByProvider,
   listProviderModelsForLogicalModel,
   updateProviderModelEndpoint,
+  updateProviderModelRoute,
 } from './model-store'
 import { createLogicalModel, upsertSchedulingPolicy } from './logical-model-store'
-import { createProvider, createProviderEndpoint } from './provider-store'
+import { createProvider, createProviderEndpoint, listProviderEndpoints } from './provider-store'
 
 let temporaryDirectory: string
 
@@ -105,5 +107,125 @@ describe('model store', () => {
     expect(await listProviderModelRoutesByProvider(provider.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: route.id, modelName: 'gpt-4o-mini' }),
     ]))
+  })
+
+  // 回归：模型与供应商两层都没地址时必须**直接报错**，不能编一个地址顶上——编出来的地址会显示成
+  // 「用户自己配的地址」，请求也真的会打到那里去。
+  it('refuses to save a model whose protocol has no address anywhere', async () => {
+    const provider = await createProvider({
+      name: 'Addressless Provider',
+      apiKeyReference: 'key_addressless_provider',
+      timeoutMilliseconds: 20_000,
+      enabled: true,
+    })
+
+    await expect(createProviderModelRoute({
+      providerId: provider.id,
+      modelName: 'addressless-model',
+      priority: 1,
+      endpoints: [{ protocol: 'openai-responses', endpointUrl: '', customAuthHeader: null, protocolConversionEnabled: false }],
+    })).rejects.toMatchObject({
+      code: 'ENDPOINT_URL_MISSING',
+      statusCode: 400,
+      // 报错要说清「哪个供应商的哪个协议」——那才是用户能照着改的那一步。
+      details: { providerName: 'Addressless Provider', protocols: 'OpenAI Responses' },
+    })
+
+    // 报错发生在事务里：模型、端点、绑定一个都不该留下。
+    expect(await listProviderModelRoutesByProvider(provider.id)).toEqual([])
+    expect(await listProviderEndpoints(provider.id)).toEqual([])
+  })
+
+  it('falls back to an enabled provider default address when the model carries none', async () => {
+    const provider = await createProvider({
+      name: 'Fallback Provider',
+      apiKeyReference: 'key_fallback_provider',
+      timeoutMilliseconds: 20_000,
+      enabled: true,
+    })
+    await createProviderEndpoint({
+      providerId: provider.id,
+      protocol: 'openai-responses',
+      url: 'https://example.com/v1/responses',
+      enabled: true,
+    })
+    const route = await createProviderModelRoute({
+      providerId: provider.id,
+      modelName: 'fallback-model',
+      priority: 1,
+      endpoints: [{ protocol: 'openai-responses', endpointUrl: '', customAuthHeader: null, protocolConversionEnabled: false }],
+    })
+
+    // 绑定上是 `null`（「沿用供应商默认地址」），解析出来的有效地址是供应商那一层的。
+    expect((await getProviderModel(route.id))?.endpoints[0]).toMatchObject({ url: null, enabled: true })
+    expect((await getProviderModelRoute(route.id))?.endpoints[0]).toMatchObject({ endpointUrl: 'https://example.com/v1/responses' })
+  })
+
+  // 校验不能比解析宽松：解析路径（`mapProviderModelRoute`）要求供应商端点 `enabled = true`，
+  // 把停用的端点当成可用地址就会存下一个读回来根本没地址的模型。
+  it('does not count a disabled provider endpoint as the model address', async () => {
+    const provider = await createProvider({
+      name: 'Disabled Endpoint Provider',
+      apiKeyReference: 'key_disabled_endpoint_provider',
+      timeoutMilliseconds: 20_000,
+      enabled: true,
+    })
+    await createProviderEndpoint({
+      providerId: provider.id,
+      protocol: 'openai-completions',
+      url: 'https://example.com/v1/chat/completions',
+      enabled: false,
+    })
+
+    await expect(createProviderModelRoute({
+      providerId: provider.id,
+      modelName: 'disabled-endpoint-model',
+      priority: 1,
+      endpoints: [{ protocol: 'openai-completions', endpointUrl: '', customAuthHeader: null, protocolConversionEnabled: false }],
+    })).rejects.toMatchObject({ code: 'ENDPOINT_URL_MISSING' })
+  })
+
+  it('refuses to clear a model address when the provider has no default to fall back to', async () => {
+    const provider = await createProvider({
+      name: 'Clear Url Provider',
+      apiKeyReference: 'key_clear_url_provider',
+      timeoutMilliseconds: 20_000,
+      enabled: true,
+    })
+    const route = await createProviderModelRoute({
+      providerId: provider.id,
+      modelName: 'clear-url-model',
+      priority: 1,
+      endpoints: [{ protocol: 'anthropic-messages', endpointUrl: 'https://example.com/anthropic', customAuthHeader: null, protocolConversionEnabled: false }],
+    })
+
+    await expect(updateProviderModelRoute(route.id, {
+      endpoints: [{ protocol: 'anthropic-messages', endpointUrl: '', customAuthHeader: null, protocolConversionEnabled: false }],
+    })).rejects.toMatchObject({ code: 'ENDPOINT_URL_MISSING' })
+
+    // 保存被整体回滚，原来的绑定一字不动。
+    expect((await getProviderModelRoute(route.id))?.endpoints[0]).toMatchObject({ endpointUrl: 'https://example.com/anthropic' })
+  })
+
+  it('keeps a model url on the binding instead of promoting it to the provider default', async () => {
+    const provider = await createProvider({
+      name: 'Custom Url Provider',
+      apiKeyReference: 'key_custom_url_provider',
+      timeoutMilliseconds: 20_000,
+      enabled: true,
+    })
+    const route = await createProviderModelRoute({
+      providerId: provider.id,
+      modelName: 'custom-url-model',
+      priority: 1,
+      endpoints: [{ protocol: 'anthropic-messages', endpointUrl: 'https://example.com/anthropic', customAuthHeader: null, protocolConversionEnabled: false }],
+    })
+
+    // 一个模型的自定义地址不能变成供应商的默认地址：那会悄悄改掉所有同协议绑定的解析结果。
+    expect(await listProviderEndpoints(provider.id)).toEqual([
+      expect.objectContaining({ protocol: 'anthropic-messages', url: '', enabled: true }),
+    ])
+    expect((await getProviderModel(route.id))?.endpoints[0]).toMatchObject({ url: 'https://example.com/anthropic' })
+    expect((await getProviderModelRoute(route.id))?.endpoints[0]).toMatchObject({ endpointUrl: 'https://example.com/anthropic' })
   })
 })

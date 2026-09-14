@@ -1,5 +1,21 @@
 import type { Protocol } from './schemas'
 
+/**
+ * 协议的展示名。
+ *
+ * `OpenAI Completions` / `OpenAI Responses` / `Anthropic Messages` 是这三个接口的正式叫法，
+ * 也是上游厂商的产品名——两种界面语言下写法相同，因此不进翻译目录。
+ *
+ * 放在契约层是因为服务端也要用它：端点缺地址时抛出的错误只携带「哪个协议」这个事实，
+ * 展示名作为错误参数交给界面插值（见 `packages/core/source/errors.ts` 的
+ * `endpointUrlMissingError`）。界面与服务端各写一份名字，两边迟早会不一致。
+ */
+export const PROTOCOL_DISPLAY_NAMES: Readonly<Record<Protocol, string>> = {
+  'openai-completions': 'OpenAI Completions',
+  'openai-responses': 'OpenAI Responses',
+  'anthropic-messages': 'Anthropic Messages',
+}
+
 /** 端点原生协议可接收的客户端协议。 */
 export const CONVERTIBLE_PROTOCOLS: Readonly<Record<Protocol, readonly Protocol[]>> = {
   'openai-completions': ['anthropic-messages', 'openai-responses'],

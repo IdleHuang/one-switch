@@ -468,6 +468,10 @@ security.secretReference
 
 Provider 按协议持有默认端点。ProviderModel 通常只引用默认端点；`provider_model_endpoints.url` 为空时使用默认端点的 `url`。
 
+`url` 允许为空串，含义是**「这个协议还没有默认地址」**，不是缺字段：模型自带了地址、供应商这一层还没填地址时，创建模型仍然要为这个协议先落一条行来承载协议（协议记在供应商端点上，不在绑定表重复保存），这条行的 `url` 就是空串。这类行只作协议载体：它不算「用户配过的地址」，不参与任何地址解析（路由、模型探测、模型列表都当它没有地址），也不会因为供应商配置被重新保存而消失。
+
+用户真正填过地址的行，停用时用 `enabled = 0` 表达（行留着、地址留着），而不是把地址清空：这两件事的语义不同，界面要能区分「配过但停用」与「没配过」。
+
 ```sql
 CREATE TABLE provider_endpoints (
   id TEXT PRIMARY KEY,
@@ -597,7 +601,9 @@ CREATE INDEX idx_protocol_converters_deleted_time
   ON protocol_converters(deletedTime);
 ```
 
-端点解析规则：优先使用 `provider_model_endpoints.url`，为空时使用其 `providerEndpointId` 对应的 `provider_endpoints.url`；协议始终来自 Provider 端点，不在端点绑定表重复保存。
+端点解析规则：优先使用 `provider_model_endpoints.url`，为空时使用其 `providerEndpointId` 对应的 `provider_endpoints.url`；两者都没有地址时，这个协议按「未配置」处理，候选不可用。**两层都没有地址不许落库**：保存模型时直接报 `ENDPOINT_URL_MISSING`，把「哪个供应商的哪个协议缺地址」说清楚，而不是存一个打不出去的模型让用户在请求时才撞上。为此**也不允许用占位地址顶替空值**：占位值会被当成用户自己配的地址展示出来、被模型列表探测、被真实请求打出去，用户看到的只是一串自己没写过的 URL，完全不知道问题出在哪。协议始终来自 Provider 端点，不在端点绑定表重复保存。
+
+反向也成立：**供应商保存不许悄悄撤掉别的模型在用的协议**。`provider_endpoints.enabled` 是协议级开关（解析时要求它为真），所以清空或停用某个协议的地址，等于把该协议从所有挂着它的模型上一起撤掉，**哪怕模型自己在绑定上写了地址也一样**。这一步连带的模型会在界面上毫无提示，因此供应商保存时同样先校验：命中就报 `ENDPOINT_URL_IN_USE`，把「哪些模型在用」列出来，让用户先给模型填地址或保留该地址。唯一的例外是供应商包导入（`allowDetachingModels`）——那次调用连模型一起整体替换，不存在「只改了供应商」的错觉。
 
 只有低频、非路由且尚未形成稳定产品语义的扩展信息才允许进入后续专门的扩展表；核心模型能力不在 v0.3 虚构为 JSON 字段。候选条件为：ProviderModel 和 Provider 均启用、未软删除，且存在启用的 ProviderModel 端点。
 

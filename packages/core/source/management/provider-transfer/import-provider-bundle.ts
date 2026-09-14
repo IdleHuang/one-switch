@@ -100,7 +100,9 @@ function assertUniqueProviderNames(providers: ProviderBundleProvider[]): void {
 }
 
 async function applyProviderDetail(providerId: string, entry: ProviderBundleProvider): Promise<void> {
-  await replaceProviderEndpointStates(providerId, entry.endpoints)
+  // 端点先落库：模型侧保存时要能拿到地址，否则包里「没写地址」的模型会被判成无地址而拒绝。
+  // 这次调用带 `allowDetachingModels`——同一个包里连模型一起换掉了，不存在「只改了供应商」的错觉。
+  await replaceProviderEndpointStates(providerId, entry.endpoints, { allowDetachingModels: true })
   await applySettings(providerId, entry.settings)
   await applyModels(providerId, entry.models)
 }

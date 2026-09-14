@@ -19,7 +19,8 @@ export const PROVIDER_BUNDLE_VERSION = 1
 
 const ProviderBundleEndpointSchema = z.object({
   protocol: ProtocolSchema,
-  url: z.string().min(1),
+  /** 空串表示供应商这一层还没有这个协议的默认地址（协议载体行，见 `schemas.ts` 的同名字段）。 */
+  url: z.string(),
   enabled: z.boolean().default(true),
 })
 
