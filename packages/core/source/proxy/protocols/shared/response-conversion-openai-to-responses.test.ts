@@ -42,6 +42,26 @@ describe('openAiResponseToResponses', () => {
     })
   })
 
+  it('joins array-style content and ignores usage without token counters', () => {
+    const result = openAiResponseToResponses({
+      id: 'chat_parts',
+      choices: [{
+        message: { content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] },
+        finish_reason: 'stop',
+      }],
+      usage: {},
+    })
+
+    expect(result.output).toEqual([{
+      id: 'chat_parts_msg',
+      type: 'message',
+      status: 'completed',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'ab', annotations: [] }],
+    }])
+    expect(result).not.toHaveProperty('usage')
+  })
+
   it('emits function_call output items for tool calls', () => {
     const result = openAiResponseToResponses({
       id: 'chat_2',

@@ -180,6 +180,38 @@ describe('responsesToOpenAiRequest', () => {
       .toEqual([{ type: 'image_url', image_url: { url: 'https://example.com/a.png' } }])
   })
 
+  it('joins array-style function call output and serializes non-text output', () => {
+    // Responses 文档里 `function_call_output.output` 是 `string or array`，图片/文件项没有文本时按空串跳过
+    const result = responsesToOpenAiRequest({
+      input: [
+        { type: 'function_call_output', call_id: 'call_1', output: [
+          { type: 'input_text', text: 'line one' },
+          { type: 'input_image', image_url: 'https://example.com/a.png' },
+          { type: 'input_text', text: 'line two' },
+        ] },
+        { type: 'function_call_output', call_id: 'call_2', output: { nested: true } },
+        { type: 'function_call_output', call_id: 'call_3', output: null },
+      ],
+    }, 'm')
+
+    expect(result.messages).toEqual([
+      { role: 'tool', tool_call_id: 'call_1', content: 'line one\nline two' },
+      { role: 'tool', tool_call_id: 'call_2', content: '{"nested":true}' },
+      { role: 'tool', tool_call_id: 'call_3', content: '' },
+    ])
+  })
+
+  it('defaults a json schema format without an inline schema and drops non-boolean strict', () => {
+    const schemaless = responsesToOpenAiRequest({ input: 'hi', text: { format: { type: 'json_schema', name: 'answer' } } }, 'm')
+    expect(schemaless.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'answer', schema: {} } })
+
+    const looseStrict = responsesToOpenAiRequest({
+      input: 'hi',
+      text: { format: { type: 'json_schema', name: 'answer', schema: { type: 'object' }, strict: 'yes' } },
+    }, 'm')
+    expect(looseStrict.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object' } } })
+  })
+
   it('tolerates malformed input items without throwing', () => {
     const result = responsesToOpenAiRequest({
       input: [

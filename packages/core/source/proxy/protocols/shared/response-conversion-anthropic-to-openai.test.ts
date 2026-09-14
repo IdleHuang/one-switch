@@ -60,6 +60,23 @@ describe('anthropicResponseToOpenAi', () => {
     expect(result.usage).toBeUndefined()
     expect(result.choices).toEqual([{ index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }])
   })
+
+  it('ignores usage objects that carry no token counters', () => {
+    // 上游只回计数器以外的字段时不能据此生成一行全 0 的 usage
+    expect(anthropicResponseToOpenAi({ content: [], usage: {} }).usage).toBeUndefined()
+    expect(anthropicResponseToOpenAi({ content: [], usage: { service_tier: 'standard' } }).usage).toBeUndefined()
+  })
+
+  it('reports only the cache detail the Anthropic response actually provides', () => {
+    const result = anthropicResponseToOpenAi({ content: [], usage: { input_tokens: 3, cache_creation_input_tokens: 5 } })
+    // output_tokens 缺失按 0 计；总输入 = 未缓存 3 + 缓存写入 5，不存在 cache_read 时不写该键
+    expect(result.usage).toEqual({
+      prompt_tokens: 8,
+      completion_tokens: 0,
+      total_tokens: 8,
+      prompt_tokens_details: { cache_write_tokens: 5 },
+    })
+  })
 })
 
 describe('anthropicEventToOpenAiChunks', () => {
