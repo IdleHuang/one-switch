@@ -191,6 +191,12 @@ describe('anthropicToOpenAiRequest', () => {
     })
   })
 
+  it('skips system prompts that produce no OpenAI part', () => {
+    expect(anthropicToOpenAiRequest({ system: '', messages: [] }, 'm').messages).toEqual([])
+    // system 数组里只有无法映射的 block 时不生成空 system 消息
+    expect(anthropicToOpenAiRequest({ system: [{ type: 'text' }], messages: [] }, 'm').messages).toEqual([])
+  })
+
   it('tolerates malformed messages without throwing', () => {
     const result = anthropicToOpenAiRequest({
       messages: [null, 'nope', { role: 'assistant' }, { role: 'user', content: [] }, { role: 'user', content: [{ type: 'text' }, 7] }],

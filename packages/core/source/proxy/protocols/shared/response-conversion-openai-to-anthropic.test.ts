@@ -56,6 +56,29 @@ describe('openAiResponseToAnthropic', () => {
     expect(empty.usage).toBeUndefined()
   })
 
+  it('floors the uncached input count when cache details exceed the prompt total', () => {
+    // 异常数据（cached > prompt_tokens）按约定的 0 下限处理，不允许出现负数 input_tokens
+    const result = openAiResponseToAnthropic({
+      choices: [{ message: { content: 'x' } }],
+      usage: { prompt_tokens: 2, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 7 } },
+    })
+
+    expect(result.usage).toEqual({ input_tokens: 0, output_tokens: 1, cache_read_input_tokens: 7 })
+  })
+
+  it('ignores usage objects that carry no token counters', () => {
+    const result = openAiResponseToAnthropic({ choices: [{ message: { content: 'x' } }], usage: {} })
+    expect(result).toEqual({
+      id: '',
+      type: 'message',
+      role: 'assistant',
+      model: '',
+      content: [{ type: 'text', text: 'x' }],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+    })
+  })
+
   it('keeps text before tool_use blocks', () => {
     const result = openAiResponseToAnthropic({
       choices: [{

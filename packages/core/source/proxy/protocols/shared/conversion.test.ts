@@ -535,6 +535,10 @@ describe('SSE conversion', () => {
     expect(() => createSseConverter('openai-completions', 'openai-completions')).toThrow(/Same-protocol streaming responses must not enter the conversion path/)
   })
 
+  it('rejects unsupported streaming directions', () => {
+    expect(() => createSseConverter('anthropic-messages', 'openai-responses')).toThrow(/Unsupported response conversion direction/)
+  })
+
   it('buffers partial chunks split across pushes', () => {
     const converter = createSseConverter('anthropic-messages', 'openai-completions')
     expect(converter.push('data: {"choices":[{"delta":{"con')).toBe('')
