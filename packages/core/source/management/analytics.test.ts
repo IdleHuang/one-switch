@@ -131,7 +131,7 @@ describe('analytics route', () => {
       data: {
         summary: { totalRequests: number; failedCount: number }
         providerStats: Array<{ providerId: string; percent: number }>
-        modelStats: Array<{ providerModelName: string; successRate: number }>
+        modelStats: Array<{ providerModelName: string; successRate: number; avgTps: number | null }>
         failureReasons: Array<{ reason: string; count: number }>
       }
     }
@@ -140,9 +140,11 @@ describe('analytics route', () => {
     expect(payload.data.summary.totalRequests).toBeGreaterThanOrEqual(2)
     expect(payload.data.summary.failedCount).toBeGreaterThanOrEqual(1)
     expect(payload.data.providerStats).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: provider.id })]))
+    // 速度的分母是生成时段（1500 - 150），不是整段尝试耗时：20 / 1.35 = 14.81…；
+    // 失败的尝试不参与速度——它没有完整输出，也就没有可比的产出速率。
     expect(payload.data.modelStats).toEqual(expect.arrayContaining([
-      expect.objectContaining({ providerModelName: 'provider-success' }),
-      expect.objectContaining({ providerModelName: 'provider-failed' }),
+      expect.objectContaining({ providerModelName: 'provider-success', avgTps: 20 / 1.35 }),
+      expect.objectContaining({ providerModelName: 'provider-failed', avgTps: null }),
     ]))
     expect(payload.data.failureReasons).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'RATE_LIMITED' })]))
 

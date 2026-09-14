@@ -3,7 +3,8 @@ import type { RequestLogEntry } from '@common/schemas'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { useLocale, useTranslation } from '@/i18n/provider'
-import { PROTOCOL_LABEL, formatDuration, formatStatus, formatTime } from '../lib/format'
+import { formatMilliseconds } from '@common/metrics'
+import { PROTOCOL_LABEL, formatStatus, formatTime } from '../lib/format'
 
 interface RequestRowProps {
   log: RequestLogEntry
@@ -65,14 +66,14 @@ export function RequestRow(props: RequestRowProps) {
                 title={attempt.errorMessage ?? undefined}
               >
                 {t('requestLogs.attempt.label', { index: i + 1 })}: {attempt.providerName}/{attempt.providerModelName} ·{' '}
-                {formatDuration(attempt.durationMilliseconds)}
+                {formatMilliseconds(attempt.durationMilliseconds)}
               </span>
             ))}
           </div>
         )}
         {log.attempts.length === 1 && (
           <div className="system-xs-regular text-text-tertiary">
-            {t('requestLogs.table.duration')} {formatDuration(log.totalDurationMilliseconds)}
+            {t('requestLogs.table.duration')} {formatMilliseconds(log.totalDurationMilliseconds)}
             {log.totalTokens != null ? ` · ${log.totalTokens} tokens` : ''}
           </div>
         )}

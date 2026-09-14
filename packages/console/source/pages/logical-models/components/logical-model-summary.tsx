@@ -3,6 +3,7 @@ import { MetricGrid } from '@/components/metric-grid'
 import { NumberTicker } from '@/components/ui/number-ticker'
 import { useTranslation } from '@/i18n/provider'
 import type { ProviderModelRoute } from '@common/schemas'
+import { millisecondsDisplayParts, outputSpeedDecimalPlaces } from '@common/metrics'
 import type { LogicalModelSummaryMetrics } from '../lib/model-metrics'
 
 interface LogicalModelSummaryProps {
@@ -16,9 +17,19 @@ type TickerValueProps = {
   suffix?: string
 }
 
+interface DurationTickerProps {
+  milliseconds: number
+}
+
 function TickerValue(props: TickerValueProps) {
   if (props.value == null) return <>—</>
   return <><NumberTicker value={props.value} decimalPlaces={props.decimalPlaces} />{props.suffix}</>
+}
+
+/** 延迟的动画展示。数值、单位与小数位都由 `@common/metrics` 的同一套规则给出。 */
+function DurationTicker(props: DurationTickerProps) {
+  const parts = millisecondsDisplayParts(props.milliseconds)
+  return <TickerValue value={parts.value} decimalPlaces={parts.decimalPlaces} suffix={parts.unit} />
 }
 
 export function LogicalModelSummary(props: LogicalModelSummaryProps) {
@@ -29,8 +40,8 @@ export function LogicalModelSummary(props: LogicalModelSummaryProps) {
   return (
     <MetricGrid items={[
       { label: t('logicalModels.summary.successRate'), value: metrics?.successRate == null ? '—' : <><TickerValue value={metrics.successRate * 100} decimalPlaces={1} suffix="%" /></>, Icon: Activity, hint: metrics ? <>{t('logicalModels.summary.successRateHint', { count: metrics.completedRequestCount })}</> : t('logicalModels.summary.awaitingData') },
-      { label: t('logicalModels.summary.avgDuration'), value: metrics?.avgDurationMilliseconds == null ? '—' : <><TickerValue value={metrics.avgDurationMilliseconds >= 1000 ? metrics.avgDurationMilliseconds / 1000 : metrics.avgDurationMilliseconds} decimalPlaces={metrics.avgDurationMilliseconds >= 1000 ? 1 : 0} suffix={metrics.avgDurationMilliseconds >= 1000 ? 's' : 'ms'} /></>, Icon: Clock3, hint: t('logicalModels.summary.avgDurationHint') },
-      { label: t('logicalModels.summary.avgTps'), value: metrics?.avgTps == null ? '—' : <TickerValue value={metrics.avgTps} decimalPlaces={metrics.avgTps >= 10 ? 0 : 1} />, Icon: Zap, hint: t('logicalModels.summary.avgTpsHint') },
+      { label: t('logicalModels.summary.avgDuration'), value: metrics?.avgDurationMilliseconds == null ? '—' : <DurationTicker milliseconds={metrics.avgDurationMilliseconds} />, Icon: Clock3, hint: t('logicalModels.summary.avgDurationHint') },
+      { label: t('logicalModels.summary.avgTps'), value: metrics?.avgTps == null ? '—' : <TickerValue value={metrics.avgTps} decimalPlaces={outputSpeedDecimalPlaces(metrics.avgTps)} />, Icon: Zap, hint: t('logicalModels.summary.avgTpsHint') },
       { label: t('logicalModels.summary.availableModels'), value: <><TickerValue value={enabledCount} /> / <TickerValue value={props.models.length} /></>, Icon: Layers3, hint: metrics?.failoverCount ? <>{t('logicalModels.summary.failoverHint', { count: metrics.failoverCount })}</> : t('logicalModels.summary.noFailover') },
     ]} />
   )

@@ -1,6 +1,7 @@
 import { Fragment } from 'react'
 import { AlertTriangle, ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Clock, Database, RefreshCw, SearchX, Zap } from 'lucide-react'
 import type { RequestLogDetail, RequestLogEntry } from '@common/schemas'
+import { formatMilliseconds, formatOutputSpeed, requestOutputTokensPerSecond } from '@common/metrics'
 import { tableCellClass, tableHeaderCellClass, tableHeaderClass, TableFrame } from '@/components/table-primitives'
 import { TableStateRow } from '@/components/table-state'
 import { Badge } from '@/components/ui/badge'
@@ -8,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useLocale, useTranslation } from '@/i18n/provider'
 import { cn } from '@/lib/utils'
-import { PROTOCOL_LABEL, formatNumber, formatTime, formatTPS, formatTTFT, formatTransport } from '../lib/format'
+import { PROTOCOL_LABEL, formatNumber, formatTime, formatTransport } from '../lib/format'
 import { RequestLogDetailRow, RequestStatusBadge } from './request-log-detail-row'
 
 interface CachedTokensCellProps {
@@ -157,12 +158,9 @@ function RequestLogsLoadingRows() {
 function RequestLogTableRow(props: RequestLogTableRowProps) {
   const locale = useLocale()
   const t = useTranslation()
-  const successfulAttempt = props.log.attempts.find(attempt => attempt.status === 'success')
   const modelSummary = formatModelSummary(props.log)
-  const tps = formatTPS(
-    props.log.outputTokens,
-    successfulAttempt?.durationMilliseconds ?? props.log.totalDurationMilliseconds,
-  )
+  // 输出速度按 `@common/metrics` 的唯一定义现算，与详情卡片、统计分析三处一致。
+  const tps = formatOutputSpeed(requestOutputTokensPerSecond(props.log))
 
   return (
     <Fragment key={props.log.id}>
@@ -218,7 +216,7 @@ function RequestLogTableRow(props: RequestLogTableRowProps) {
         </td>
         <td className={cn(tableCellClass, 'text-center font-mono')}>
           <span className={cn(props.log.ttftMilliseconds != null && 'text-foreground')}>
-            {formatTTFT(props.log.ttftMilliseconds)}
+            {formatMilliseconds(props.log.ttftMilliseconds)}
           </span>
         </td>
         <td className={cn(tableCellClass, 'text-center font-mono')}>

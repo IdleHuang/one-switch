@@ -328,7 +328,7 @@ function normalizeProviderRequestTrendPoint(row: ProviderTrendRow): ProviderRequ
  * 失败尝试既没有可用输出也没有完整耗时，混进来会让平均与比率失真（尤其是
  * 以成功耗时作分母的 TPS）。
  */
-export interface ModelStat { providerModelId: string; providerModelName: string; providerId: string; providerName: string; attempts: number; success: number; avgLatencyMs: number; avgTtftMs: number | null; cachedInputTokens: number; inputTokens: number; outputTokens: number; successGenerationDurationMs: number }
+export interface ModelStat { providerModelId: string; providerModelName: string; providerId: string; providerName: string; attempts: number; success: number; avgLatencyMs: number; avgTtftMs: number | null; cachedInputTokens: number; inputTokens: number; outputTokens: number; speedOutputTokens: number; speedGenerationDurationMs: number }
 
 export async function getModelStats(sinceMs: number, limit = 10, providerId?: string): Promise<ModelStat[]> {
   // 时间窗同样按尝试表自己的 `createdTime` 收窄（等价性见 `getProviderStats` 上方注释）：
@@ -338,6 +338,9 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
   const pivot = buildAttemptUsagePivot(sinceMs)
   // 失败尝试的用量不算进这些列；未命中透视的尝试以 0 参与。
   const successOnly = (type: UsageTokenType) => sql<number>`coalesce(sum(case when ${requestAttempts.status} = 'success' then ${pivot[type]} else 0 end), 0)`
+  // 参与速度计算的尝试：成功、有输出，且首字延迟没有吃掉整段耗时。
+  // 分子与分母必须来自同一批样本，见下面 `speedOutputTokens` 的注释。
+  const speedSampleBasis = sql`${requestAttempts.status} = 'success' and ${requestAttempts.durationMilliseconds} - coalesce(${requestAttempts.ttftMilliseconds}, 0) > 0 and coalesce(${pivot.outputTokens}, 0) > 0`
   const rows = getDataDb().select({
     // 排行单位是「上游模型」：一个 providerModelId 只属于一个提供方，所以只按它分组——
     // 带上 providerId 会让提供方改绑后留在尝试行里的旧快照把同一个模型拆成两行，
@@ -358,9 +361,13 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
     cachedInputTokens: successOnly('cachedInputTokens').as('cachedInputTokens'),
     inputTokens: successOnly('inputTokens').as('inputTokens'),
     outputTokens: successOnly('outputTokens').as('outputTokens'),
-    // 「生成耗时」= 成功尝试的总耗时减去首字延迟，也就是真正在产出 token 的那段时间：
-    // 拿含首字延迟的全程耗时当分母，流式响应的 TPS 会被严重低估。
-    successGenerationDurationMs: sql<number>`sum(case when ${requestAttempts.status} = 'success' then ${requestAttempts.durationMilliseconds} - coalesce(${requestAttempts.ttftMilliseconds}, 0) else 0 end)`.as('successGenerationDurationMs'),
+    // 速度的两个合计值由 `speedSampleBasis` 筛出同一批尝试，缺一不可：
+    // 「生成时段」= 成功尝试的耗时减去首字延迟，也就是真正在产出 token 的那段时间，
+    // 拿含首字延迟的全程耗时当分母会把流式响应的 TPS 严重低估（口径见 `@common/metrics`）；
+    // 而首字延迟吃掉整段耗时（生成时段不为正）的尝试算不出速度，它的输出 Token
+    // 也就不能只留在分子里，否则比值会被单方面抬高。
+    speedOutputTokens: sql<number>`coalesce(sum(case when ${speedSampleBasis} then ${pivot.outputTokens} else 0 end), 0)`.as('speedOutputTokens'),
+    speedGenerationDurationMs: sql<number>`coalesce(sum(case when ${speedSampleBasis} then ${requestAttempts.durationMilliseconds} - coalesce(${requestAttempts.ttftMilliseconds}, 0) else 0 end), 0)`.as('speedGenerationDurationMs'),
   }).from(requestAttempts)
     .leftJoin(pivot, eq(pivot.attemptId, requestAttempts.id))
     .where(and(...filters))
@@ -369,11 +376,18 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
     .orderBy(sql`attempts desc, ${requestAttempts.providerModelId} asc`)
     .limit(limit)
     .all()
-  return rows.map(row => ({ providerModelId: row.providerModelId, providerModelName: row.providerModelName, providerId: row.providerId, providerName: normalizeDevelopmentProviderName(row.providerId, row.providerName), attempts: row.attempts ?? 0, success: row.success ?? 0, avgLatencyMs: row.avgLatency ?? 0, avgTtftMs: row.avgTtft ?? null, cachedInputTokens: row.cachedInputTokens ?? 0, inputTokens: row.inputTokens ?? 0, outputTokens: row.outputTokens ?? 0, successGenerationDurationMs: row.successGenerationDurationMs ?? 0 }))
+  return rows.map(row => ({ providerModelId: row.providerModelId, providerModelName: row.providerModelName, providerId: row.providerId, providerName: normalizeDevelopmentProviderName(row.providerId, row.providerName), attempts: row.attempts ?? 0, success: row.success ?? 0, avgLatencyMs: row.avgLatency ?? 0, avgTtftMs: row.avgTtft ?? null, cachedInputTokens: row.cachedInputTokens ?? 0, inputTokens: row.inputTokens ?? 0, outputTokens: row.outputTokens ?? 0, speedOutputTokens: row.speedOutputTokens ?? 0, speedGenerationDurationMs: row.speedGenerationDurationMs ?? 0 }))
 }
 
 export interface LatencyBucket { range: string; count: number }
 
+/**
+ * 延迟分桶的**边界标签**：`500ms`、`1s`、`2s`。
+ *
+ * 与 `@common/metrics` 的 `formatMilliseconds` 刻意不同，不要合并：那个函数格式化的是
+ * **一个测量值**（`1.0s`，一位小数让「恰好一秒整」看得见），这里是**区间的端点**（`1s`），
+ * 端点带尾随 `.0` 只会把 `1s-2s` 读成 `1.0s-2.0s`。
+ */
 function formatShortDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`
   const seconds = ms / 1000

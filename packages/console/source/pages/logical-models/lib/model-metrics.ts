@@ -1,4 +1,5 @@
 import type { RequestLogEntry } from '@common/schemas'
+import { averageOutputTokensPerSecond, outputSpeedSampleOf, type OutputSpeedSample } from '@common/metrics'
 
 export interface ProviderModelMetrics {
   sampleCount: number
@@ -17,8 +18,7 @@ export interface LogicalModelSummaryMetrics {
 
 interface MetricAccumulator {
   requestIds: Set<string>
-  tpsTotal: number
-  tpsCount: number
+  speedSamples: OutputSpeedSample[]
   ttftTotal: number
   ttftCount: number
 }
@@ -30,18 +30,20 @@ export function providerModelMetricKey(providerId: string, providerModelId: stri
 export function calculateLogicalModelSummaryMetrics(logs: RequestLogEntry[]): LogicalModelSummaryMetrics {
   const completedLogs = logs.filter(log => log.status === 'success' || log.status === 'failed' || log.status === 'cancelled')
   const successfulLogs = completedLogs.filter(log => log.status === 'success')
-  const durations = successfulLogs.map(log => log.attempts.find(attempt => attempt.status === 'success')?.durationMilliseconds ?? log.totalDurationMilliseconds).filter(duration => duration > 0)
-  const tpsValues = successfulLogs.map(log => {
-    const duration = log.attempts.find(attempt => attempt.status === 'success')?.durationMilliseconds ?? log.totalDurationMilliseconds
-    return log.outputTokens != null && log.outputTokens > 0 && duration > 0 ? log.outputTokens * 1000 / duration : null
-  }).filter((tps): tps is number => tps != null)
+  // 成功请求的耗时取「服务该请求的那次尝试」的端到端耗时，没有尝试可用时才退回请求级总耗时。
+  // 这条回落规则连同速度样本一起由 `@common/metrics` 定义，这里不重写一份。
+  const durations = successfulLogs
+    .map(log => outputSpeedSampleOf(log).attemptDurationMilliseconds)
+    .filter(duration => duration > 0)
 
   return {
     completedRequestCount: completedLogs.length,
     successCount: successfulLogs.length,
     successRate: completedLogs.length > 0 ? successfulLogs.length / completedLogs.length : null,
     avgDurationMilliseconds: durations.length > 0 ? durations.reduce((total, duration) => total + duration, 0) / durations.length : null,
-    avgTps: tpsValues.length > 0 ? tpsValues.reduce((total, tps) => total + tps, 0) / tpsValues.length : null,
+    // 平均速度由 `@common/metrics` 用「先求和再相除」算出：先算每个请求的速度再取算术平均
+    // 会让 20 Token 的短响应与 4000 Token 的长响应一样重，均值被短样本主导。
+    avgTps: averageOutputTokensPerSecond(successfulLogs.map(outputSpeedSampleOf)),
     failoverCount: successfulLogs.filter(log => log.attempts.some(attempt => attempt.status === 'success' && attempt.attemptIndex > 0)).length,
   }
 }
@@ -57,8 +59,7 @@ export function calculateProviderModelMetrics(logs: RequestLogEntry[]): Record<s
     const key = providerModelMetricKey(successfulAttempt.providerId, successfulAttempt.providerModelId)
     const accumulator = accumulators.get(key) ?? {
       requestIds: new Set<string>(),
-      tpsTotal: 0,
-      tpsCount: 0,
+      speedSamples: [],
       ttftTotal: 0,
       ttftCount: 0,
     }
@@ -70,18 +71,20 @@ export function calculateProviderModelMetrics(logs: RequestLogEntry[]): Record<s
       accumulator.ttftCount += 1
     }
 
-    const totalDurationMilliseconds = successfulAttempt.durationMilliseconds
-    if (log.outputTokens != null && log.outputTokens > 0 && totalDurationMilliseconds > 0) {
-      accumulator.tpsTotal += log.outputTokens * 1000 / totalDurationMilliseconds
-      accumulator.tpsCount += 1
-    }
+    // 速度样本与首字延迟取自同一次尝试，同一个模型行上的两个指标才不会错位。
+    // 分子是请求级输出 Token（它本来就是这次尝试镜像过来的一份），分母是这次尝试的耗时。
+    accumulator.speedSamples.push({
+      outputTokens: log.outputTokens,
+      attemptDurationMilliseconds: successfulAttempt.durationMilliseconds,
+      ttftMilliseconds: successfulAttempt.ttftMilliseconds,
+    })
 
     accumulators.set(key, accumulator)
   }
 
   return Object.fromEntries(Array.from(accumulators, ([key, accumulator]) => [key, {
     sampleCount: accumulator.requestIds.size,
-    avgTps: accumulator.tpsCount > 0 ? accumulator.tpsTotal / accumulator.tpsCount : null,
+    avgTps: averageOutputTokensPerSecond(accumulator.speedSamples),
     avgTtftMilliseconds: accumulator.ttftCount > 0 ? accumulator.ttftTotal / accumulator.ttftCount : null,
   }]))
 }

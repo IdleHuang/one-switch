@@ -11,6 +11,7 @@ import {
   Zap,
 } from 'lucide-react'
 import type { Provider, ProviderHealth, ProviderModelHealth, ProviderModelRoute } from '@common/schemas'
+import { formatMilliseconds, formatOutputSpeed } from '@common/metrics'
 import { Link } from '@tanstack/react-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -52,16 +53,6 @@ function formatRelativeTime(t: AppTranslator, timestamp: number | null | undefin
   if (difference < 3_600_000) return t('logicalModels.row.minutesAgo', { count: Math.floor(difference / 60_000) })
   if (difference < 86_400_000) return t('logicalModels.row.hoursAgo', { count: Math.floor(difference / 3_600_000) })
   return t('logicalModels.row.daysAgo', { count: Math.floor(difference / 86_400_000) })
-}
-
-function formatAverageTps(tps: number | null | undefined): string {
-  if (tps == null) return '—'
-  return tps >= 10 ? String(Math.round(tps)) : tps.toFixed(1)
-}
-
-function formatAverageTtft(milliseconds: number | null | undefined): string {
-  if (milliseconds == null) return '—'
-  return `${(milliseconds / 1000).toFixed(2)}s`
 }
 
 function hasHealthSignal(health: ProviderHealth | ProviderModelHealth | undefined): boolean {
@@ -197,8 +188,8 @@ export function ProviderModelRow(props: ProviderModelRowProps) {
         )}>
           <ProtocolIcons endpoints={model.endpoints} />
           <span className="shrink-0 text-text-quaternary" aria-hidden="true">·</span>
-          <span className="inline-flex items-center gap-1"><Zap size={10} aria-hidden />TPS {formatAverageTps(props.metrics?.avgTps)}</span>
-          <span className="inline-flex items-center gap-1"><Timer size={10} aria-hidden />TTFT {formatAverageTtft(props.metrics?.avgTtftMilliseconds)}</span>
+          <span className="inline-flex items-center gap-1"><Zap size={10} aria-hidden />TPS {formatOutputSpeed(props.metrics?.avgTps)}</span>
+          <span className="inline-flex items-center gap-1"><Timer size={10} aria-hidden />TTFT {formatMilliseconds(props.metrics?.avgTtftMilliseconds)}</span>
           <ModelHealth providerHealth={props.providerHealth} providerModelHealth={props.providerModelHealth} />
         </div>
       </div>

@@ -1,11 +1,6 @@
 import type { AnalyticsRange } from '@common/schemas'
 import type { AppTranslator } from '@/i18n/provider'
 
-export function formatLatency(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
 export function formatTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
   if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`

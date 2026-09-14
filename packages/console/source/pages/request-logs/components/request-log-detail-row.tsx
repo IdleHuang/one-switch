@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Braces, Check, ChevronRight, Copy, Route, ScrollText } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { resolveProxyOrigin } from '@common/proxy-origin'
+import { formatMilliseconds, formatOutputSpeed, requestOutputTokensPerSecond, servingAttemptOf } from '@common/metrics'
 import type {
   RequestContent,
   RequestLogDetail,
@@ -22,11 +23,8 @@ import {
   distinctAttemptErrorCode,
   distinctAttemptErrorMessage,
   formatAttemptOutcome,
-  formatDuration,
   formatNumber,
   formatStatus,
-  formatTPS,
-  formatTTFT,
   formatTime,
   formatTransport,
 } from '../lib/format'
@@ -369,9 +367,9 @@ function AttemptRow(props: AttemptRowProps) {
       </div>
 
       <div className="shrink-0 text-right font-mono system-2xs-regular tabular-nums">
-        <div className="text-text-secondary">{formatDuration(attempt.durationMilliseconds)}</div>
+        <div className="text-text-secondary">{formatMilliseconds(attempt.durationMilliseconds)}</div>
         {attempt.ttftMilliseconds !== null && (
-          <div className="text-text-quaternary">{t('requestLogs.attempt.firstToken', { value: formatTTFT(attempt.ttftMilliseconds) })}</div>
+          <div className="text-text-quaternary">{t('requestLogs.attempt.firstToken', { value: formatMilliseconds(attempt.ttftMilliseconds) })}</div>
         )}
       </div>
 
@@ -490,8 +488,8 @@ function RawUsage(props: RawUsageProps) {
  */
 function buildMetrics(t: AppTranslator, log: RequestLogEntry | RequestLogDetail, tps: string): MetricCardProps[] {
   return [
-    { label: t('requestLogs.metric.totalDuration'), value: formatDuration(log.totalDurationMilliseconds) },
-    { label: t('requestLogs.metric.ttft'), value: formatTTFT(log.ttftMilliseconds) },
+    { label: t('requestLogs.metric.totalDuration'), value: formatMilliseconds(log.totalDurationMilliseconds) },
+    { label: t('requestLogs.metric.ttft'), value: formatMilliseconds(log.ttftMilliseconds) },
     { label: t('requestLogs.metric.outputSpeed'), value: tps === '—' ? '—' : `${tps} t/s` },
     { label: t('requestLogs.metric.totalTokens'), value: formatNumber(log.totalTokens) },
     { label: t('requestLogs.metric.inputTokens'), value: formatNumber(log.inputTokens) },
@@ -509,13 +507,14 @@ export function RequestLogDetailRow(props: RequestLogDetailRowProps) {
   const { log, modelName } = props
   // 服务该请求的那次尝试恒为最后一次：故障转移一旦交付就停止，被放弃的尝试不会排在它后面。
   // 它是这张详情卡片全部尝试级口径的来源，也是「有成功记录时必然是那一条」的原因。
-  const servingAttempt = log.attempts[log.attempts.length - 1] ?? null
-  // 上游协议只是尝试级事实：失败转移的请求可能先后走过不同协议，
-  // 而只有真正交付给客户端的那次尝试说明了「客户端拿到的响应是什么形态」。
+  const servingAttempt = servingAttemptOf(log)
+  // 上游协议是尝试级事实：故障转移的请求可能先后朝不同协议发出过请求，
+  // 头部只标出真正交付那次尝试用的是哪个上游协议，与客户端拿到什么形态的响应无关
+  // （那是请求级 `transport` 与尝试级 `upstreamTransport` 说的事）。
   const upstreamProtocol = servingAttempt?.upstreamProtocol
     ?? log.attempts[0]?.upstreamProtocol
-  // 速度按同一个口径现算：分母是那次尝试自己的耗时，不是整条请求链路的耗时。
-  const tps = formatTPS(log.outputTokens, servingAttempt?.durationMilliseconds ?? log.totalDurationMilliseconds)
+  // 速度按 `@common/metrics` 的唯一定义现算，与列表行、统计分析三处一致。
+  const tps = formatOutputSpeed(requestOutputTokensPerSecond(log))
   const contents = 'contents' in log ? log.contents : null
   const requestRewriteRules = 'requestRewriteRules' in log ? log.requestRewriteRules : null
   const [selectedAttemptId, setSelectedAttemptId] = React.useState<string | null>(null)
