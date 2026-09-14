@@ -109,6 +109,13 @@ describe('first output detection', () => {
     expect(hasOutput({ type: 'response.reasoning_text.delta', delta: '嗯' })).toBe(true)
   })
 
+  it('counts tool payload deltas as real output', () => {
+    // 工具参数/输入也是上游生成的 Token，只是没有走正文通道
+    expect(hasOutput({ type: 'response.function_call_arguments.delta', delta: '{"q"' })).toBe(true)
+    expect(hasOutput({ type: 'response.custom_tool_call_input.delta', delta: 'free' })).toBe(true)
+    expect(hasOutput({ type: 'response.function_call_arguments.delta', delta: '' })).toBe(false)
+  })
+
   it('still ignores empty reasoning and non-content deltas', () => {
     expect(hasOutput({ choices: [{ delta: { reasoning_content: '' } }] })).toBe(false)
     expect(hasOutput({ type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '' } })).toBe(false)

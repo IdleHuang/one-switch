@@ -89,4 +89,33 @@ describe('ToolNameRegistry', () => {
     expect(registry.flatten('crm', 'lookup')).toBe('crm__lookup')
     expect(registry.restore('unknown')).toBeUndefined()
   })
+
+  it('按原始名反查展平名，供 tool_choice 改写', () => {
+    const registry = new ToolNameRegistry()
+    registry.flatten('crm', 'lookup')
+    registry.reserve('plain')
+
+    expect(registry.locate('lookup')).toBe('crm__lookup')
+    // 顶层工具名本来就该原样下发，不能被换成别处的展平名
+    expect(registry.locate('plain')).toBeUndefined()
+    expect(registry.locate('unknown')).toBeUndefined()
+    expect(registry.locate('')).toBeUndefined()
+  })
+
+  it('同名工具落在多个命名空间时不猜，返回 undefined', () => {
+    const registry = new ToolNameRegistry()
+    registry.flatten('crm', 'lookup')
+    registry.flatten('billing', 'lookup')
+
+    // `ToolChoiceFunction` 只有 `name`，没有 `namespace`，无法消歧
+    expect(registry.locate('lookup')).toBeUndefined()
+  })
+
+  it('名字同时是顶层工具与组内工具时以顶层为准', () => {
+    const registry = new ToolNameRegistry()
+    registry.reserve('lookup')
+    registry.flatten('crm', 'lookup')
+
+    expect(registry.locate('lookup')).toBeUndefined()
+  })
 })

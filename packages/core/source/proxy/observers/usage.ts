@@ -118,7 +118,7 @@ export function hasOutput(data: Record<string, unknown>): boolean {
   if (type === 'response.output_text.delta' || type === 'response.reasoning_summary_text.delta' || type === 'response.reasoning_text.delta') {
     return hasValue(data.delta)
   }
-  if (type === 'response.function_call_arguments.delta') {
+  if (type === 'response.function_call_arguments.delta' || type === 'response.custom_tool_call_input.delta') {
     return hasValue(data.delta)
   }
   return false

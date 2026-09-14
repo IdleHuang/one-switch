@@ -152,6 +152,9 @@ export function openAiChunkToAnthropicEvents(chunk: Json, state: OpenAiToAnthrop
   for (const rawCall of asArray(delta?.tool_calls)) {
     const call = asObject(rawCall)
     if (!call) continue
+    // 自定义工具（`type: "custom"`）在 Anthropic 无对应语义，与上面非流式分支一致整条丢弃；
+    // 否则会开出一个没有名字、也永远填不上参数的 tool_use 块。
+    if (call.type === 'custom') continue
     const openAiIndex = asNumber(call.index) ?? 0
     const fn = asObject(call.function)
     let blockIndex = state.toolBlockIndexes.get(openAiIndex)

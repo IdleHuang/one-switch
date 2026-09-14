@@ -39,26 +39,47 @@ function toTargetNamePart(value: string): string {
 }
 
 /**
+ * 把任意字符串归一化成目标协议合法的**独立**名字：字符集同上，并截断到 64 字符。
+ *
+ * 这跟 `flatten` 不同：它不承担还原职责，所以只能用在「客户端看不到回显」的字段上，
+ * 目前是 `response_format.json_schema.name`（两侧约束相同，且响应不回显这个名字）。
+ * 工具名一律走 `reserve` / `flatten`，因为客户端必须能认出自己声明的名字。
+ */
+export function toTargetName(value: string): string {
+  return toTargetNamePart(value).slice(0, TARGET_NAME_MAX_LENGTH)
+}
+
+/**
  * 记忆一次尝试里「命名空间工具 ↔ 目标协议工具名」的对应关系。
  *
  * 无状态转换器（纯函数 + 流式状态机）不持有请求上下文，所以上下文由调用方持有并透传：
  * 请求转换往里**写**，响应转换往里**查**。表里没有的名字（非命名空间工具、或模型臆造的名字）
  * 查询返回 `undefined`，调用方按原样输出即可。
+ *
+ * 查询有两个方向，分别服务「上游看到什么」与「客户端看到什么」：
+ * - `locate`：客户端给的名字 → 上游看到的目标名（请求侧的 `tool_choice`）；
+ * - `restore`：上游回来的目标名 → 客户端声明的 `(namespace, name)`（响应侧的工具调用项）。
  */
 export class ToolNameRegistry {
   /** 已被占用的目标协议工具名。顶层（非命名空间）工具也在这里占位，避免被展平结果抢占。 */
   private readonly taken = new Set<string>()
+  /** 顶层（非命名空间）工具名，用于识别「这个名字本来就该原样下发」。 */
+  private readonly topLevel = new Set<string>()
   /** `(namespace, name)` → 展平名。二级 Map 避免用字符串拼 key 时的分隔符假设。 */
   private readonly flattened = new Map<string, Map<string, string>>()
   /** 展平名 → 原始坐标，供响应侧还原。 */
   private readonly identities = new Map<string, NamespacedToolIdentity>()
+  /** 原始工具名 → 登记过的展平名，供 `locate` 消歧。 */
+  private readonly origins = new Map<string, Set<string>>()
 
   /**
    * 占住一个顶层工具名：它本来就在目标协议里合法且必须原样保留，
    * 所以展平结果必须绕开它，而不是反过来。重复占位无副作用。
    */
   reserve(name: string): void {
-    if (name) this.taken.add(name)
+    if (!name) return
+    this.taken.add(name)
+    this.topLevel.add(name)
   }
 
   /**
@@ -86,6 +107,12 @@ export class ToolNameRegistry {
     }
     group.set(name, candidate)
     this.identities.set(candidate, { namespace, name })
+    let candidates = this.origins.get(name)
+    if (!candidates) {
+      candidates = new Set()
+      this.origins.set(name, candidates)
+    }
+    candidates.add(candidate)
     return candidate
   }
 
@@ -95,5 +122,24 @@ export class ToolNameRegistry {
    */
   restore(flattenedName: string): NamespacedToolIdentity | undefined {
     return this.identities.get(flattenedName)
+  }
+
+  /**
+   * 原始工具名的正向查询：把客户端的名字换成它在上游看到的目标协议名字。
+   *
+   * 请求侧的 `tools` 里能带上 `namespace` 字段，所以展平时不需要猜；但 `tool_choice` 是客户端
+   * 按**它自己声明的名字**写的（`ToolChoiceFunction` / `ToolChoiceCustom` 都只有 `name`，
+   * 没有 `namespace`），上游却只认展平名，所以要在这里补上这一步。
+   *
+   * 只有「这个名字不是顶层工具名，且唯一对应一个展平名」时才敢换：
+   * - 顶层工具名必须原样下发，哪怕它和某个组内工具重名；
+   * - 多个命名空间里的同名工具无法只从 `name` 一个字段消歧。
+   * 任何不确定的情况都返回 `undefined`，调用方原样下发——宁可让上游报「未知工具」也不猜错工具。
+   */
+  locate(name: string): string | undefined {
+    if (!name || this.topLevel.has(name)) return undefined
+    const candidates = this.origins.get(name)
+    if (!candidates || candidates.size !== 1) return undefined
+    return candidates.values().next().value
   }
 }
