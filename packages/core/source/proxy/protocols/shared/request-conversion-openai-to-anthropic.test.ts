@@ -224,4 +224,12 @@ describe('openAiToAnthropicRequest', () => {
     expect(openAiToAnthropicRequest({ messages: [], temperature: 'hot', top_p: Number.NaN }, 'm'))
       .toEqual({ model: 'm', messages: [], max_tokens: 4096 })
   })
+
+  it('prefers max_completion_tokens over the deprecated max_tokens', () => {
+    expect(openAiToAnthropicRequest({ messages: [], max_completion_tokens: 128, max_tokens: 64 }, 'm').max_tokens).toBe(128)
+    expect(openAiToAnthropicRequest({ messages: [], max_completion_tokens: 128 }, 'm').max_tokens).toBe(128)
+    expect(openAiToAnthropicRequest({ messages: [], max_tokens: 64 }, 'm').max_tokens).toBe(64)
+    // 两个都不是有限数字时仍需给出 Anthropic 必填的 max_tokens
+    expect(openAiToAnthropicRequest({ messages: [], max_completion_tokens: 'many' }, 'm').max_tokens).toBe(4096)
+  })
 })

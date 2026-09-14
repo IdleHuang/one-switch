@@ -3,6 +3,8 @@ import { asArray, asNumber, asObject, asString, safeJsonParse, type Json } from 
 /**
  * OpenAI Chat Completions 请求 → Anthropic Messages 请求。
  *
+ * 字段依据见 docs/references/openai-completions.md 与 docs/references/anthropic-messages.md。
+ *
  * 关键差异：OpenAI 用独立的 `role: tool` 消息承载工具结果，Anthropic 要求
  * `tool_result` block 出现在紧随 assistant `tool_use` 的用户消息中，因此连续的
  * tool 消息必须合并为同一个 user 消息的多个 block，而不是各占一条 user 消息。
@@ -35,7 +37,7 @@ function contentToAnthropicBlocks(content: unknown): Json[] {
       if (match) blocks.push({ type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } })
       else if (url) blocks.push({ type: 'image', source: { type: 'url', url } })
     }
-    // refusal / input_audio 等无对应能力，丢弃
+    // refusal / input_audio / file 等单侧能力在 Anthropic 无对应 block，按保守转换丢弃
   }
   return blocks
 }
@@ -56,6 +58,7 @@ function openAiToolCallsToAnthropicBlocks(toolCalls: unknown): Json[] {
     const fn = asObject(call?.function)
     const name = asString(fn?.name)
     if (!call || !fn || !name) continue
+    // 只识别 `type: "function"`：自定义工具（`type: "custom"`）在 Anthropic 无对应语义，丢弃
     blocks.push({ type: 'tool_use', id: asString(call.id) ?? '', name, input: safeJsonParse(asString(fn.arguments), {}) })
   }
   return blocks
@@ -134,7 +137,9 @@ export function openAiToAnthropicRequest(body: Json, model: string): Json {
   const result: Json = {
     model,
     messages,
-    max_tokens: asNumber(body.max_tokens) ?? DEFAULT_MAX_TOKENS,
+    // Chat Completions 已把 `max_tokens` 标为弃用并推荐 `max_completion_tokens`（后者才含推理 token，
+    // o 系模型也只认它），所以优先读新字段。Anthropic 侧 `max_tokens` 必填，两者都缺时用 4096 兑底。
+    max_tokens: asNumber(body.max_completion_tokens) ?? asNumber(body.max_tokens) ?? DEFAULT_MAX_TOKENS,
   }
 
   if (system.length > 0) {

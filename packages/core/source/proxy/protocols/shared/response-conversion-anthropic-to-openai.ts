@@ -3,6 +3,8 @@ import { asArray, asNumber, asObject, asString, type Json } from './conversion-u
 /**
  * Anthropic Messages 响应 → OpenAI Chat Completions 响应。
  *
+ * 字段依据见 docs/references/anthropic-messages.md 与 docs/references/openai-completions.md。
+ *
  * 流式注意两点：
  * 1. Anthropic 的 content block index 覆盖全部块类型（文本块也占一个），而 OpenAI 的
  *    `tool_calls[].index` 只在工具调用之间递增，因此必须重新编号。
@@ -42,9 +44,13 @@ function anthropicStopToOpenAiFinish(stop: string | undefined): string {
   switch (stop) {
     case 'end_turn': return 'stop'
     case 'max_tokens': return 'length'
+    // `model_context_window_exceeded` 表示输入+输出把上下文窗口耗尽，
+    // 在 Chat Completions 里语义最接近 `length`（唯一与「被上限截断」等价的取值）。
+    case 'model_context_window_exceeded': return 'length'
     case 'stop_sequence': return 'stop'
     case 'tool_use': return 'tool_calls'
     case 'refusal': return 'content_filter'
+    // `pause_turn`（长任务暂停）在 Chat Completions 无对应取值，退回 `stop`。
     default: return 'stop'
   }
 }
@@ -85,10 +91,21 @@ function chunk(state: AnthropicToOpenAiState, delta: Json, finishReason: string 
   }
 }
 
-/** Anthropic usage 分散在 message_start / message_delta，需浅合并后换算。 */
+/**
+ * Anthropic usage 分散在 message_start / message_delta，需浅合并后换算。
+ *
+ * `MessageDeltaUsage` 的 `input_tokens` / `cache_read_input_tokens` /
+ * `cache_creation_input_tokens` 规范上允许为 null（只在 message_start 里给准确值），
+ * 因此 null 不能覆盖 message_start 已有的计数，否则 prompt_tokens 会凭空变小。
+ */
 function mergeAnthropicUsage(current: Json | undefined, incoming: Json | null): Json | undefined {
   if (!incoming) return current
-  return { ...(current ?? {}), ...incoming }
+  const merged: Json = { ...(current ?? {}) }
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === null || value === undefined) continue
+    merged[key] = value
+  }
+  return merged
 }
 
 /** 复用/分配某个 Anthropic 工具块的 OpenAI tool_calls index。 */

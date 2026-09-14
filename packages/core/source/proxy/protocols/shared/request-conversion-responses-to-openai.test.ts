@@ -163,6 +163,23 @@ describe('responsesToOpenAiRequest', () => {
     expect(jsonObject.response_format).toEqual({ type: 'json_object' })
   })
 
+  it('carries input_image detail only when Chat Completions supports the value', () => {
+    const imageContentOf = (part: Record<string, unknown>): unknown => {
+      const messages = responsesToOpenAiRequest({ input: [{ role: 'user', content: [part] }] }, 'm').messages as Array<Record<string, unknown>>
+      return messages[0].content
+    }
+
+    expect(imageContentOf({ type: 'input_image', image_url: 'https://example.com/a.png', detail: 'high' }))
+      .toEqual([{ type: 'image_url', image_url: { url: 'https://example.com/a.png', detail: 'high' } }])
+    expect(imageContentOf({ type: 'input_image', image_url: 'https://example.com/a.png', detail: 'auto' }))
+      .toEqual([{ type: 'image_url', image_url: { url: 'https://example.com/a.png', detail: 'auto' } }])
+    // Responses 多出来的 `original`（以及非法值）在 Chat Completions 没有对应取值，只保留 url
+    expect(imageContentOf({ type: 'input_image', image_url: 'https://example.com/a.png', detail: 'original' }))
+      .toEqual([{ type: 'image_url', image_url: { url: 'https://example.com/a.png' } }])
+    expect(imageContentOf({ type: 'input_image', image_url: 'https://example.com/a.png', detail: 1 }))
+      .toEqual([{ type: 'image_url', image_url: { url: 'https://example.com/a.png' } }])
+  })
+
   it('tolerates malformed input items without throwing', () => {
     const result = responsesToOpenAiRequest({
       input: [

@@ -3,6 +3,8 @@ import { asArray, asNumber, asObject, asString, stringifyContent, type Json } fr
 /**
  * OpenAI Responses 请求 → OpenAI Chat Completions 请求。
  *
+ * 字段依据见 docs/references/openai-responses.md 与 docs/references/openai-completions.md。
+ *
  * Responses 的 `input` 是「输入项列表」（EasyInputMessage / function_call /
  * function_call_output / reasoning / item_reference 等），与 Chat Completions 的
  * `messages` 不是一一对应，需要按项类型分别映射：
@@ -11,6 +13,14 @@ import { asArray, asNumber, asObject, asString, stringifyContent, type Json } fr
  * - function_call_output ↔ `role: tool` 消息
  * - reasoning / item_reference ↔ 丢弃（无对应语义）
  */
+
+/**
+ * Responses 的 `input_image.detail` 比 Chat Completions 多一个 `original`。
+ * Chat 只接受 `auto` / `low` / `high`，无法等价的值直接丢弃，不自行折算。
+ */
+function responsesImageDetailToOpenAi(detail: unknown): string | undefined {
+  return detail === 'auto' || detail === 'low' || detail === 'high' ? detail : undefined
+}
 
 function responsesContentPartsToOpenAi(content: unknown): Json[] {
   if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : []
@@ -23,8 +33,16 @@ function responsesContentPartsToOpenAi(content: unknown): Json[] {
       if (text === undefined) continue
       parts.push({ type: 'text', text, ...(part.prompt_cache_breakpoint ? { prompt_cache_breakpoint: part.prompt_cache_breakpoint } : {}) })
     } else if (part.type === 'input_image') {
+      // Responses 的 `image_url` 是裸字符串（旧版客户端会包成 `{ url }`），两个形态都收。
       const imageUrl = asString(part.image_url) ?? asString(asObject(part.image_url)?.url)
-      if (imageUrl) parts.push({ type: 'image_url', image_url: { url: imageUrl }, ...(part.prompt_cache_breakpoint ? { prompt_cache_breakpoint: part.prompt_cache_breakpoint } : {}) })
+      const detail = responsesImageDetailToOpenAi(part.detail)
+      if (imageUrl) {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: imageUrl, ...(detail ? { detail } : {}) },
+          ...(part.prompt_cache_breakpoint ? { prompt_cache_breakpoint: part.prompt_cache_breakpoint } : {}),
+        })
+      }
     }
     // input_file / input_audio / refusal 等无对应能力，丢弃
   }
