@@ -90,6 +90,8 @@
 
 #### 8. 跨平台验证
 
+代码已就位（`apps/app/source/tray-manager.ts` / `tray-menu.ts` / `tray-icon.ts`，含 `tray-manager.test.ts` 单测），以下条目待真机逐条验收。
+
 - [ ] macOS 菜单栏图标、菜单和控制台可用
 - [ ] Windows 托盘图标、菜单和控制台可用
 
@@ -129,8 +131,8 @@
 
 ### MVP（P0）：正式发布验收
 
-- [x] `pnpm typecheck`、`pnpm test:server`、`pnpm lint` 和 Vite bundling 已通过；Windows electron-builder 仍受符号链接权限限制
-- [x] 已生成 `0.3.0-beta.1` macOS arm64 DMG/zip，并通过 ad-hoc 签名校验
+- [x] `pnpm typecheck`、`pnpm test:server`、`pnpm lint` 和 Vite bundling 已通过
+- [x] 发布包已在 macOS（arm64）生成 DMG/zip 并通过 ad-hoc 签名校验；三平台打包由 release workflow 的构建矩阵覆盖，本机 Windows 直接跑 electron-builder 仍受符号链接权限限制（需开发者模式或管理员终端）
 - [ ] 使用全新用户数据目录完成发布包首次启动和空数据库初始化
 - [ ] 在发布包内完成 Provider 配置、OpenAI/Anthropic 请求、故障转移、日志与正文查看端到端验收
 - [ ] 完成 macOS arm64/x64 菜单栏、菜单、控制台、开机自启和退出验收
@@ -144,20 +146,22 @@
 
 完整设计见 [i18n.md](./i18n.md)。核心约束：**界面文案可切换语言，日志与错误固定英文。** 阶段 1 为硬需求。
 
-- [ ] 阶段 0：`SettingsSchema` 增 `language`、i18n 核心、目录骨架、`I18nProvider`、设置页语言行
-- [ ] 阶段 1：日志与错误英文化（`errors.ts`、管理 API、代理层、运行日志），错误码收窄为 `ApiErrorCode`，渲染层按错误码本地化
-- [ ] 阶段 2：外壳与通用组件（侧栏、layout、设置页、通用表单 / 列表状态）
-- [ ] 阶段 3：业务页逐页迁移（overview / request-logs / logs / logical-models / model-management / router / request-rewrite-rules / access-config）
-- [ ] 阶段 4：原生托盘 / 菜单 / 对话框本地化
-- [ ] 阶段 5：门禁与清理（`no-hardcoded-cjk` ESLint 规则、目录一致性检查、移除硬编码中文）
+- [x] 阶段 0：`SettingsSchema` 增 `language`、i18n 核心、目录骨架、`I18nProvider`、设置页语言行
+- [x] 阶段 1：日志与错误英文化（`errors.ts`、管理 API、代理层、运行日志），错误码收窄为 `ApiErrorCode`，渲染层按错误码本地化
+- [x] 阶段 2：外壳与通用组件（侧栏、layout、设置页、通用表单 / 列表状态）
+- [x] 阶段 3：业务页逐页迁移（overview / request-logs / logs / logical-models / model-management / router / request-rewrite-rules / access-config）
+- [x] 阶段 4：原生托盘 / 菜单 / 对话框本地化
+- [x] 阶段 5：门禁与清理（`no-hardcoded-cjk` ESLint 规则、目录一致性检查、移除硬编码中文）
+
+> 实施状态以 [i18n.md](./i18n.md) §8 为准：六个阶段全部落地（en / zh-CN 双目录、`no-hardcoded-cjk` 已接入 `pnpm lint`、目录一致性由 `catalogs.test.ts` 兜底）。
 
 ### 范围
 
 - [x] 日志筛选已支持状态、逻辑模型、协议、供应商和时间范围，并保持 list/count 条件一致；请求 ID 贯穿仍待补齐
 - [x] 冷却/熔断状态可视化：逻辑模型页展示冷却状态与连续失败次数徽标
 - [x] 供应商包备份/恢复：按供应商导出/导入端点、模型与自定义设置，密钥仅存系统密钥环
-- [ ] Token 用量统计：按 `request_usages.type` 聚合展示今日/本周用量（基础指标已存在，产品口径与专用 UI 仍需确认）
-- [ ] 协议兼容转换器补充验收（详见 [protocol-conversion.md](./protocol-conversion.md)）：核心转换和 UI 已落地，转换候选故障切换、转换错误 400、流式转换异常及各方向发布包验收仍待补齐
+- [x] Token 用量统计：按 `request_usages.type` 聚合展示今日/本周用量（overview 的 `range` 已支持 `today` / `7d` / `30d`，统计卡与趋势图按 `request_usages.type` 拆分输入 / 输出 / 推理 / 缓存读写，见 `analytics-store.ts` 的 usage pivot）
+- [ ] 协议兼容转换器补充验收（详见 [protocol-conversion.md](./protocol-conversion.md) 验收清单）：三个方向的转换器、`ToolNameRegistry` 可逆展平、custom 工具往返、转换候选故障切换与 400/502 语义、流式收尾均已落地并有单测（协议转换 196 例）；剩余全部是**真实供应商人工回归**——含命名空间工具寻址、custom 工具全链路与流式事件名复核
 - [x] 代理引擎（设计详见 [proxy-engine.md](./proxy-engine.md)）：协议矩阵收敛到单一描述符注册表，内核没有协议与 HTTP 分支，重写/转换/日志/用量/健康落位为 Modifier 与 Observer 插件；双向传输能力预留在内核，当前没有实现、也不在计划内
 - [x] 上游出站代理设置（详见 [outbound-proxy.md](./outbound-proxy.md)）：HTTP/HTTPS/SOCKS 代理、绕过规则、草稿连接测试，覆盖模型请求与模型列表获取
 - Linux 打包与托盘体验完善
@@ -173,8 +177,8 @@
 - [x] 规则模型已冻结并实现：全局规则与 ProviderModel 绑定、绑定顺序（`priority`）、启停，以及「失败即阻断当前 attempt」语义
 - [x] 请求阶段动作与非流式响应阶段动作已生效；`stage` 是动作级字段，不是匹配条件
 - [x] Header 动作、受限 JSON Path 动作与 `User-Agent` 场景已落地
-- [ ] 三种协议的 thinking/reasoning 字段矩阵，以及 OpenAI Responses、Anthropic Messages 的人工验收
-- [ ] 请求日志中的规则执行摘要与响应字段修改安全审计
+- [ ] 三种协议的 thinking/reasoning 字段矩阵，以及 OpenAI Responses、Anthropic Messages 的人工验收（**部分实现**：Responses `reasoning.effort` ↔ Chat `reasoning_effort` 与用量层 `reasoning_tokens` 已映射；Anthropic `thinking` / `thinking_delta` 当前双向丢弃，完整字段矩阵与人工验收未做，见 [request-rewrite-rules.md](./request-rewrite-rules.md) §5.4）
+- [ ] 请求日志中的规则执行摘要与响应字段修改安全审计（**部分实现**：`request_attempts.requestRewriteRuleIds` / `responseRewriteRuleIds` 已落库并在请求详情展示规则名，粒度只到规则 ID 列表；响应字段修改的安全审计未做，见 [request-rewrite-rules.md](./request-rewrite-rules.md) §12）
 - [ ] 流式事件级规则（仅在独立设计评审通过后实施）
 
 ### 范围

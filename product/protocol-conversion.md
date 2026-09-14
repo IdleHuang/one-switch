@@ -272,4 +272,7 @@ interface ProtocolConversionAdapter {
 - [ ] 流式转换中途中断时，客户端收到协议对应的错误事件，连接正常关闭
 - [ ] 逻辑模型页能区分原生徽标与转换徽标
 - [ ] 请求日志正确显示 `客户端协议 → Provider 协议`
+- [ ] `openai-responses` 客户端 + `openai-completions` 端点：命名空间工具（含组内 custom 成员）可用，模型返回的调用在响应里带正确的 `namespace`，`tool_choice` 指定组内工具时上游不报「未知工具」
+- [ ] 同上组合：`custom` 工具（自由文本 / Grammar）的声明、调用与 `custom_tool_call_output` 历史往返一致，流式事件名与 Responses 官方 SDK 实际行为一致
+- [ ] Anthropic 客户端 + Chat 上游：上游返回 `tool_calls[].type: "custom"` 时不产生无名 `tool_use` 块，也不留半截未闭合的 content block
 - [ ] 开关关闭的模型行为与现状完全一致（回归）
