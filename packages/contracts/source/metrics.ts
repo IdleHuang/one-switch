@@ -5,26 +5,27 @@
  * 结果就是同一件事在不同页面显示成不同的数字。**这个文件是这些数值唯一的定义处**：
  * 谁要展示延迟和速度，都必须从这里取公式与格式，不得就地重写一份。
  *
- * 四个量的关系：
+ * 耗时的分解：
  *
  * ```
- * 尝试耗时 attemptDuration ──┬─ 首字延迟 ttft          （还没有内容的那一段）
- *                            └─ 生成时段 generation     （真正在产出 Token 的那一段）
+ * 尝试耗时 attemptDuration ──┬─ 首字延迟 ttft      （从发出请求到上游第一个真正内容）
+ *                            └─ 出字时段           （首字之后，直到这次尝试结束）
  * ```
  *
- * 请求耗时是另一条轴：它整条链路的长度，不等于任何一次尝试的耗时。
+ * 速度（TPS）的分母是**整段尝试耗时**，不是扣掉首字之后的出字时段——理由见
+ * {@link tokensPerSecondFromTotals}。首字延迟只回答「多久开始出字」，不参与速度。
+ *
+ * 请求总耗时是另一条轴上的第四个量：它是整条链路的长度，不等于任何一次尝试的耗时。
  */
 
 import type { RequestLogEntry, RequestLogEntryAttempt } from './schemas'
 
-/** 一次尝试里与输出速度有关的三个值，同一条尝试记录上的同一批样本。 */
+/** 一次尝试里与输出速度有关的两个值，同一条尝试记录上的同一批样本。 */
 export interface OutputSpeedSample {
   /** 这次尝试产出的输出 Token；上游没报时为 `null`（没报不等于 0）。 */
   outputTokens: number | null
   /** 这次尝试的端到端耗时，即 `request_attempts.durationMilliseconds`。 */
   attemptDurationMilliseconds: number
-  /** 这次尝试的首字延迟；整包响应（非流式）没有首字，为 `null`。 */
-  ttftMilliseconds: number | null
 }
 
 /**
@@ -44,15 +45,13 @@ export function servingAttemptOf(log: RequestLogEntry): RequestLogEntryAttempt |
  * 一条请求的输出速度样本，口径与 {@link servingAttemptOf} 一致。
  *
  * 请求级用量本来就是服务该请求那次尝试镜像过来的一份，所以分子取请求级、分母取那次尝试，
- * 两者是同一次尝试的两个视角，不是两次统计。整条请求都没走到上游时才退回请求级总耗时，
- * 此时也没有尝试级的首字延迟可用。
+ * 两者是同一次尝试的两个视角，不是两次统计。整条请求都没走到上游时才退回请求级总耗时。
  */
 export function outputSpeedSampleOf(log: RequestLogEntry): OutputSpeedSample {
   const attempt = servingAttemptOf(log)
   return {
     outputTokens: log.outputTokens,
     attemptDurationMilliseconds: attempt?.durationMilliseconds ?? log.totalDurationMilliseconds,
-    ttftMilliseconds: attempt ? attempt.ttftMilliseconds : log.ttftMilliseconds,
   }
 }
 
@@ -62,47 +61,49 @@ export function requestOutputTokensPerSecond(log: RequestLogEntry): number | nul
 }
 
 /**
- * 生成时段：这次尝试里真正在产出 Token 的那段时间。
- *
- * 整包响应（非流式）没有「首字」这回事——第一批字节就是全部内容，整段都在产出。
- * 所以首字延迟缺失时按 0 处理，而不是当作「算不出来」：只有这样，流式与整包响应
- * 用的才是同一个公式，两种传输形态的速度才可比。
- *
- * 结果是时长，下限钳在 0：首字延迟记到整段耗时之外只会是采集误差，不该变成负的分母。
- */
-export function generationDurationMilliseconds(attemptDurationMilliseconds: number, ttftMilliseconds: number | null): number {
-  return Math.max(0, attemptDurationMilliseconds - (ttftMilliseconds ?? 0))
-}
-
-/**
- * 速度公式本体：同一批样本的输出 Token 合计 ÷ 生成时段合计。
+ * 速度公式本体：同一批样本的输出 Token 合计 ÷ **同一批样本的尝试耗时**合计。
  *
  * 单条尝试与多条尝试的平均走的都是这一步，只是合计来自一条还是多条。
- * 判据只有一条：**分子与分母必须来自同一批样本**。哪个样本进了分子，它的生成时段
- * 就必须进分母；反过来，算不出生成时段的样本的输出 Token 也不能只留在分子里，
- * 那会让比值被单方面抬高。
+ * 判据只有一条：**分子与分母必须来自同一批样本**——哪个样本的输出 Token 进了分子，
+ * 它的耗时就必须进分母；反过来，算不出耗时的样本的输出 Token 也不能只留在分子里。
  *
- * 不满足时返回 `null`，而不是一个数：没有输出 Token 就是没有分子；生成时段不为正
- * 说明首字延迟已经吃掉整段耗时，这次尝试根本没在产出 Token。**分母趋近 0 不是极高速度，
- * 是没有速度**——除出来的天文数字不该被读成「很快」。
+ * ## 分母为什么是整段尝试耗时，而不是扣掉首字之后的出字时段
+ *
+ * 「输出 Token ÷ 出字时段」看着更贴切，实际会算出不可能的数值，而且错得不只是边界情形：
+ *
+ * 1. **分子里的 Token 是整段尝试产出的，不是首字之后才产出的。** 上游报的输出 Token
+ *    （`completion_tokens` / `output_tokens`）**包含推理 Token**，而推理 Token 恰恰是在
+ *    「首字延迟」那段时间里产出的。把这段时间挖掉、把 Token 留下，分子与分母就不同源了：
+ *    一次 8000ms 思考出 8000 个推理 Token、再用 2000ms 出 200 个正文 Token 的尝试，
+ *    会显示成 8200 ÷ 2s = 4100 TPS。这不是采集误差，是公式本身算错了。
+ * 2. **首字迟到的响应会让分母缩成碎屑。** 上游或中间层把内容攒到末尾一次性下发时，
+ *    首字帧紧贴结束，`耗时 − 首字` 只剩几十毫秒，除出几千 TPS。**分母趋近 0 不是极高速度，
+ *    是没有速度**——这是本项目最典型的口径错误。
+ * 3. **减掉首字让两种传输形态不可比。** 首字延迟在整包响应（非流式）里不存在，只能按 0 处理，
+ *    于是流式样本被挖掉一段时间、非流式样本一点不挖，同一条公式在两种形态下其实不同。
+ *
+ * 代价是语义：得到的是**端到端出字速度**，包含首字等待。首字慢的模型 TPS 更低——但那正是
+ * 用户实际感受到的速度，而「多久开始出字」由首字延迟单独回答，两个维度并没有被合并。
+ *
+ * ## 什么时候算不出速度
+ *
+ * 不满足时返回 `null`，而不是一个数：没有输出 Token 就是没有分子；耗时不正说明这次尝试
+ * 根本没有可度量的时长。**「没有速度」与「速度为零」是两件事。**
  */
-export function tokensPerSecondFromTotals(outputTokens: number, generationDurationMilliseconds: number): number | null {
-  if (!(outputTokens > 0) || !(generationDurationMilliseconds > 0)) return null
-  return outputTokens / (generationDurationMilliseconds / 1000)
+export function tokensPerSecondFromTotals(outputTokens: number, attemptDurationMilliseconds: number): number | null {
+  if (!(outputTokens > 0) || !(attemptDurationMilliseconds > 0)) return null
+  return outputTokens / (attemptDurationMilliseconds / 1000)
 }
 
 /**
- * 单条尝试的输出速度（TPS）：输出 Token ÷ 生成时段。
+ * 单条尝试的输出速度（TPS）：输出 Token ÷ 尝试耗时。
  *
  * 够不够格给出速度由 {@link tokensPerSecondFromTotals} 判定。
  */
 export function outputTokensPerSecond(sample: OutputSpeedSample): number | null {
-  const { outputTokens, attemptDurationMilliseconds, ttftMilliseconds } = sample
+  const { outputTokens, attemptDurationMilliseconds } = sample
   if (outputTokens == null) return null
-  return tokensPerSecondFromTotals(
-    outputTokens,
-    generationDurationMilliseconds(attemptDurationMilliseconds, ttftMilliseconds),
-  )
+  return tokensPerSecondFromTotals(outputTokens, attemptDurationMilliseconds)
 }
 
 /**
@@ -112,19 +113,19 @@ export function outputTokensPerSecond(sample: OutputSpeedSample): number | null 
  * 一次 20 Token 的短响应和一次 4000 Token 的长响应会占同样的分量，均值被短样本带着走。
  * 求和把分子与分母放在同一个口径上，长响应自然拿到它应有的权重。
  *
+ * 两个合计值必须由**同一批样本**产生：耗时不正或没有输出 Token 的样本，分子分母一起剔。
  * 没有任何一个样本够格时返回 `null`，而不是 0——没有速度和有速度但为零是两件事。
  */
 export function averageOutputTokensPerSecond(samples: readonly OutputSpeedSample[]): number | null {
   let outputTokens = 0
-  let generation = 0
+  let duration = 0
   for (const sample of samples) {
     if (sample.outputTokens == null || sample.outputTokens <= 0) continue
-    const duration = generationDurationMilliseconds(sample.attemptDurationMilliseconds, sample.ttftMilliseconds)
-    if (!(duration > 0)) continue
+    if (!(sample.attemptDurationMilliseconds > 0)) continue
     outputTokens += sample.outputTokens
-    generation += duration
+    duration += sample.attemptDurationMilliseconds
   }
-  return tokensPerSecondFromTotals(outputTokens, generation)
+  return tokensPerSecondFromTotals(outputTokens, duration)
 }
 
 /**

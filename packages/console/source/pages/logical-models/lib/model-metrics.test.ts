@@ -52,7 +52,7 @@ function log(overrides: Partial<RequestLogEntry> = {}): RequestLogEntry {
 }
 
 describe('calculateProviderModelMetrics', () => {
-  it('attributes metrics to the successful failover target and measures TPS over the generation window', () => {
+  it('attributes metrics to the successful failover target and measures TPS over the whole attempt', () => {
     // 首个尝试先拿到过首字然后又失败：它的 100ms 不能算到最终生效的 model-b 头上。
     const metrics = calculateProviderModelMetrics([log({
       attempts: [
@@ -61,10 +61,10 @@ describe('calculateProviderModelMetrics', () => {
       ],
     })])
 
-    // 分母是生效尝试的生成时段 2000 - 500 = 1500ms，不含首字等待。
+    // 分母是生效尝试的整段耗时 2000ms，首字等待不扣掉（它的时间也产出了 Token）。
     expect(metrics[providerModelMetricKey('prov_backup', 'model-b')]).toEqual({
       sampleCount: 1,
-      avgTps: 20 / 1.5,
+      avgTps: 20 / 2,
       avgTtftMilliseconds: 500,
     })
   })
@@ -83,7 +83,7 @@ describe('calculateProviderModelMetrics', () => {
     // 没有 Token 数的那条既不进分子也不进分母，平均就等于够格那条自己的速度。
     expect(metrics[providerModelMetricKey('prov_primary', 'model-a')]).toEqual({
       sampleCount: 2,
-      avgTps: 20 / 1.5,
+      avgTps: 20 / 2,
       avgTtftMilliseconds: 500,
     })
   })

@@ -4,7 +4,6 @@ import {
   averageOutputTokensPerSecond,
   formatMilliseconds,
   formatOutputSpeed,
-  generationDurationMilliseconds,
   millisecondsDisplayParts,
   outputSpeedDecimalPlaces,
   outputSpeedSampleOf,
@@ -64,29 +63,14 @@ function logOf(overrides: LogOverrides = {}): RequestLogEntry {
   }
 }
 
-describe('generation duration', () => {
-  it('subtracts the first-token wait from the attempt duration', () => {
-    expect(generationDurationMilliseconds(2000, 500)).toBe(1500)
-  })
-
-  it('treats a missing first-token wait as no wait at all', () => {
-    // 整包响应没有「首字」这个时刻，整段耗时都在产出内容。
-    expect(generationDurationMilliseconds(2000, null)).toBe(2000)
-  })
-
-  it('never goes negative when the wait overshoots the whole attempt', () => {
-    expect(generationDurationMilliseconds(500, 900)).toBe(0)
-  })
-})
-
 describe('tokens per second', () => {
-  it('divides output tokens by the generation window in seconds', () => {
+  it('divides output tokens by the whole attempt duration in seconds', () => {
     expect(tokensPerSecondFromTotals(1500, 1500)).toBe(1000)
     expect(tokensPerSecondFromTotals(120, 5000)).toBe(24)
   })
 
-  it('reports no speed when the generation window is not positive', () => {
-    // 这不是「极快」，是没有速度。曾经的口径把这种请求算成天文数字，就是这个 bug 的来源。
+  it('reports no speed when the duration is not positive', () => {
+    // 这不是「极快」，是没有速度。分母趋近 0 除出天文数字，就是这个 bug 的来源。
     expect(tokensPerSecondFromTotals(100, 0)).toBeNull()
     expect(tokensPerSecondFromTotals(100, -400)).toBeNull()
   })
@@ -98,31 +82,38 @@ describe('tokens per second', () => {
 })
 
 describe('per-attempt output speed', () => {
-  it('measures against the generation window, not the whole attempt', () => {
-    // 20 Token /（2000 - 500）ms = 13.33…
-    expect(outputTokensPerSecond({ outputTokens: 20, attemptDurationMilliseconds: 2000, ttftMilliseconds: 500 })).toBeCloseTo(13.333, 3)
+  it('measures against the whole attempt, first-token wait included', () => {
+    // 20 Token / 2000ms = 10：首字延迟不参与速度，只由 TTFT 自己回答。
+    expect(outputTokensPerSecond({ outputTokens: 20, attemptDurationMilliseconds: 2000 })).toBeCloseTo(10, 6)
   })
 
-  it('uses the whole attempt when there was no first-token wait', () => {
-    expect(outputTokensPerSecond({ outputTokens: 20, attemptDurationMilliseconds: 2000, ttftMilliseconds: null })).toBeCloseTo(10, 6)
+  it('keeps the reasoning tokens in the numerator while keeping the time that produced them in the denominator', () => {
+    // 8000ms 思考出 8000 个推理 Token，再用 2000ms 出 200 个正文 Token。
+    // 旧口径减掉首字后是 8200 / 2s = 4100 TPS；推理 Token 的时间被挖走了，分子分母不同源。
+    expect(outputTokensPerSecond({ outputTokens: 8200, attemptDurationMilliseconds: 10_000 })).toBeCloseTo(820, 6)
   })
 
-  it('reports no speed when the first token ate the whole attempt', () => {
-    expect(outputTokensPerSecond({ outputTokens: 427, attemptDurationMilliseconds: 483, ttftMilliseconds: 483 })).toBeNull()
-    expect(outputTokensPerSecond({ outputTokens: 427, attemptDurationMilliseconds: 483, ttftMilliseconds: 500 })).toBeNull()
+  it('does not turn a first token that ate the whole attempt into a huge speed', () => {
+    // 427 Token 全部在 483ms 内到达：整段耗时就是正确分母，读成 884 TPS 是这个模型真实的表现，
+    // 而不是旧口径里「除以 0ms 得到的天文数字」。
+    expect(outputTokensPerSecond({ outputTokens: 427, attemptDurationMilliseconds: 483 })).toBeCloseTo(884.06, 2)
+  })
+
+  it('reports no speed when the attempt has no measurable duration', () => {
+    expect(outputTokensPerSecond({ outputTokens: 427, attemptDurationMilliseconds: 0 })).toBeNull()
   })
 
   it('reports no speed when the request has no token count', () => {
-    expect(outputTokensPerSecond({ outputTokens: null, attemptDurationMilliseconds: 2000, ttftMilliseconds: null })).toBeNull()
+    expect(outputTokensPerSecond({ outputTokens: null, attemptDurationMilliseconds: 2000 })).toBeNull()
   })
 })
 
 describe('average output speed', () => {
-  it('adds tokens and windows first, then divides once', () => {
+  it('adds tokens and durations first, then divides once', () => {
     // 两条样本各自的单请求速度是 1000 与 200，算术平均会得到 600。
     // 但快的那条只产出 10 个 Token，慢的那条产出了 5000 个：代价要按 Token 加权。
-    const fast = { outputTokens: 10, attemptDurationMilliseconds: 10, ttftMilliseconds: null }
-    const slow = { outputTokens: 5000, attemptDurationMilliseconds: 25_000, ttftMilliseconds: null }
+    const fast = { outputTokens: 10, attemptDurationMilliseconds: 10 }
+    const slow = { outputTokens: 5000, attemptDurationMilliseconds: 25_000 }
     expect(outputTokensPerSecond(fast)).toBe(1000)
     expect(outputTokensPerSecond(slow)).toBe(200)
     expect(averageOutputTokensPerSecond([fast, slow])).toBeCloseTo(5010 / 25.01, 6)
@@ -130,18 +121,18 @@ describe('average output speed', () => {
 
   it('skips samples that have no speed of their own, in the numerator and the denominator alike', () => {
     const samples = [
-      { outputTokens: 20, attemptDurationMilliseconds: 2000, ttftMilliseconds: 500 },
-      { outputTokens: null, attemptDurationMilliseconds: 1000, ttftMilliseconds: null },
-      { outputTokens: 300, attemptDurationMilliseconds: 1000, ttftMilliseconds: 1000 },
-      { outputTokens: 0, attemptDurationMilliseconds: 1000, ttftMilliseconds: null },
+      { outputTokens: 20, attemptDurationMilliseconds: 2000 },
+      { outputTokens: null, attemptDurationMilliseconds: 1000 },
+      { outputTokens: 300, attemptDurationMilliseconds: 0 },
+      { outputTokens: 0, attemptDurationMilliseconds: 1000 },
     ]
-    // 只有第一条够格：另外三条的 Token 一个也没进分子，对应的时段也没进分母。
-    expect(averageOutputTokensPerSecond(samples)).toBeCloseTo(20 / 1.5, 6)
+    // 只有第一条够格：另外三条的 Token 一个也没进分子，对应的耗时也没进分母。
+    expect(averageOutputTokensPerSecond(samples)).toBeCloseTo(10, 6)
   })
 
   it('reports no speed when no sample qualifies', () => {
     expect(averageOutputTokensPerSecond([])).toBeNull()
-    expect(averageOutputTokensPerSecond([{ outputTokens: null, attemptDurationMilliseconds: 1000, ttftMilliseconds: null }])).toBeNull()
+    expect(averageOutputTokensPerSecond([{ outputTokens: null, attemptDurationMilliseconds: 1000 }])).toBeNull()
   })
 })
 
@@ -157,16 +148,16 @@ describe('request-level output speed', () => {
       ],
     })
     expect(servingAttemptOf(log)?.durationMilliseconds).toBe(2000)
-    expect(outputSpeedSampleOf(log)).toEqual({ outputTokens: 50, attemptDurationMilliseconds: 2000, ttftMilliseconds: 200 })
-    // 请求级总耗时含上游重试，不能当分母：是 50 / 1.8s，不是 50 / 99.999s。
-    expect(requestOutputTokensPerSecond(log)).toBeCloseTo(50 / 1.8, 6)
+    expect(outputSpeedSampleOf(log)).toEqual({ outputTokens: 50, attemptDurationMilliseconds: 2000 })
+    // 请求级总耗时含上游重试，不能当分母：是 50 / 2s，不是 50 / 99.999s。
+    expect(requestOutputTokensPerSecond(log)).toBeCloseTo(25, 6)
   })
 
   it('falls back to the request-level numbers when no attempt was recorded', () => {
     const log = logOf({ outputTokens: 40, totalDurationMilliseconds: 2000, ttftMilliseconds: 500 })
     expect(servingAttemptOf(log)).toBeNull()
-    expect(outputSpeedSampleOf(log)).toEqual({ outputTokens: 40, attemptDurationMilliseconds: 2000, ttftMilliseconds: 500 })
-    expect(requestOutputTokensPerSecond(log)).toBeCloseTo(40 / 1.5, 6)
+    expect(outputSpeedSampleOf(log)).toEqual({ outputTokens: 40, attemptDurationMilliseconds: 2000 })
+    expect(requestOutputTokensPerSecond(log)).toBeCloseTo(20, 6)
   })
 })
 

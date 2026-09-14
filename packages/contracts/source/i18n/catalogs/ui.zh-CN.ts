@@ -425,7 +425,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'logicalModels.summary.avgDuration': '平均响应耗时',
   'logicalModels.summary.avgDurationHint': '服务该请求那次尝试的完整耗时，含首字等待',
   'logicalModels.summary.avgTps': '平均 TPS',
-  'logicalModels.summary.avgTpsHint': '输出 Token ÷ 出字耗时（已扣掉首字等待）',
+  'logicalModels.summary.avgTpsHint': '输出 Token ÷ 该次尝试的完整耗时（含首字等待）',
   'logicalModels.summary.availableModels': '当前可用模型',
   'logicalModels.summary.failoverHint': '近 {count} 次发生故障转移',
   'logicalModels.summary.noFailover': '当前没有故障转移',

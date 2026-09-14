@@ -326,9 +326,9 @@ function normalizeProviderRequestTrendPoint(row: ProviderTrendRow): ProviderRequ
  *
  * 除了 `attempts` / `success` 两个计数，其余指标一律只看**成功的尝试**：
  * 失败尝试既没有可用输出也没有完整耗时，混进来会让平均与比率失真（尤其是
- * 以成功耗时作分母的 TPS）。
+ * 以尝试耗时作分母的 TPS）。
  */
-export interface ModelStat { providerModelId: string; providerModelName: string; providerId: string; providerName: string; attempts: number; success: number; avgLatencyMs: number; avgTtftMs: number | null; cachedInputTokens: number; inputTokens: number; outputTokens: number; speedOutputTokens: number; speedGenerationDurationMs: number }
+export interface ModelStat { providerModelId: string; providerModelName: string; providerId: string; providerName: string; attempts: number; success: number; avgLatencyMs: number; avgTtftMs: number | null; cachedInputTokens: number; inputTokens: number; outputTokens: number; speedOutputTokens: number; speedDurationMs: number }
 
 export async function getModelStats(sinceMs: number, limit = 10, providerId?: string): Promise<ModelStat[]> {
   // 时间窗同样按尝试表自己的 `createdTime` 收窄（等价性见 `getProviderStats` 上方注释）：
@@ -338,9 +338,9 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
   const pivot = buildAttemptUsagePivot(sinceMs)
   // 失败尝试的用量不算进这些列；未命中透视的尝试以 0 参与。
   const successOnly = (type: UsageTokenType) => sql<number>`coalesce(sum(case when ${requestAttempts.status} = 'success' then ${pivot[type]} else 0 end), 0)`
-  // 参与速度计算的尝试：成功、有输出，且首字延迟没有吃掉整段耗时。
+  // 参与速度计算的尝试：成功、有输出，且耗时为正。
   // 分子与分母必须来自同一批样本，见下面 `speedOutputTokens` 的注释。
-  const speedSampleBasis = sql`${requestAttempts.status} = 'success' and ${requestAttempts.durationMilliseconds} - coalesce(${requestAttempts.ttftMilliseconds}, 0) > 0 and coalesce(${pivot.outputTokens}, 0) > 0`
+  const speedSampleBasis = sql`${requestAttempts.status} = 'success' and ${requestAttempts.durationMilliseconds} > 0 and coalesce(${pivot.outputTokens}, 0) > 0`
   const rows = getDataDb().select({
     // 排行单位是「上游模型」：一个 providerModelId 只属于一个提供方，所以只按它分组——
     // 带上 providerId 会让提供方改绑后留在尝试行里的旧快照把同一个模型拆成两行，
@@ -362,12 +362,12 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
     inputTokens: successOnly('inputTokens').as('inputTokens'),
     outputTokens: successOnly('outputTokens').as('outputTokens'),
     // 速度的两个合计值由 `speedSampleBasis` 筛出同一批尝试，缺一不可：
-    // 「生成时段」= 成功尝试的耗时减去首字延迟，也就是真正在产出 token 的那段时间，
-    // 拿含首字延迟的全程耗时当分母会把流式响应的 TPS 严重低估（口径见 `@common/metrics`）；
-    // 而首字延迟吃掉整段耗时（生成时段不为正）的尝试算不出速度，它的输出 Token
-    // 也就不能只留在分子里，否则比值会被单方面抬高。
+    // 分母是成功尝试的**整段耗时**，不扣首字延迟——上游报的输出 Token 里含推理 Token，
+    // 而推理 Token 正是在首字延迟那段时间产出的，减掉首字等于「Token 留下、产它的时间挖走」；
+    // 首字迟到的响应还会让扣完的分母缩成几十毫秒，除出几千 TPS 的假值（口径见 `@common/metrics`）。
+    // 耗时不为正、没有输出 Token 的尝试算不出速度，它的输出 Token 也就不能只留在分子里。
     speedOutputTokens: sql<number>`coalesce(sum(case when ${speedSampleBasis} then ${pivot.outputTokens} else 0 end), 0)`.as('speedOutputTokens'),
-    speedGenerationDurationMs: sql<number>`coalesce(sum(case when ${speedSampleBasis} then ${requestAttempts.durationMilliseconds} - coalesce(${requestAttempts.ttftMilliseconds}, 0) else 0 end), 0)`.as('speedGenerationDurationMs'),
+    speedDurationMs: sql<number>`coalesce(sum(case when ${speedSampleBasis} then ${requestAttempts.durationMilliseconds} else 0 end), 0)`.as('speedDurationMs'),
   }).from(requestAttempts)
     .leftJoin(pivot, eq(pivot.attemptId, requestAttempts.id))
     .where(and(...filters))
@@ -376,7 +376,7 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
     .orderBy(sql`attempts desc, ${requestAttempts.providerModelId} asc`)
     .limit(limit)
     .all()
-  return rows.map(row => ({ providerModelId: row.providerModelId, providerModelName: row.providerModelName, providerId: row.providerId, providerName: normalizeDevelopmentProviderName(row.providerId, row.providerName), attempts: row.attempts ?? 0, success: row.success ?? 0, avgLatencyMs: row.avgLatency ?? 0, avgTtftMs: row.avgTtft ?? null, cachedInputTokens: row.cachedInputTokens ?? 0, inputTokens: row.inputTokens ?? 0, outputTokens: row.outputTokens ?? 0, speedOutputTokens: row.speedOutputTokens ?? 0, speedGenerationDurationMs: row.speedGenerationDurationMs ?? 0 }))
+  return rows.map(row => ({ providerModelId: row.providerModelId, providerModelName: row.providerModelName, providerId: row.providerId, providerName: normalizeDevelopmentProviderName(row.providerId, row.providerName), attempts: row.attempts ?? 0, success: row.success ?? 0, avgLatencyMs: row.avgLatency ?? 0, avgTtftMs: row.avgTtft ?? null, cachedInputTokens: row.cachedInputTokens ?? 0, inputTokens: row.inputTokens ?? 0, outputTokens: row.outputTokens ?? 0, speedOutputTokens: row.speedOutputTokens ?? 0, speedDurationMs: row.speedDurationMs ?? 0 }))
 }
 
 export interface LatencyBucket { range: string; count: number }
