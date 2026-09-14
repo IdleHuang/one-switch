@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useLocale, useTranslation } from '@/i18n/provider'
 import { cn } from '@/lib/utils'
-import { PROTOCOL_SHORT_LABEL, formatNumber, formatTime, formatTPS, formatTTFT, formatTransport } from '../lib/format'
+import { PROTOCOL_LABEL, formatNumber, formatTime, formatTPS, formatTTFT, formatTransport } from '../lib/format'
 import { RequestLogDetailRow, RequestStatusBadge } from './request-log-detail-row'
 
 interface CachedTokensCellProps {
@@ -39,16 +39,27 @@ interface RequestLogsTableProps {
   onRetry: () => void
 }
 
+interface ModelSummary {
+  /** `供应商/模型`；这个请求一次尝试都没走到时为 `—`。 */
+  label: string
+  /** 除第一次之外还多试了几次；为 `0` 时不显示徽章。 */
+  failoverCount: number
+}
+
 /**
- * 这个请求一共走了几次尝试。
+ * 这一列回答的是「请求最终落在谁身上」，所以取**最后一次尝试**。
  *
- * 次数**固定显示**，只走了一次也照挂 `×1`：同一列每行都是同一个形状，横向扫一眼就能比出
- * 谁多试了几次，不会出现「有徽章的行才需要留意」这种要逐行找的区别。
- * 但只说次数，不说是换到了哪一家：具体每一次是怎么失败的、落在哪个模型上，是展开区该讲的事，
- * 塞进这一列只会把逻辑模型名挤成省略号。
+ * 一个请求可能先后走过好几家，列表只有一行能说这件事：客户端拿到的响应、或者最终的那个错误，
+ * 都出自最后一次尝试，前面几次只说明「本来想找谁」。每一次分别是怎么失败的、落在哪个模型上，
+ * 是展开区该讲的事，这里只补一个 `+n` 说还多试了几次。
  */
-function attemptCount(log: RequestLogEntry): number {
-  return log.attempts.length
+function formatModelSummary(log: RequestLogEntry): ModelSummary {
+  const lastAttempt = log.attempts[log.attempts.length - 1]
+  if (lastAttempt === undefined) return { label: '—', failoverCount: 0 }
+  return {
+    label: `${lastAttempt.providerName}/${lastAttempt.providerModelName}`,
+    failoverCount: Math.max(log.attempts.length - 1, 0),
+  }
 }
 
 export function CachedTokensCell(props: CachedTokensCellProps) {
@@ -75,7 +86,7 @@ function RequestLogsTableHeader() {
         <th className={cn(tableHeaderCellClass, 'w-8 py-1.5')} />
         <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.status')}</th>
         <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.time')}</th>
-        <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.logicalModel')}</th>
+        <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.providerModel')}</th>
         <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.protocol')}</th>
         <th className={cn(tableHeaderCellClass, 'py-1.5')}>{t('requestLogs.table.transport')}</th>
         <th className={cn(tableHeaderCellClass, 'py-1.5 text-center')}>
@@ -147,7 +158,7 @@ function RequestLogTableRow(props: RequestLogTableRowProps) {
   const locale = useLocale()
   const t = useTranslation()
   const successfulAttempt = props.log.attempts.find(attempt => attempt.status === 'success')
-  const attempts = attemptCount(props.log)
+  const modelSummary = formatModelSummary(props.log)
   const tps = formatTPS(
     props.log.outputTokens,
     successfulAttempt?.durationMilliseconds ?? props.log.totalDurationMilliseconds,
@@ -173,19 +184,21 @@ function RequestLogTableRow(props: RequestLogTableRowProps) {
         </td>
         <td className={cn(tableCellClass, 'max-w-40')}>
           <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate system-xs-medium text-text-primary">{props.modelName}</span>
-            <span
-              className="shrink-0 rounded-md bg-components-input-bg-normal px-1.5 py-0.5 font-mono system-2xs-medium text-text-tertiary"
-              title={t('requestLogs.route.totalAttempts', { count: attempts })}
-            >
-              ×{attempts}
-            </span>
+            <span className="min-w-0 truncate system-xs-medium text-text-primary">{modelSummary.label}</span>
+            {modelSummary.failoverCount > 0 && (
+              <span
+                className="shrink-0 rounded-md bg-components-input-bg-normal px-1.5 py-0.5 font-mono system-2xs-medium text-text-tertiary"
+                title={t('requestLogs.route.totalAttempts', { count: props.log.attempts.length })}
+              >
+                +{modelSummary.failoverCount}
+              </span>
+            )}
           </div>
         </td>
         <td className={cn(tableCellClass, 'whitespace-nowrap')}>
           {props.log.clientProtocol === null
             ? <span className="text-text-quaternary">—</span>
-            : <span className="text-text-tertiary">{PROTOCOL_SHORT_LABEL[props.log.clientProtocol] ?? props.log.clientProtocol}</span>}
+            : <span className="text-text-tertiary">{PROTOCOL_LABEL[props.log.clientProtocol] ?? props.log.clientProtocol}</span>}
         </td>
         <td className={cn(tableCellClass, 'whitespace-nowrap text-text-tertiary')}>
           {formatTransport(t, props.log.transport)}
