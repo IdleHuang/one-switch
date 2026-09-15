@@ -116,7 +116,7 @@ export function OverviewPage() {
       )
     }
     if (!providerDetail.data) return null
-    return <ProviderDetail detail={providerDetail.data} range={range} />
+    return <ProviderDetail detail={providerDetail.data} />
   }
 
   const renderContent = () => {
@@ -148,7 +148,7 @@ export function OverviewPage() {
               search: { range },
             })}
           />
-          <TrendChart trend={data.trend} range={range} stretchToRow />
+          <TrendChart trend={data.trend} trendIntervalMs={data.trendIntervalMs} stretchToRow />
         </div>
         <ModelRanking stats={data.modelStats} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

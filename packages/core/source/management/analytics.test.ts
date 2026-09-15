@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ServerResponse } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DAY_MILLISECONDS, TREND_MAX_BUCKETS, resolveAnalyticsBuckets } from '@common/analytics-buckets'
 import { closeDatabases, initDatabases } from '../database'
 import { createRequestLog, createRequestAttempt, recordAttemptUsage } from '@server/database/request-log-store'
 import { createProvider } from '@server/database/provider-store'
@@ -126,10 +127,12 @@ describe('analytics route', () => {
     const res = mockResponse()
     await analyticsRoutes.invoke('/api/analytics/summary', res, { range: '7d' })
 
+    const budget = resolveAnalyticsBuckets('7d')
     const payload = responseData(res) as {
       success: boolean
       data: {
         summary: { totalRequests: number; failedCount: number }
+        trendIntervalMs: number
         providerStats: Array<{ providerId: string; percent: number }>
         modelStats: Array<{ providerModelName: string; successRate: number; avgTps: number | null }>
         failureReasons: Array<{ reason: string; count: number }>
@@ -137,6 +140,8 @@ describe('analytics route', () => {
     }
 
     expect(payload.success).toBe(true)
+    // 粒度由查询范围推导后显式回传，前端不再自己猜一个固定值。
+    expect(payload.data.trendIntervalMs).toBe(budget.trendIntervalMs)
     expect(payload.data.summary.totalRequests).toBeGreaterThanOrEqual(2)
     expect(payload.data.summary.failedCount).toBeGreaterThanOrEqual(1)
     expect(payload.data.providerStats).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: provider.id })]))
@@ -154,6 +159,7 @@ describe('analytics route', () => {
       success: boolean
       data: {
         summary: { attempts: number; success: number; failed: number; totalTokens: number }
+        trendIntervalMs: number
         requestTrend: Array<{ success: number; failed: number; avgLatencyMs: number }>
         tokenTrend: Array<{ inputTokens: number; outputTokens: number }>
         models: Array<{ providerModelName: string }>
@@ -162,11 +168,15 @@ describe('analytics route', () => {
       }
     }
     expect(detailPayload.success).toBe(true)
+    expect(detailPayload.data.trendIntervalMs).toBe(budget.trendIntervalMs)
     expect(detailPayload.data.summary).toEqual(expect.objectContaining({ attempts: 2, success: 1, failed: 1, totalTokens: 160 }))
     expect(detailPayload.data.requestTrend.reduce((total, point) => total + point.success + point.failed, 0)).toBe(2)
     expect(detailPayload.data.tokenTrend.reduce((total, point) => total + point.inputTokens + point.outputTokens, 0)).toBe(160)
-    // 首字分布只统计成功的尝试，与 avgLatencyMs / avgTtftMs 同一口径。
-    expect(detailPayload.data.latencyDistribution).toEqual([expect.objectContaining({ count: 1, percent: 100 })])
+    // 首字分布只统计成功的尝试，与 avgLatencyMs / avgTtftMs 同一口径；
+    // 空档会一并返回，所以只盯有样本的那一格。
+    expect(detailPayload.data.latencyDistribution.filter(bucket => bucket.count > 0)).toEqual([
+      expect.objectContaining({ count: 1, percent: 100 }),
+    ])
     expect(detailPayload.data.failureReasons).toEqual([expect.objectContaining({ reason: 'RATE_LIMITED', count: 1, percent: 100 })])
     expect(detailPayload.data.models).toEqual(expect.arrayContaining([
       expect.objectContaining({ providerModelName: 'provider-success' }),
@@ -174,7 +184,7 @@ describe('analytics route', () => {
     ]))
   })
 
-  it('returns 15-minute intraday trend for the today range', async () => {
+  it('derives the intraday trend granularity from the query range', async () => {
     const provider = await createProvider({ name: 'Intraday Provider', apiKeyReference: 'key_intraday', timeoutMilliseconds: 30_000, enabled: true })
     const log = await createRequestLog({
       logicalModelId: 'default',
@@ -204,13 +214,19 @@ describe('analytics route', () => {
     const res = mockResponse()
     await analyticsRoutes.invoke('/api/analytics/summary', res, { range: 'today' })
 
-    const payload = responseData(res) as { data: { trend: Array<{ label: string; inputTokens: number }> }; success: boolean }
+    const buckets = resolveAnalyticsBuckets('today')
+    const payload = responseData(res) as { data: { trend: Array<{ label: string; inputTokens: number }>; trendIntervalMs: number }; success: boolean }
 
     expect(payload.success).toBe(true)
-    expect(payload.data.trend.length).toBeGreaterThanOrEqual(1)
-    expect(payload.data.trend.length).toBeLessThanOrEqual(96)
-    expect(payload.data.trend[0].label).toMatch(/^\d{2}:\d{2}$/)
-    expect(payload.data.trend.every(point => ['00', '15', '30', '45'].includes(point.label.slice(-2)))).toBe(true)
+    // 区间必须是整天能整除的分钟数，否则跨天时增位会错位。
+    expect(payload.data.trendIntervalMs).toBe(buckets.trendIntervalMs)
+    expect(DAY_MILLISECONDS % payload.data.trendIntervalMs).toBe(0)
+    // 桶数就是「本地零点到现在」铺满的槽位，且不超出可视上限。
+    expect(payload.data.trend.length).toBe(buckets.trendBucketCount)
+    expect(payload.data.trend.length).toBeLessThanOrEqual(TREND_MAX_BUCKETS)
+    // 标签带日期，前端据此自己判断要不要在刻度上写「月/日」。
+    expect(payload.data.trend.every(point => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(point.label))).toBe(true)
+    expect(payload.data.trend[0].label.endsWith('00:00')).toBe(true)
     expect(payload.data.trend.reduce((total, point) => total + point.inputTokens, 0)).toBe(100)
   })
 
@@ -305,9 +321,13 @@ describe('analytics route', () => {
     const payload = responseData(res) as { data: { latencyDistribution: Array<{ range: string; count: number }> }; success: boolean }
 
     expect(payload.success).toBe(true)
-    // 120ms 的 TTFT 必须落在「100ms-200ms」；如果按 8s 总耗时分桶会落到「>= 5s」。
-    expect(payload.data.latencyDistribution).toEqual([
-      expect.objectContaining({ range: '100ms-200ms', count: 1 }),
+    // 120ms 的 TTFT 必须落在 100ms 之后的那一档里；如果按 8s 总耗时分桶会落到「>= 5s」。
+    // 档宽 10ms：预算留到 16 档之后，同一个 p95 会一路收到最细的一档，至少要切出十档才好看形状。
+    // 前面几格是为直方图形状补的零，尾部全空的档则被裁掉。
+    expect(payload.data.latencyDistribution.map(bucket => bucket.range)).toEqual([
+      '< 10ms', '10ms-20ms', '20ms-30ms', '30ms-40ms', '40ms-50ms', '50ms-60ms', '60ms-70ms',
+      '70ms-80ms', '80ms-90ms', '90ms-100ms', '100ms-110ms', '110ms-120ms', '120ms-130ms',
     ])
+    expect(payload.data.latencyDistribution.at(-1)).toEqual(expect.objectContaining({ range: '120ms-130ms', count: 1 }))
   })
 })

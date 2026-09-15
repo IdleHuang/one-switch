@@ -1,6 +1,7 @@
 import { and, eq, gte, sql, type SQL } from 'drizzle-orm'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
-import type { FailureReasonCategory, RequestSourceStat, RequestStatus } from '@common/schemas'
+import { DAY_MILLISECONDS, formatLatencyBinLabel, formatTrendBucketLabel, resolveLatencyBinEdges, resolveTrendBuckets, type AnalyticsBuckets } from '@common/analytics-buckets'
+import type { FailureReasonCategory, RequestSourceStat, RequestStatus, UsageTrendPoint } from '@common/schemas'
 import { getDataDb } from './index'
 import { attemptUsages, requestAttempts, requestAttributes, requestLogs, requestUsages } from './data-schema'
 
@@ -73,16 +74,16 @@ export async function getStatsSummary(sinceMs: number): Promise<StatsSummary> {
   return { totalRequests: total, successCount: success, failedCount: failed, successRate: total > 0 ? success / total : 0, avgLatencyMs: result?.avgLatency ?? 0, totalTokens: usageResult?.tokens ?? 0 }
 }
 
-export interface DailyTrendPoint { label: string; inputTokens: number; outputTokens: number; cachedInputTokens: number; cacheCreationInputTokens: number; reasoningTokens: number }
-
-type TrendPointRow = {
-  label: string
+/** SQL 侧只能产出用量列：标签属于桶清单，由 JS 在补齐空桶时赋上。 */
+type TrendUsageRow = {
   inputTokens?: number | null
   outputTokens?: number | null
   cachedInputTokens?: number | null
   cacheCreationInputTokens?: number | null
   reasoningTokens?: number | null
 }
+
+type TrendPointRow = TrendUsageRow & { label: string }
 
 // 请求级用量透视。
 //
@@ -108,46 +109,54 @@ function usageTrendSelect(pivot: RequestUsagePivot): UsageTokenSums<SQL.Aliased<
   return { inputTokens: sumOf('inputTokens'), outputTokens: sumOf('outputTokens'), cachedInputTokens: sumOf('cachedInputTokens'), cacheCreationInputTokens: sumOf('cacheCreationInputTokens'), reasoningTokens: sumOf('reasoningTokens') }
 }
 
-export async function getUsageTrend(sinceMs: number): Promise<DailyTrendPoint[]> {
-  const pivot = buildRequestUsagePivot(sinceMs)
-  const rows = getDataDb().select({ label: sql<string>`strftime('%Y-%m-%d', ${requestLogs.createdTime} / 1000, 'unixepoch', 'localtime')`.as('label'), ...usageTrendSelect(pivot) })
+/**
+ * 用量趋势：按推导出的粒度分桶，**只分一次，不再分「今天用这份、其余用那份」**。
+ *
+ * 粒度（桶宽、锚点、桶数）全部由 `@common/analytics-buckets` 从查询范围推出来，
+ * 这里只负责用同一套规则去分组：两边必须是同一个式子，否则「今天 15 分钟一根柱子、
+ * 30 天一天一根柱子」这类写死的毛病会从别的地方长回来。
+ *
+ * 空桶由 JS 补齐：SQL 的 `group by` 只返回出现过的桶，而图表要靠空桶保持时间轴连续。
+ */
+export async function getUsageTrend(buckets: AnalyticsBuckets): Promise<UsageTrendPoint[]> {
+  const pivot = buildRequestUsagePivot(buckets.sinceMs)
+  const rows = getDataDb().select({ bucket: trendBucketIndex(requestLogs.createdTime, buckets).as('bucket'), ...usageTrendSelect(pivot) })
     .from(requestLogs)
     .leftJoin(pivot, eq(pivot.requestId, requestLogs.id))
-    .where(gte(requestLogs.createdTime, sinceMs))
-    .groupBy(sql`label`)
-    .orderBy(sql`label`)
-    .all()
-  return rows.map(normalizeTrendPoint)
-}
-
-export async function getIntradayUsageTrend(sinceMs: number): Promise<DailyTrendPoint[]> {
-  const intervalMs = 15 * 60 * 1000
-  const sinceFloor = Math.floor(sinceMs / intervalMs) * intervalMs
-  const pivot = buildRequestUsagePivot(sinceMs)
-  const rows = getDataDb().select({ bucket: sql<number>`floor((${requestLogs.createdTime} - ${sinceFloor}) / ${intervalMs})`.as('bucket'), ...usageTrendSelect(pivot) })
-    .from(requestLogs)
-    .leftJoin(pivot, eq(pivot.requestId, requestLogs.id))
-    .where(gte(requestLogs.createdTime, sinceMs))
+    .where(gte(requestLogs.createdTime, buckets.sinceMs))
     .groupBy(sql`bucket`)
     .all()
-  const map = new Map(rows.map(row => [row.bucket, row]))
-  const nowFloor = Math.floor(Date.now() / intervalMs) * intervalMs
-  const slots = Math.floor((nowFloor - sinceFloor) / intervalMs) + 1
-  return Array.from({ length: slots }, (_, bucket) => {
-    const row = map.get(bucket)
-    return normalizeTrendPoint({ label: formatIntradayLabel(sinceFloor + bucket * intervalMs), ...row })
-  })
+  return fillTrendBuckets(buckets, rows)
 }
 
-function normalizeTrendPoint(row: TrendPointRow): DailyTrendPoint {
+/**
+ * 趋势桶号的 SQL 表达式：与 `@common/analytics-buckets` 的 `trendBucketIndexAt` 一一对应，
+ * 改动必须同时落到两处。
+ *
+ * 桶号是「距锚点日的**墙钟**分钟数 ÷ 桶宽」而不是「距某个绝对时间戳的毫秒数 ÷ 桶宽」：
+ * 后者在跨夏令时的那一天会把柱子整体错开一小时，前者不会。
+ * `date(..., 'unixepoch', 'localtime')` 与 `strftime('%H'/'%M', ..., 'localtime')` 取的都是
+ * 本地日历，恰是 `trendBucketIndexAt` 里 `localDayOffset` + `minutesOfLocalDay` 的表达。
+ */
+function trendBucketIndex(column: AnySQLiteColumn, buckets: AnalyticsBuckets): SQL<number> {
+  const anchorDay = formatTrendBucketLabel(buckets.trendAnchorDayMs, DAY_MILLISECONDS)
+  const slotsPerDay = DAY_MILLISECONDS / buckets.trendIntervalMs
+  const intervalMinutes = buckets.trendIntervalMs / 60_000
+  const localDate = sql`date(${column} / 1000, 'unixepoch', 'localtime')`
+  const localMinuteOfDay = sql`(cast(strftime('%H', ${column} / 1000, 'unixepoch', 'localtime') as integer) * 60 + cast(strftime('%M', ${column} / 1000, 'unixepoch', 'localtime') as integer))`
+  return sql<number>`(cast(julianday(${localDate}) - julianday(${anchorDay}) as integer) * ${slotsPerDay} + cast(${localMinuteOfDay} / ${intervalMinutes} as integer))`
+}
+
+type TrendBucketRow = TrendUsageRow & { bucket: number }
+
+/** 按桶清单补齐空桶：没数据的桶也给一个全 0 的点，图表的时间轴才是连续的。 */
+function fillTrendBuckets(buckets: AnalyticsBuckets, rows: TrendBucketRow[]): UsageTrendPoint[] {
+  const byIndex = new Map(rows.map(row => [row.bucket, row]))
+  return resolveTrendBuckets(buckets).map(slot => normalizeTrendPoint({ ...byIndex.get(slot.index), label: slot.label }))
+}
+
+function normalizeTrendPoint(row: TrendPointRow): UsageTrendPoint {
   return { label: row.label, inputTokens: row.inputTokens ?? 0, outputTokens: row.outputTokens ?? 0, cachedInputTokens: row.cachedInputTokens ?? 0, cacheCreationInputTokens: row.cacheCreationInputTokens ?? 0, reasoningTokens: row.reasoningTokens ?? 0 }
-}
-
-function formatIntradayLabel(startMs: number): string {
-  const d = new Date(startMs)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  return `${hh}:${mm}`
 }
 
 /**
@@ -231,7 +240,7 @@ export async function getProviderStat(providerId: string, sinceMs: number): Prom
 }
 
 export interface ProviderRequestTrendPoint { label: string; success: number; failed: number; successRate: number; avgLatencyMs: number }
-export interface ProviderAnalyticsTrend { requestTrend: ProviderRequestTrendPoint[]; tokenTrend: DailyTrendPoint[]; totalTokens: number }
+export interface ProviderAnalyticsTrend { requestTrend: ProviderRequestTrendPoint[]; tokenTrend: UsageTrendPoint[]; totalTokens: number }
 
 type ProviderTrendRow = TrendPointRow & {
   label: string
@@ -276,38 +285,26 @@ function providerTrendSelect(pivot: AttemptUsagePivot) {
   }
 }
 
-export async function getProviderAnalyticsTrend(providerId: string, sinceMs: number, intraday: boolean): Promise<ProviderAnalyticsTrend> {
-  const intervalMs = 15 * 60 * 1000
-  const sinceFloor = Math.floor(sinceMs / intervalMs) * intervalMs
+export async function getProviderAnalyticsTrend(providerId: string, buckets: AnalyticsBuckets): Promise<ProviderAnalyticsTrend> {
   // 时间窗按尝试表自己的 `createdTime` 收窄（与请求窗口等价，见 `getProviderStats` 上方注释），
   // 但分桶标签仍然取请求的创建时间：一次请求属于哪一天、哪个时段，是请求自己的属性。
-  const bucket = intraday
-    ? sql<string>`floor((${requestLogs.createdTime} - ${sinceFloor}) / ${intervalMs})`
-    : sql<string>`strftime('%Y-%m-%d', ${requestLogs.createdTime} / 1000, 'unixepoch', 'localtime')`
-  const pivot = buildAttemptUsagePivot(sinceMs)
-  const rows = getDataDb().select({ label: bucket.as('label'), ...providerTrendSelect(pivot) })
+  const bucket = trendBucketIndex(requestLogs.createdTime, buckets)
+  const pivot = buildAttemptUsagePivot(buckets.sinceMs)
+  const rows = getDataDb().select({ bucket: bucket.as('bucket'), ...providerTrendSelect(pivot) })
     .from(requestAttempts)
     .innerJoin(requestLogs, eq(requestAttempts.requestId, requestLogs.id))
     .leftJoin(pivot, eq(pivot.attemptId, requestAttempts.id))
-    .where(and(gte(requestAttempts.createdTime, sinceMs), eq(requestAttempts.providerId, providerId)))
-    .groupBy(bucket)
-    .orderBy(bucket)
+    .where(and(gte(requestAttempts.createdTime, buckets.sinceMs), eq(requestAttempts.providerId, providerId)))
+    .groupBy(sql`bucket`)
     .all()
-  const normalizedRows = intraday ? fillIntradayProviderTrend(rows, sinceMs) : rows.map(row => ({ ...row, label: String(row.label) }))
+  const byIndex = new Map(rows.map(row => [row.bucket, row]))
+  const slots = resolveTrendBuckets(buckets)
+  const trendRows = slots.map(slot => ({ ...byIndex.get(slot.index), label: slot.label }))
   return {
-    requestTrend: normalizedRows.map(normalizeProviderRequestTrendPoint),
-    tokenTrend: normalizedRows.map(normalizeTrendPoint),
+    requestTrend: trendRows.map(normalizeProviderRequestTrendPoint),
+    tokenTrend: trendRows.map(normalizeTrendPoint),
     totalTokens: rows.reduce((total, row) => total + (row.totalTokens ?? 0), 0),
   }
-}
-
-function fillIntradayProviderTrend(rows: ProviderTrendRow[], sinceMs: number): ProviderTrendRow[] {
-  const intervalMs = 15 * 60 * 1000
-  const map = new Map(rows.map(row => [Number(row.label), row]))
-  const sinceFloor = Math.floor(sinceMs / intervalMs) * intervalMs
-  const nowFloor = Math.floor(Date.now() / intervalMs) * intervalMs
-  const slots = Math.floor((nowFloor - sinceFloor) / intervalMs) + 1
-  return Array.from({ length: slots }, (_, index) => ({ ...map.get(index), label: formatIntradayLabel(sinceFloor + index * intervalMs) }))
 }
 
 function normalizeProviderRequestTrendPoint(row: ProviderTrendRow): ProviderRequestTrendPoint {
@@ -382,38 +379,33 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
 export interface LatencyBucket { range: string; count: number }
 
 /**
- * 延迟分桶的**边界标签**：`500ms`、`1s`、`2s`。
+ * 把 TTFT 归到桶号的 SQL 表达式（桶号与 `formatLatencyBinLabel` 一一对应）。
  *
- * 与 `@common/metrics` 的 `formatMilliseconds` 刻意不同，不要合并：那个函数格式化的是
- * **一个测量值**（`1.0s`，一位小数让「恰好一秒整」看得见），这里是**区间的端点**（`1s`），
- * 端点带尾随 `.0` 只会把 `1s-2s` 读成 `1.0s-2.0s`。
+ * 桶边界由窗口内的 p95 推出（见 `@common/analytics-buckets`），在这里只展开一次：
+ * 分桶与标签都从同一份 `edges` 派生，因此不可能出现「统计的桶」与「画出来的桶」对不上。
  */
-function formatShortDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  const seconds = ms / 1000
-  const rounded = Math.round(seconds * 10) / 10
-  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}s`
+function latencyBinIndex(edges: number[]): SQL<number> {
+  return sql<number>`case ${sql.join(edges.map((edge, index) => sql`when ${requestAttempts.ttftMilliseconds} < ${edge} then ${index}`), sql` `)} else ${edges.length} end`
 }
-
-// 延迟分桶的语义化边界（毫秒）：TTFT 的感知差异并非线性，
-// 100ms 与 120ms 属于同一档「首字很快」，不应被拆成两个桶。
-const LATENCY_BUCKET_EDGES = [50, 100, 200, 500, 1000, 2000, 5000]
 
 /**
- * 把 TTFT 归到桶号的 SQL 表达式（桶号与 `formatLatencyBucketRange` 一一对应）。
+ * 窗口内 TTFT 的 p95，用来定直方图的桶宽。
  *
- * 桶边界只在这里定义一次：分桶与标签都从 `LATENCY_BUCKET_EDGES` 派生，
- * 因此不可能出现「统计的桶」与「画出来的桶」对不上的情况。
+ * 取值口径必须与分布本身完全一致（同一批过滤条件）：拿别处的 p95 去切这批样本，
+ * 档位就会切在分布之外。排序留在 SQL 内完成——返回的只有一行，而不是把窗口内
+ * 十几万个 TTFT 搬进 JS 再排一次（`docs/product/observability.md` §性能）。
  */
-const latencyBucketIndex = sql<number>`case ${sql.join(LATENCY_BUCKET_EDGES.map((edge, index) => sql`when ${requestAttempts.ttftMilliseconds} < ${edge} then ${index}`), sql` `)} else ${LATENCY_BUCKET_EDGES.length} end`
-
-export function formatLatencyBucketRange(index: number): string {
-  if (index === 0) return `< ${formatShortDuration(LATENCY_BUCKET_EDGES[0])}`
-  if (index >= LATENCY_BUCKET_EDGES.length) return `>= ${formatShortDuration(LATENCY_BUCKET_EDGES[LATENCY_BUCKET_EDGES.length - 1])}`
-  return `${formatShortDuration(LATENCY_BUCKET_EDGES[index - 1])}-${formatShortDuration(LATENCY_BUCKET_EDGES[index])}`
+function getTtftP95(filters: SQL[]): number | null {
+  const ranked = getDataDb().select({
+    ttft: requestAttempts.ttftMilliseconds,
+    rank: sql<number>`row_number() over (order by ${requestAttempts.ttftMilliseconds})`.as('rank'),
+    total: sql<number>`count(*) over ()`.as('total'),
+  }).from(requestAttempts).innerJoin(requestLogs, eq(requestAttempts.requestId, requestLogs.id)).where(and(...filters)).as('ranked_ttft')
+  const row = getDataDb().select({ ttft: ranked.ttft }).from(ranked).where(sql`${ranked.rank} = max(1, cast(${ranked.total} * 0.95 as integer))`).get()
+  return row?.ttft ?? null
 }
 
-// 按语义化区间统计 TTFT 分布。
+// 按 TTFT 分布统计直方图。
 //
 // 口径是「成功的上游尝试」：TTFT 是每次尝试自己的事实
 // （`request_attempts.ttftMilliseconds`），只有这样才能把它正确地归到
@@ -425,18 +417,31 @@ export function formatLatencyBucketRange(index: number): string {
 // 分桶直接在 SQL 里做：`group by 桶号` 只为出现过的桶返回一行。
 // 把窗口内每一个 TTFT 都取回 JS 再排序分桶，等于为了一张直方图
 // 把几十万个整数搬进内存再排一次序。
-export async function getLatencyDistribution(sinceMs: number, providerId?: string): Promise<LatencyBucket[]> {
+//
+// 空档由 JS 补齐：直方图的形状靠「没有样本的档位高度为 0」才成立，
+// 只画出现过的档会让横轴被压缩成等距的几根柱子，读起来像另一个分布。
+// 尾部全空的档则要去掉：p95 之上留的余量与开口桶都可能是 0，
+// 留着它们只会让图的最右边多出两根永远为零的柱子。
+export async function getLatencyDistribution(sinceMs: number, targetBins: number, providerId?: string): Promise<LatencyBucket[]> {
   const filters = [sql`${requestLogs.createdTime} >= ${sinceMs}`, eq(requestLogs.status, 'success'), sql`${requestAttempts.ttftMilliseconds} is not null`]
   if (providerId) filters.push(eq(requestAttempts.providerId, providerId))
+  const p95 = getTtftP95(filters)
+  if (p95 === null) return []
+  const edges = resolveLatencyBinEdges(p95, targetBins)
   const rows = getDataDb()
-    .select({ bucket: sql<number>`${latencyBucketIndex}`.as('bucket'), count: sql<number>`count(*)`.as('count') })
+    .select({ bucket: latencyBinIndex(edges).as('bucket'), count: sql<number>`count(*)`.as('count') })
     .from(requestAttempts)
     .innerJoin(requestLogs, eq(requestAttempts.requestId, requestLogs.id))
     .where(and(...filters))
     .groupBy(sql`bucket`)
-    .orderBy(sql`bucket`)
     .all()
-  return rows.map(row => ({ range: formatLatencyBucketRange(row.bucket), count: row.count }))
+  const counts = new Map(rows.map(row => [row.bucket, row.count]))
+  const buckets = Array.from({ length: edges.length + 1 }, (_, index) => ({ range: formatLatencyBinLabel(edges, index), count: counts.get(index) ?? 0 }))
+  let lastNonEmpty = 0
+  buckets.forEach((bucket, index) => {
+    if (bucket.count > 0) lastNonEmpty = index
+  })
+  return buckets.slice(0, lastNonEmpty + 1)
 }
 
 export interface FailureReasonStat { reason: FailureReasonCategory; count: number }

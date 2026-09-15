@@ -150,7 +150,10 @@ export const uiEn = {
   'overview.providers.description': 'By actual call count',
   'overview.providers.empty': 'No provider call data yet',
   'overview.trend.title': 'Usage distribution',
-  'overview.trend.description.today': '15-minute usage',
+  // 粒度由查询范围推导，所以描述也按推导结果取词（见 `@common/analytics-buckets`）。
+  'overview.trend.description.hourly': 'Hourly usage',
+  'overview.trend.description.everyHour': 'Usage every {count} hours',
+  'overview.trend.description.everyMinute': 'Usage every {count} min',
   'overview.trend.description.daily': 'Daily usage',
   'overview.trend.empty': 'No usage data yet. Trends appear once proxy requests arrive.',
   'overview.trend.input': 'Input',
@@ -171,8 +174,9 @@ export const uiEn = {
   'overview.models.column.cacheHitRate': 'Cache hit rate',
   'overview.models.column.successRate': 'Success rate',
   'overview.latency.title': 'TTFT distribution',
-  'overview.latency.description': 'Split evenly by p95',
-  'overview.latency.count': 'Requests',
+  'overview.latency.description': 'Bin width from p95',
+  // 直方图的样本是「成功的上游尝试」，不是请求：一次请求可能贡献多次尝试。
+  'overview.latency.count': 'Attempts',
   'overview.latency.empty': 'No TTFT data yet',
   'overview.failure.title': 'Error distribution',
   'overview.failure.description.count': '{count} finally failed requests',

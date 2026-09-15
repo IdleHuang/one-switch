@@ -705,7 +705,14 @@ export const StatsSummarySchema = z.object({
 })
 export type StatsSummary = z.infer<typeof StatsSummarySchema>
 
-export const DailyTrendPointSchema = z.object({
+/**
+ * 用量趋势里的一个桶。
+ *
+ * `label` 是**桶的起点**（不是结束时间），写法由粒度决定：不足一天是
+ * `YYYY-MM-DD HH:MM`，一天及以上只写 `YYYY-MM-DD`（见 `@common/analytics-buckets`）。
+ * 同一趋势里的桶宽恒定，空桶也要出现在数组里——图表靠空桶保持时间轴连续。
+ */
+export const UsageTrendPointSchema = z.object({
   label: z.string(),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
@@ -713,7 +720,10 @@ export const DailyTrendPointSchema = z.object({
   cacheCreationInputTokens: z.number().int().nonnegative(),
   reasoningTokens: z.number().int().nonnegative(),
 })
-export type DailyTrendPoint = z.infer<typeof DailyTrendPointSchema>
+export type UsageTrendPoint = z.infer<typeof UsageTrendPointSchema>
+
+/** 趋势图每一根柱子覆盖的毫秒数：由查询范围推导，界面据此决定坐标轴刻度怎么写。 */
+export const TrendIntervalSchema = z.number().int().positive()
 
 export const ProviderStatSchema = z.object({
   providerId: z.string(),
@@ -802,8 +812,9 @@ export type ProviderDetailSummary = z.infer<typeof ProviderDetailSummarySchema>
 
 export const ProviderAnalyticsDetailSchema = z.object({
   summary: ProviderDetailSummarySchema,
+  trendIntervalMs: TrendIntervalSchema,
   requestTrend: z.array(ProviderRequestTrendPointSchema),
-  tokenTrend: z.array(DailyTrendPointSchema),
+  tokenTrend: z.array(UsageTrendPointSchema),
   models: z.array(ModelStatSchema),
   latencyDistribution: z.array(LatencyBucketSchema),
   failureReasons: z.array(FailureReasonStatSchema),
@@ -812,7 +823,8 @@ export type ProviderAnalyticsDetail = z.infer<typeof ProviderAnalyticsDetailSche
 
 export const AnalyticsSummarySchema = z.object({
   summary: StatsSummarySchema,
-  trend: z.array(DailyTrendPointSchema),
+  trendIntervalMs: TrendIntervalSchema,
+  trend: z.array(UsageTrendPointSchema),
   providerStats: z.array(ProviderStatSchema),
   modelStats: z.array(ModelStatSchema),
   latencyDistribution: z.array(LatencyBucketSchema),

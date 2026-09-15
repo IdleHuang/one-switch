@@ -2,12 +2,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { z } from 'zod'
 import type { ManagementHandler } from '../../core/response'
 import { sendError, sendSuccess } from '../../core/response'
-import { AnalyticsRangeSchema, type AnalyticsRange, type AnalyticsSummary, type ModelStat, type ProviderAnalyticsDetail } from '@common/schemas'
+import { AnalyticsRangeSchema, type AnalyticsSummary, type ModelStat, type ProviderAnalyticsDetail } from '@common/schemas'
+import { resolveAnalyticsBuckets } from '@common/analytics-buckets'
 import { tokensPerSecondFromTotals } from '@common/metrics'
 import {
   getStatsSummary,
   getUsageTrend,
-  getIntradayUsageTrend,
   getProviderStats,
   getProviderStat,
   getProviderAnalyticsTrend,
@@ -32,32 +32,19 @@ const ProviderAnalyticsRequestSchema = z.object({
   range: AnalyticsRangeSchema.optional().default('7d'),
 })
 
-function resolveSinceMs(range: AnalyticsRange): number {
-  const now = Date.now()
-  switch (range) {
-    case 'today': {
-      const d = new Date()
-      d.setHours(0, 0, 0, 0)
-      return d.getTime()
-    }
-    case '7d':
-      return now - 7 * 24 * 60 * 60 * 1000
-    case '30d':
-      return now - 30 * 24 * 60 * 60 * 1000
-  }
-}
-
 async function handleAnalyticsSummary(_req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> {
   const { range } = AnalyticsSummaryRequestSchema.parse(body ?? {})
-  const sinceMs = resolveSinceMs(range)
+  // 时间窗与粒度都从查询范围推导一次，后续所有查询共用同一份结论（`@common/analytics-buckets`）。
+  const buckets = resolveAnalyticsBuckets(range)
+  const { sinceMs } = buckets
 
-  const trend = range === 'today' ? await getIntradayUsageTrend(sinceMs) : await getUsageTrend(sinceMs)
+  const trend = await getUsageTrend(buckets)
 
   const [summary, providerStats, modelStats, latencyDistribution, failureReasons, sourceStats] = await Promise.all([
     getStatsSummary(sinceMs),
     getProviderStats(sinceMs),
     getModelStats(sinceMs, 10),
-    getLatencyDistribution(sinceMs),
+    getLatencyDistribution(sinceMs, buckets.latencyTargetBins),
     getFailureReasons(sinceMs),
     getRequestSourceStats(sinceMs),
   ])
@@ -87,6 +74,7 @@ async function handleAnalyticsSummary(_req: IncomingMessage, res: ServerResponse
 
   const response: AnalyticsSummary = {
     summary,
+    trendIntervalMs: buckets.trendIntervalMs,
     trend,
     providerStats: providerStatsWithPercent,
     modelStats: modelStatsWithRate,
@@ -100,7 +88,8 @@ async function handleAnalyticsSummary(_req: IncomingMessage, res: ServerResponse
 
 async function handleProviderAnalyticsDetail(_req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> {
   const { providerId, range } = ProviderAnalyticsRequestSchema.parse(body ?? {})
-  const sinceMs = resolveSinceMs(range)
+  const buckets = resolveAnalyticsBuckets(range)
+  const { sinceMs } = buckets
   const provider = await getProviderStat(providerId, sinceMs)
   if (!provider) {
     sendError(res, 'RESOURCE_NOT_FOUND', `No provider statistics in the requested time range: ${providerId}`, 404, { providerId })
@@ -108,9 +97,9 @@ async function handleProviderAnalyticsDetail(_req: IncomingMessage, res: ServerR
   }
 
   const [trend, modelStats, latencyDistribution, failureReasons] = await Promise.all([
-    getProviderAnalyticsTrend(providerId, sinceMs, range === 'today'),
+    getProviderAnalyticsTrend(providerId, buckets),
     getModelStats(sinceMs, 200, providerId),
-    getLatencyDistribution(sinceMs, providerId),
+    getLatencyDistribution(sinceMs, buckets.latencyTargetBins, providerId),
     getFailureReasons(sinceMs, providerId),
   ])
   const latencySamples = latencyDistribution.reduce((total, bucket) => total + bucket.count, 0)
@@ -121,6 +110,7 @@ async function handleProviderAnalyticsDetail(_req: IncomingMessage, res: ServerR
       successRate: provider.attempts > 0 ? provider.success / provider.attempts : 0,
       totalTokens: trend.totalTokens,
     },
+    trendIntervalMs: buckets.trendIntervalMs,
     requestTrend: trend.requestTrend,
     tokenTrend: trend.tokenTrend,
     models: modelStats.map(mapModelStat),

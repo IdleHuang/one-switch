@@ -152,7 +152,10 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'overview.providers.description': '按实际调用次数统计',
   'overview.providers.empty': '暂无供应商调用数据',
   'overview.trend.title': '用量分布',
-  'overview.trend.description.today': '15 分钟粒度用量',
+  // 粒度由查询范围推导，所以描述也按推导结果取词（见 `@common/analytics-buckets`）。
+  'overview.trend.description.hourly': '每小时用量',
+  'overview.trend.description.everyHour': '每 {count} 小时用量',
+  'overview.trend.description.everyMinute': '每 {count} 分钟用量',
   'overview.trend.description.daily': '每日用量',
   'overview.trend.empty': '暂无使用量数据，产生代理请求后将显示趋势',
   'overview.trend.input': '输入',
@@ -173,8 +176,9 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'overview.models.column.cacheHitRate': '缓存命中率',
   'overview.models.column.successRate': '成功率',
   'overview.latency.title': 'TTFT 分布',
-  'overview.latency.description': '按 p95 均分区间',
-  'overview.latency.count': '请求数',
+  'overview.latency.description': '桶宽按 p95 推导',
+  // 直方图的样本是「成功的上游尝试」，不是请求：一次请求可能贡献多次尝试。
+  'overview.latency.count': '尝试数',
   'overview.latency.empty': '暂无 TTFT 数据',
   'overview.failure.title': '错误分布',
   'overview.failure.description.count': '共 {count} 个最终失败请求',

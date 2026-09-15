@@ -1,14 +1,22 @@
 import type { LatencyBucket } from '@common/schemas'
+import { formatLatencyBinTick } from '@common/analytics-buckets'
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import { Card, CardContent } from '@/components/ui/card'
 import { ChartContainer, type ChartConfig } from '@/components/ui/chart'
 import { CardSectionHeader } from '@/components/card-section-header'
 import { useTranslation, type AppTranslator } from '@/i18n/provider'
 
+/** X 轴上最多写几个刻度：档数由窗口 p95 推出（6～10 档），全写出来会与邻座叠字。 */
+const MAX_TICK_COUNT = 6
+
 function buildChartConfig(t: AppTranslator): ChartConfig {
   return {
     count: { label: t('overview.latency.count'), color: 'hsl(var(--success))' },
   }
+}
+
+function resolveTickInterval(bucketCount: number): number {
+  return Math.max(0, Math.ceil(bucketCount / MAX_TICK_COUNT) - 1)
 }
 
 interface LatencyDistributionProps {
@@ -19,11 +27,6 @@ interface LatencyTooltipProps {
   active?: boolean
   label?: string
   payload?: Array<{ payload?: LatencyBucket }>
-}
-
-function formatAxisTick(value: string): string {
-  const [start] = value.split('-')
-  return start ?? value
 }
 
 function LatencyTooltip(props: LatencyTooltipProps) {
@@ -67,8 +70,8 @@ export function LatencyDistribution(props: LatencyDistributionProps) {
                 tickLine={false}
                 axisLine={false}
                 tickMargin={8}
-                interval={1}
-                tickFormatter={value => formatAxisTick(String(value))}
+                interval={resolveTickInterval(buckets.length)}
+                tickFormatter={value => formatLatencyBinTick(String(value))}
                 fontSize={11}
               />
               <YAxis

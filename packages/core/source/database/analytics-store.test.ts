@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm'
 import { closeDatabases, getDataDb, initDatabases } from './index'
 import { createRequestAttempt, createRequestLog, recordAttemptUsage } from './request-log-store'
 import { requestAttempts, requestLogs } from './data-schema'
-import { formatLatencyBucketRange, getLatencyDistribution, getModelStats } from './analytics-store'
+import { getLatencyDistribution, getModelStats } from './analytics-store'
 
 const EMPTY_USAGE = { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheCreationInputTokens: null, reasoningTokens: null, rawUsage: null }
 
@@ -66,26 +66,20 @@ async function createLogWithTtft(ttftMilliseconds: number, totalDurationMillisec
   await createAttemptWithTtft({ requestId: await createLog(totalDurationMilliseconds), ttftMilliseconds })
 }
 
-describe('formatLatencyBucketRange', () => {
-  it('labels every semantic bucket with a stable, non-overlapping range', () => {
-    expect(formatLatencyBucketRange(0)).toBe('< 50ms')
-    expect(formatLatencyBucketRange(1)).toBe('50ms-100ms')
-    expect(formatLatencyBucketRange(2)).toBe('100ms-200ms')
-    expect(formatLatencyBucketRange(3)).toBe('200ms-500ms')
-    expect(formatLatencyBucketRange(4)).toBe('500ms-1s')
-    expect(formatLatencyBucketRange(5)).toBe('1s-2s')
-    expect(formatLatencyBucketRange(6)).toBe('2s-5s')
-    expect(formatLatencyBucketRange(7)).toBe('>= 5s')
-  })
-})
-
 describe('getLatencyDistribution', () => {
-  it('groups near-neighbour TTFT samples into a single bucket', async () => {
+  // 桶宽由窗口 p95 推出，所以有一半断言在盯「档位怎么切」：这是这张图唯一会变的东西。
+  it('groups near-neighbour TTFT samples into a single bucket and fills empty bins with zero', async () => {
     // 100ms 与 120ms 在感知上同属「首字很快」，不应被拆成两个桶。
     await createLogWithTtft(100)
     await createLogWithTtft(120)
 
-    expect(await getLatencyDistribution(0)).toEqual([{ range: '100ms-200ms', count: 2 }])
+    expect(await getLatencyDistribution(0, 6)).toEqual([
+      { range: '< 25ms', count: 0 },
+      { range: '25ms-50ms', count: 0 },
+      { range: '50ms-75ms', count: 0 },
+      { range: '75ms-100ms', count: 0 },
+      { range: '100ms-125ms', count: 2 },
+    ])
   })
 
   it('assigns samples sitting exactly on an edge to the higher bucket', async () => {
@@ -93,22 +87,35 @@ describe('getLatencyDistribution', () => {
       await createLogWithTtft(ttft)
     }
 
-    expect(await getLatencyDistribution(0)).toEqual([
+    // 7 个样本的 p95 是 200ms：50ms 一档，慢尾（5s）只占最后一个开口桶。
+    expect(await getLatencyDistribution(0, 6)).toEqual([
       { range: '< 50ms', count: 1 },
       { range: '50ms-100ms', count: 2 },
-      { range: '100ms-200ms', count: 2 },
-      { range: '200ms-500ms', count: 1 },
-      { range: '>= 5s', count: 1 },
+      { range: '100ms-150ms', count: 1 },
+      { range: '150ms-200ms', count: 1 },
+      { range: '200ms-250ms', count: 1 },
+      { range: '>= 250ms', count: 1 },
     ])
+  })
+
+  it('keeps the bin count within the target for the range', async () => {
+    for (let index = 0; index < 40; index++) {
+      await createLogWithTtft(100 + index * 250)
+    }
+
+    const buckets = await getLatencyDistribution(0, 6)
+    expect(buckets.length).toBeLessThanOrEqual(6)
+    expect(buckets.reduce((total, bucket) => total + bucket.count, 0)).toBe(40)
+    // 最右边那一段永远是真实样本：p95 之上留的余量不该以两根空柱收尾。
+    expect(buckets[buckets.length - 1].count).toBeGreaterThan(0)
   })
 
   it('buckets by TTFT rather than by total duration', async () => {
     // 总耗时 8s 但首字很快：必须落在 TTFT 的早档，而不是「>= 5s」。
     await createLogWithTtft(120, 8_000)
 
-    const buckets = await getLatencyDistribution(0)
-    expect(buckets).toEqual([{ range: '100ms-200ms', count: 1 }])
-    expect(buckets.map(bucket => bucket.range)).not.toContain('>= 5s')
+    const nonEmpty = (await getLatencyDistribution(0, 6)).filter(bucket => bucket.count > 0)
+    expect(nonEmpty).toEqual([{ range: '100ms-150ms', count: 1 }])
   })
 
   it('returns an empty distribution when no request carries a TTFT sample', async () => {
@@ -120,7 +127,7 @@ describe('getLatencyDistribution', () => {
       totalDurationMilliseconds: 10,
     })
 
-    expect(await getLatencyDistribution(0)).toEqual([])
+    expect(await getLatencyDistribution(0, 6)).toEqual([])
   })
 
   it('excludes samples created before the requested time window', async () => {
@@ -129,7 +136,8 @@ describe('getLatencyDistribution', () => {
     const staleId = getDataDb().select({ id: requestLogs.id }).from(requestLogs).all()[0].id
     getDataDb().$client.prepare('UPDATE request_logs SET createdTime = ? WHERE id = ?').run(100, staleId)
 
-    expect(await getLatencyDistribution(1_000)).toEqual([{ range: '100ms-200ms', count: 1 }])
+    const nonEmpty = (await getLatencyDistribution(1_000, 6)).filter(bucket => bucket.count > 0)
+    expect(nonEmpty).toEqual([{ range: '100ms-150ms', count: 1 }])
   })
 
   it('attributes each TTFT sample to the provider that actually produced it', async () => {
@@ -138,8 +146,8 @@ describe('getLatencyDistribution', () => {
     await createAttemptWithTtft({ requestId, ttftMilliseconds: 120, providerId: 'prov_first', attemptIndex: 0 })
     await createAttemptWithTtft({ requestId, ttftMilliseconds: 300, providerId: 'prov_second', attemptIndex: 1 })
 
-    expect(await getLatencyDistribution(0, 'prov_first')).toEqual([{ range: '100ms-200ms', count: 1 }])
-    expect(await getLatencyDistribution(0, 'prov_second')).toEqual([{ range: '200ms-500ms', count: 1 }])
+    expect((await getLatencyDistribution(0, 6, 'prov_first')).filter(bucket => bucket.count > 0)).toEqual([{ range: '100ms-150ms', count: 1 }])
+    expect((await getLatencyDistribution(0, 6, 'prov_second')).filter(bucket => bucket.count > 0)).toEqual([{ range: '300ms-400ms', count: 1 }])
   })
 })
 
