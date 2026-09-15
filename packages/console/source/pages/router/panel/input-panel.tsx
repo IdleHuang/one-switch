@@ -1,7 +1,7 @@
 import { INPUT_NODE_FIELDS } from '../input-shape'
 import type { NodePanelProps } from '../node-data'
 import { useTranslation } from '@/i18n/provider'
-import { NodePanelGroupHeader } from './panel-fields'
+import { NodePanelShapeCard } from './panel-fields'
 
 /**
  * 输入节点面板。
@@ -14,29 +14,23 @@ import { NodePanelGroupHeader } from './panel-fields'
  *
  * 「输入节点没有可配置项」这句话由外壳那条提示条统一讲（`nodePanelHint`），
  * 面板里不再抄一遍：两张一样的说明条叠在一起，读的人只会以为自己眼花了。
- * 参考表也不套灰底，靠一层边框 + `divide-y` 分开就够了。
+ * 表本身的样式在 `./panel-fields` 的 `NodePanelShapeCard` 里，几个零配置节点共用。
  */
 export function InputPanel(_props: NodePanelProps) {
   const t = useTranslation()
 
   return (
     <div className="grid gap-2.5">
-      <div className="grid gap-2 rounded-lg border border-module-border p-2.5">
-        <NodePanelGroupHeader title={t('router.panel.inputShapeTitle')} />
-        <div className="divide-y divide-border/50">
-          {INPUT_NODE_FIELDS.map(field => (
-            <div key={field.path} className="grid gap-1 py-2 first:pt-0 last:pb-0">
-              <div className="flex items-center justify-between gap-2">
-                <span className="min-w-0 truncate font-mono system-2xs-regular text-text-secondary">{field.path}</span>
-                <span className="shrink-0 system-2xs-regular text-text-quaternary">{field.valueType}</span>
-              </div>
-              {field.noteKey
-                ? <span className="system-xs-regular text-text-tertiary">{t(field.noteKey)}</span>
-                : null}
-            </div>
-          ))}
-        </div>
-      </div>
+      <NodePanelShapeCard
+        title={t('router.panel.inputShapeTitle')}
+        groups={[{
+          fields: INPUT_NODE_FIELDS.map(field => ({
+            path: field.path,
+            valueType: field.valueType,
+            ...(field.noteKey ? { note: t(field.noteKey) } : {}),
+          })),
+        }]}
+      />
     </div>
   )
 }
