@@ -1,0 +1,11 @@
+{
+  "key": "ollama",
+  "name": "Ollama",
+  "family": "ollama",
+  "aliases": ["ollama-local", "ollama local"],
+  "color": "#000000",
+  "endpoints": {
+    "openai-completions": "http://localhost:11434/v1/chat/completions",
+    "openai-responses": "http://localhost:11434/v1/responses"
+  }
+}
