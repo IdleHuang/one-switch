@@ -875,6 +875,8 @@ export const uiEn = {
   'router.fieldNote.iterationCollect': 'The result path read after each round (the iteration node uses it to decide whether the round matched)',
   'router.fieldNote.scriptResult': 'The value the script returns (its type depends on the script content)',
   'router.fieldNote.promptResult': 'The text reply returned by the logical model',
+  'router.fieldNote.modelIds': 'The logical model ids selected as this run’s target (deduplicated, blanks removed); the proxy resolves upstreams from this list, and an empty array means nothing was selected',
+  'router.fieldNote.modelFallback': 'Whether this target came from the fallback list: true when the value field resolved nothing and the fallback models were used',
 
   'router.runPanel.description': 'Enter the JSON payload here to run the routing and inspect the result and full trace.',
   'router.runPanel.inputTitle': 'Test input',
@@ -1158,6 +1160,7 @@ export const uiEn = {
   'router.panel.inputShapeTitle': 'Which fields this node hands downstream',
   'router.panel.protocolShapeTitle': 'Which request-body fields each protocol branch hands downstream',
   'router.panel.protocolShapeEmpty': 'Protocol not recognized, so no fields are declared: downstream only gets the whole request.body',
+  'router.panel.modelSelectShapeTitle': 'Which fields this node hands downstream',
   'router.panel.scriptEditorAria': 'Script code',
   'router.panel.templateEditorAria': 'Prompt template',
   'router.panel.completion.payloadDetail': "A deep copy of this run's data",

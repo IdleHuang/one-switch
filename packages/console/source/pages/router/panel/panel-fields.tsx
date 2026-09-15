@@ -100,3 +100,68 @@ export function NodePanelGroupHeader(props: NodePanelGroupHeaderProps) {
     </div>
   )
 }
+
+/** 只读参考表里的一行：路径 + 静态类型，有说明的再附一句。 */
+interface NodePanelShapeField {
+  path: string
+  valueType: string
+  note?: string
+}
+
+/**
+ * 一组字段。分组名与空态说明都可选：输入、逻辑模型选择这类节点只有一组字段，
+ * 协议发现节点则按协议分支分组，一组都没有字段时说明「认不出协议」。
+ */
+export interface NodePanelShapeGroup {
+  label?: string
+  fields: readonly NodePanelShapeField[]
+  /** 这一组没有字段时显示的说明；不给就只留分组名。 */
+  emptyHint?: string
+}
+
+type NodePanelShapeCardProps = {
+  title: string
+  groups: readonly NodePanelShapeGroup[]
+}
+
+/**
+ * 只读字段表：把「这个节点交给下游哪些字段」摆出来。
+ *
+ * 内容不是各面板自己写的，而是各节点的**声明表**（`../input-shape.ts`、
+ * `../model-select-shape.ts`、`@common/router/request-shape.ts`）——
+ * 与下游节点面板里的字段候选表同源，所以表里读到的就是下游真正能选的。
+ *
+ * 不套灰底：只读参考表和可交互的配置项长得一样，读的人会去点它。
+ * 三个零配置 / 少配置节点共用这一块，行高与分隔线只有一处定义。
+ */
+export function NodePanelShapeCard(props: NodePanelShapeCardProps) {
+  const { title, groups } = props
+
+  return (
+    <div className="grid gap-2 rounded-lg border border-module-border p-2.5">
+      <NodePanelGroupHeader title={title} />
+      <div className="divide-y divide-border/50">
+        {groups.map((group, index) => (
+          <div key={group.label ?? index} className="grid gap-1 py-2 first:pt-0 last:pb-0">
+            {group.label && <span className="font-mono system-2xs-regular text-text-tertiary">{group.label}</span>}
+            {group.fields.length === 0
+              ? group.emptyHint
+                ? <span className="system-2xs-regular text-text-quaternary">{group.emptyHint}</span>
+                : null
+              : group.fields.map(field => (
+                  <div key={field.path} className="grid gap-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate font-mono system-2xs-regular text-text-secondary">{field.path}</span>
+                      <span className="shrink-0 system-2xs-regular text-text-quaternary">{field.valueType}</span>
+                    </div>
+                    {field.note
+                      ? <span className="system-xs-regular text-text-tertiary">{field.note}</span>
+                      : null}
+                  </div>
+                ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

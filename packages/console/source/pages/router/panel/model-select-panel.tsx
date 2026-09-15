@@ -11,11 +11,13 @@ import type { NodePanelProps, PanelLogicalModel } from '../node-data'
 import { useTranslation } from '@/i18n/provider'
 import type { UiCatalogKey } from '@common/i18n/catalogs'
 import type { ModelSelectSource } from '@common/router/types'
+import { MODEL_SELECT_OUTPUT_FIELDS } from '../model-select-shape'
 import { readCandidates } from './field-candidates'
 import {
   NodePanelField,
   NodePanelGroupHeader,
   NodePanelHint,
+  NodePanelShapeCard,
   PANEL_POPUP_ITEM_CLASSNAME,
   PANEL_POPUP_SURFACE_CLASSNAME,
 } from './panel-fields'
@@ -154,6 +156,19 @@ export function ModelSelectPanel(props: NodePanelProps) {
             title={t('router.panel.fallbackModels')}
           />
         )}
+
+      {/* 输出声明与字段候选表同源（`../model-select-shape.ts`）：下游在条件下拉、
+          `get()` 补全里能选到的落点路径，这里都列着。 */}
+      <NodePanelShapeCard
+        title={t('router.panel.modelSelectShapeTitle')}
+        groups={[{
+          fields: MODEL_SELECT_OUTPUT_FIELDS.map(field => ({
+            path: field.path,
+            valueType: field.valueType,
+            note: t(field.noteKey),
+          })),
+        }]}
+      />
     </div>
   )
 }

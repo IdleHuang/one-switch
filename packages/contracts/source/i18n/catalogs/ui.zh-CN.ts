@@ -877,6 +877,8 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'router.fieldNote.iterationCollect': '每轮结束后读取的结果路径（迭代节点判定本轮是否命中）',
   'router.fieldNote.scriptResult': '脚本 return 的返回值（类型由脚本内容决定）',
   'router.fieldNote.promptResult': '逻辑模型返回的文本回复',
+  'router.fieldNote.modelIds': '本次选出的落点逻辑模型 id 列表（已去重、去空）；代理按这组 id 解析可用上游，空数组表示这次没选出落点',
+  'router.fieldNote.modelFallback': '本次落点是否来自兜底列表：取值字段没取到可用值、转用了兜底模型时为 true',
 
   'router.runPanel.description': '在此输入 JSON，执行路由并查看结果与完整轨迹。',
   'router.runPanel.inputTitle': '测试输入',
@@ -1159,6 +1161,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'router.panel.inputShapeTitle': '这个节点交给下游哪些字段',
   'router.panel.protocolShapeTitle': '各协议分支交给下游哪些字段',
   'router.panel.protocolShapeEmpty': '认不出协议，不声明任何字段：下游只能拿到 request.body 整体',
+  'router.panel.modelSelectShapeTitle': '这个节点交给下游哪些字段',
   'router.panel.scriptEditorAria': '脚本代码',
   'router.panel.templateEditorAria': '提示词模板',
   'router.panel.completion.payloadDetail': '本次运行数据的深拷贝',

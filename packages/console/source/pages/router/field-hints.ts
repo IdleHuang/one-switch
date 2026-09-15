@@ -11,6 +11,7 @@ import {
 } from '@common/router/types'
 import type { AppTranslator } from '@/i18n/provider'
 import { INPUT_NODE_FIELDS } from './input-shape'
+import { MODEL_SELECT_OUTPUT_FIELDS } from './model-select-shape'
 
 export interface WorkflowConnection {
   sourceNodeId: string
@@ -175,18 +176,17 @@ export function resolveInputHints(t: AppTranslator, graph: WorkflowGraph, target
     }
 
     if (model.kind === 'model-select') {
-      addUniqueField(fields, {
-        path: 'route.modelIds',
-        valueType: 'array',
-        sourceNodeId: model.id,
-        sourcePort: 'out',
-      })
-      addUniqueField(fields, {
-        path: 'route.fallback',
-        valueType: 'boolean',
-        sourceNodeId: model.id,
-        sourcePort: 'out',
-      })
+      // 落点字段的清单与节点面板共用一份（`model-select-shape.ts`）：
+      // 面板上列出来的就是下游能选的，反之亦然。
+      for (const field of MODEL_SELECT_OUTPUT_FIELDS) {
+        addUniqueField(fields, {
+          path: field.path,
+          valueType: field.valueType,
+          sourceNodeId: model.id,
+          sourcePort: 'out',
+          note: t(field.noteKey),
+        })
+      }
       continue
     }
 
