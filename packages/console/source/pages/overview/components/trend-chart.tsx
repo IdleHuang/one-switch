@@ -1,5 +1,6 @@
-import type { AnalyticsRange, DailyTrendPoint } from '@common/schemas'
+import type { UsageTrendPoint } from '@common/schemas'
 import type { UiCatalogKey } from '@common/i18n/catalogs'
+import { formatTrendTickLabel, formatTrendTooltipLabel, resolveTrendTicks, trendCrossesDays, TREND_MAX_TICKS } from '@common/analytics-buckets'
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import { Card, CardContent } from '@/components/ui/card'
 import { ChartContainer, type ChartConfig } from '@/components/ui/chart'
@@ -18,40 +19,17 @@ function buildChartConfig(t: AppTranslator): ChartConfig {
 }
 
 interface TrendChartProps {
-  trend: DailyTrendPoint[]
-  range: AnalyticsRange
+  trend: UsageTrendPoint[]
+  /** 每根柱子覆盖的时长，由查询范围推导（`AnalyticsSummary.trendIntervalMs`）。 */
+  trendIntervalMs: number
   stretchToRow?: boolean
-}
-
-// X 轴刻度只控制标签密度，不影响 15 分钟粒度的数据和 Tooltip；
-// 今日每 2 小时显示一个标签，近 7 天全部显示，近 30 天每 5 天显示一个。
-function axisInterval(range: AnalyticsRange): number {
-  if (range === 'today') return 7
-  if (range === '7d') return 0
-  return 4
-}
-
-function formatAxisTick(locale: string, label: string, range: AnalyticsRange): string {
-  if (range === 'today') return label
-  const date = new Date(label)
-  if (range === '7d') return new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(date)
-  return new Intl.DateTimeFormat(locale, { month: 'numeric', day: 'numeric' }).format(date)
-}
-
-function formatTooltipLabel(locale: string, label: string, range: AnalyticsRange): string {
-  if (range === 'today') return label
-  const date = new Date(label)
-  const day = new Intl.DateTimeFormat(locale, { month: 'long', day: 'numeric' }).format(date)
-  if (range !== '7d') return day
-  const weekday = new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(date)
-  return `${day} ${weekday}`
 }
 
 interface TrendTooltipProps {
   active?: boolean
   label?: string
-  payload?: Array<{ payload?: DailyTrendPoint }>
-  range: AnalyticsRange
+  payload?: Array<{ payload?: UsageTrendPoint }>
+  crossesDays: boolean
 }
 
 // Tooltip 按阅读顺序展示；柱状图按从底到顶反向排列，使输入位于最上层。
@@ -61,12 +39,12 @@ const USAGE_ITEMS = [
   ['cacheCreationInputTokens', 'overview.trend.cacheWrite'],
   ['outputTokens', 'overview.trend.output'],
   ['reasoningTokens', 'overview.trend.reasoning'],
-] as const satisfies ReadonlyArray<readonly [keyof DailyTrendPoint, UiCatalogKey]>
+] as const satisfies ReadonlyArray<readonly [keyof UsageTrendPoint, UiCatalogKey]>
 
 const STACK_ITEMS = [...USAGE_ITEMS].reverse()
 
 function TrendTooltip(props: TrendTooltipProps) {
-  const { active, label, payload, range } = props
+  const { active, label, payload, crossesDays } = props
   const t = useTranslation()
   const locale = useLocale()
   if (!active || !label || !payload?.length) return null
@@ -75,7 +53,7 @@ function TrendTooltip(props: TrendTooltipProps) {
 
   return (
     <div className="rounded-lg border-[0.5px] border-components-panel-border bg-components-panel-bg-blur px-3 py-2 system-xs-regular backdrop-blur-[5px]">
-      <div className="system-xs-medium text-text-primary">{formatTooltipLabel(locale, label, range)}</div>
+      <div className="system-xs-medium text-text-primary">{formatTrendTooltipLabel(locale, label, crossesDays)}</div>
       <div className="mt-1.5 grid gap-1">
         {USAGE_ITEMS.map(([key, labelKey]) => (
           <div key={key} className="flex items-center justify-between gap-6">
@@ -89,7 +67,7 @@ function TrendTooltip(props: TrendTooltipProps) {
 }
 
 export function TrendChart(props: TrendChartProps) {
-  const { trend, range, stretchToRow = false } = props
+  const { trend, trendIntervalMs, stretchToRow = false } = props
   const t = useTranslation()
   const locale = useLocale()
   const contentClassName = stretchToRow
@@ -98,10 +76,15 @@ export function TrendChart(props: TrendChartProps) {
   const chartClassName = stretchToRow
     ? 'aspect-auto min-h-44 w-full flex-1'
     : 'aspect-auto h-44 w-full'
+  // 首尾标签落在同一天时不写日期：今天的每小时不必把日期重复一遍。
+  const crossesDays = trendCrossesDays(trend.map(point => point.label))
+  // 刻度不在这里算：挑哪几格由 `@common/analytics-buckets` 定，
+  // 否则「柱子变细了但刻度还按根数等距抽」会抽出每 21 小时一格这种位置。
+  const ticks = resolveTrendTicks(trend.map(point => point.label), TREND_MAX_TICKS)
 
   return (
     <Card className="min-w-0 w-full">
-      <CardSectionHeader title={t('overview.trend.title')} description={formatTrendDescription(t, range)} compact />
+      <CardSectionHeader title={t('overview.trend.title')} description={formatTrendDescription(t, trendIntervalMs)} compact />
       <CardContent className={contentClassName}>
         {trend.length === 0 ? (
           <div className={`${stretchToRow ? 'flex-1 ' : ''}flex min-h-44 items-center justify-center system-xs-regular text-text-tertiary`}>
@@ -116,8 +99,9 @@ export function TrendChart(props: TrendChartProps) {
                 tickLine={false}
                 axisLine={false}
                 tickMargin={8}
-                interval={axisInterval(range)}
-                tickFormatter={value => formatAxisTick(locale, String(value), range)}
+                ticks={ticks}
+                interval={0}
+                tickFormatter={value => formatTrendTickLabel(locale, String(value), crossesDays)}
                 fontSize={11}
               />
               <YAxis
@@ -128,7 +112,7 @@ export function TrendChart(props: TrendChartProps) {
                 tickFormatter={value => formatTokens(Number(value))}
                 fontSize={11}
               />
-              <Tooltip content={<TrendTooltip range={range} />} />
+              <Tooltip content={<TrendTooltip crossesDays={crossesDays} />} />
               {STACK_ITEMS.map(([key], index) => (
                 <Bar key={key} dataKey={key} stackId="usage" fill={`var(--color-${key})`} radius={index === STACK_ITEMS.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
               ))}

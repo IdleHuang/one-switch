@@ -1,5 +1,5 @@
 import { BarChart3, CheckCircle2, Clock3, Coins, TriangleAlert } from 'lucide-react'
-import type { AnalyticsRange, ProviderAnalyticsDetail } from '@common/schemas'
+import type { ProviderAnalyticsDetail } from '@common/schemas'
 import { Card, CardContent } from '@/components/ui/card'
 import { CardSectionHeader } from '@/components/card-section-header'
 import { MetricGrid } from '@/components/metric-grid'
@@ -13,7 +13,6 @@ import { TrendChart } from './trend-chart'
 
 interface ProviderDetailProps {
   detail: ProviderAnalyticsDetail
-  range: AnalyticsRange
 }
 
 export function ProviderDetail(props: ProviderDetailProps) {
@@ -36,7 +35,7 @@ export function ProviderDetail(props: ProviderDetailProps) {
         <CardSectionHeader title={t('overview.providerDetail.models.title')} description={t('overview.providerDetail.models.description')} compact />
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] system-xs-regular">
+            <table className="w-full min-w-180 system-xs-regular">
               <thead className="bg-inset text-text-tertiary"><tr><th className="px-4 py-2 text-left system-2xs-medium">{t('overview.models.column.model')}</th><th className="px-3 py-2 text-right system-2xs-medium">{t('overview.providerDetail.attempts')}</th><th className="px-3 py-2 text-right system-2xs-medium">{t('overview.models.column.avgLatency')}</th><th className="px-3 py-2 text-right system-2xs-medium">{t('overview.models.column.avgTtft')}</th><th className="px-3 py-2 text-right system-2xs-medium">{t('overview.models.column.avgTps')}</th><th className="px-3 py-2 text-right system-2xs-medium">{t('overview.models.column.cacheHitRate')}</th><th className="px-4 py-2 text-right system-2xs-medium">{t('overview.models.column.successRate')}</th></tr></thead>
               <tbody>{providerModels.length === 0 ? <tr><td colSpan={7} className="py-8 text-center text-text-tertiary">{t('overview.providerDetail.models.empty')}</td></tr> : providerModels.map(model => (
                 <tr key={model.providerModelId} className="border-t border-border/40 transition-colors hover:bg-state-base-hover">
@@ -54,7 +53,7 @@ export function ProviderDetail(props: ProviderDetailProps) {
         </CardContent>
       </Card>
 
-      <TrendChart trend={props.detail.tokenTrend} range={props.range} />
+      <TrendChart trend={props.detail.tokenTrend} trendIntervalMs={props.detail.trendIntervalMs} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <LatencyDistribution buckets={props.detail.latencyDistribution} />
