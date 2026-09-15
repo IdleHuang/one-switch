@@ -69,6 +69,8 @@ const PRESET_FALLBACKS: Record<string, string> = {
   '火山': 'volcengine',
   nvidia: 'nvidia',
   nemotron: 'nvidia',
+  ollama: 'ollama',
+  'ollama local': 'ollama',
 }
 
 function resolvePresetKey(name: string): string | undefined {

@@ -25,6 +25,7 @@ export const PROTOCOL_EXAMPLES: Record<Protocol, ProtocolExample[]> = {
   ],
   'openai-responses': [
     { provider: 'OpenAI', url: 'https://api.openai.com/v1/responses' },
+    { provider: 'Ollama', providerKey: 'providers.example.ollamaLocal', url: 'http://localhost:11434/v1/responses' },
   ],
   'anthropic-messages': [
     { provider: 'Anthropic', url: 'https://api.anthropic.com/v1/messages' },
