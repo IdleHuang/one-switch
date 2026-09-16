@@ -183,9 +183,27 @@ function asRecord(value: unknown): RawUsage | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RawUsage : null
 }
 
+/**
+ * 取第一个可用的数值：优先正数，全为 0 时回落到 0。
+ *
+ * 有些聚合网关会在同一个 `usage` 报文里同时给两套字段，并且把其中一套写成占位 0：
+ * Chat 风格的 `prompt_tokens` / `completion_tokens` 是 0，真实值在 Responses 风格的
+ * `input_tokens` / `output_tokens`（以及 `input_tokens_details.cached_tokens`）里。
+ * 按字段顺序取「第一个数字」会先撞上占位 0，于是输入、输出、缓存全被记成 0，
+ * TPS 与缓存命中率因为分子为 0 直接算不出来。
+ *
+ * 判据只能是「0 是不是占位」——上游真报 0 时所有候选都是 0，此时回落值仍是 0，
+ * 不会把「真实的 0」变成「没上报」。反过来只要有一个正数候选，它一定比占位 0 可信：
+ * 没有哪家上游会用正数表达「没有用量」。
+ */
 function firstNumber(...values: unknown[]): number | null {
-  for (const value of values) if (typeof value === 'number' && Number.isFinite(value)) return value
-  return null
+  let fallback: number | null = null
+  for (const value of values) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue
+    if (value > 0) return value
+    if (fallback === null) fallback = value
+  }
+  return fallback
 }
 
 function sumNumbers(...values: unknown[]): number | null {
