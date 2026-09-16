@@ -95,6 +95,31 @@ describe('usage tracker', () => {
     expect(tracker.usage()).toMatchObject({ inputTokens: 3, outputTokens: 7 })
   })
 
+  it('lets a later event replace an earlier reading of the same field', () => {
+    const tracker = createUsageTracker()
+    tracker.consumeSseChunk('data: {"usage":{"output_tokens":1}}\n\n')
+    tracker.consumeSseChunk('data: {"usage":{"output_tokens":477}}\n\n')
+    expect(tracker.usage().outputTokens).toBe(477)
+  })
+
+  it('does not let a later placeholder zero erase an already reported count', () => {
+    // 占位 0 也会跨事件出现：聚合网关逐事件在两套字段之间切换，先报真实值，
+    // 后一个事件只带占位 0。合并规则若是「后到者优先」，真实值会被 0 抹掉，
+    // 与先在字段之间撞上占位 0 是同一个错误。
+    const tracker = createUsageTracker()
+    tracker.consumeSseChunk('data: {"usage":{"input_tokens":38829,"output_tokens":477}}\n\n')
+    tracker.consumeSseChunk('data: {"usage":{"prompt_tokens":0,"completion_tokens":0}}\n\n')
+    expect(tracker.usage()).toMatchObject({ inputTokens: 38829, outputTokens: 477 })
+  })
+
+  it('keeps a later reported zero when nothing positive was seen before', () => {
+    // 只有「已经读到正数」时才拒绝 0；上游若自始至终都报 0，读数仍然是 0。
+    const tracker = createUsageTracker()
+    tracker.consumeSseChunk('data: {"usage":{"input_tokens":0}}\n\n')
+    tracker.consumeSseChunk('data: {"usage":{"prompt_tokens":0}}\n\n')
+    expect(tracker.usage().inputTokens).toBe(0)
+  })
+
   it('parses split SSE lines and ignores the DONE sentinel', () => {
     const tracker = createUsageTracker()
     tracker.consumeSseChunk('data: {"usage":{"prompt_tokens":3}}\n\n')
