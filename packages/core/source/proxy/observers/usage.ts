@@ -163,13 +163,28 @@ export function extractTokenUsage(data: Record<string, unknown>): ExtractedUsage
   }
 }
 
+/**
+ * 合并两次读数。
+ *
+ * 「后到的覆盖先到的」是常态：上游常在收尾事件里才报完整用量，先到的读数往往只有半份。
+ * 但 0 既可能是真实的 0 也可能是占位，而正数一定不是「没有用量」，所以一个 0 读数不许
+ * 盖掉已经读到的正数——否则逐事件在两套字段间切换的网关会先报出真实值，再被后一个只带
+ * 占位 0 的事件抹掉。这与 {@link firstNumber} 先撞上占位 0 是同一个错误，
+ * 只是发生在事件之间而不是字段之间。
+ */
+function mergeNumber(current: number | null, incoming: number | null): number | null {
+  if (incoming === null) return current
+  if (incoming === 0 && current !== null && current > 0) return current
+  return incoming
+}
+
 function mergeUsage(current: ExtractedUsage, incoming: ExtractedUsage): ExtractedUsage {
   return {
-    inputTokens: incoming.inputTokens ?? current.inputTokens,
-    outputTokens: incoming.outputTokens ?? current.outputTokens,
-    cachedInputTokens: incoming.cachedInputTokens ?? current.cachedInputTokens,
-    cacheCreationInputTokens: incoming.cacheCreationInputTokens ?? current.cacheCreationInputTokens,
-    reasoningTokens: incoming.reasoningTokens ?? current.reasoningTokens,
+    inputTokens: mergeNumber(current.inputTokens, incoming.inputTokens),
+    outputTokens: mergeNumber(current.outputTokens, incoming.outputTokens),
+    cachedInputTokens: mergeNumber(current.cachedInputTokens, incoming.cachedInputTokens),
+    cacheCreationInputTokens: mergeNumber(current.cacheCreationInputTokens, incoming.cacheCreationInputTokens),
+    reasoningTokens: mergeNumber(current.reasoningTokens, incoming.reasoningTokens),
     rawUsage: mergeRawUsage(current.rawUsage, incoming.rawUsage),
   }
 }
