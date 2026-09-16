@@ -263,12 +263,14 @@ export function UpdateCard() {
 
   const handleDownload = async () => {
     if (!updater) return
-    const ok = await updater.download()
-    if (!ok) {
+    const result = await updater.download()
+    if (result === 'failed') {
       toast.error(state.errorMessage ?? t('settings.update.downloadFailed'))
-    } else {
+    } else if (result === 'download-complete') {
       toast.success(t('settings.update.downloadedToast'))
     }
+    // 'downloading'：已经在下，重复点击不该再报一句话；
+    // 'manual-download'：已经替用户打开了下载页，界面上的按钮本来就是「前往下载 DMG」。
   }
 
   const handleInstall = async () => {

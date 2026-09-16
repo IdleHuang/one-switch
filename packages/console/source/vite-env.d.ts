@@ -36,10 +36,17 @@ interface UpdateState {
   downloadedFile: string | null
 }
 
+/** `download()` 的结果，与主进程 `apps/app/source/updater.ts` 的 `UpdateDownloadResult` 一致。 */
+type UpdateDownloadResult =
+  | 'downloading'
+  | 'download-complete'
+  | 'manual-download'
+  | 'failed'
+
 interface UpdaterAPI {
   getState: () => Promise<UpdateState>
   check: () => Promise<UpdateState>
-  download: () => Promise<boolean>
+  download: () => Promise<UpdateDownloadResult>
   install: () => Promise<void>
   openReleases: () => Promise<void>
   onStateChanged: (callback: (state: UpdateState) => void) => () => void

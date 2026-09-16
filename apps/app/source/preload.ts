@@ -45,10 +45,22 @@ export interface UpdateState {
   downloadedFile: string | null
 }
 
+/**
+ * `download()` 的结果，与主进程 `updater.ts` 的 `UpdateDownloadResult` 一致。
+ *
+ * preload 是另一份构建产物，不能 import 主进程模块，所以这里再声明一遍；
+ * 渲染层那份在 `packages/console/source/vite-env.d.ts`。三处改一处就得同步三处。
+ */
+export type UpdateDownloadResult =
+  | 'downloading'
+  | 'download-complete'
+  | 'manual-download'
+  | 'failed'
+
 const updaterApi = {
   getState: (): Promise<UpdateState> => ipcRenderer.invoke('updater:get-state'),
   check: (): Promise<UpdateState> => ipcRenderer.invoke('updater:check'),
-  download: (): Promise<boolean> => ipcRenderer.invoke('updater:download'),
+  download: (): Promise<UpdateDownloadResult> => ipcRenderer.invoke('updater:download'),
   install: (): Promise<void> => ipcRenderer.invoke('updater:install'),
   openReleases: (): Promise<void> => ipcRenderer.invoke('updater:open-releases'),
   onStateChanged: (callback: (state: UpdateState) => void) => {
