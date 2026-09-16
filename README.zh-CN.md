@@ -145,7 +145,7 @@ curl http://127.0.0.1:9300/v1/models
 
 | 文件 | 内容 |
 | --- | --- |
-| `~/.one-switch/one-switch-config-v2.db` | 供应商、模型、路由与改写规则 —— **你的配置，值得单独备份** |
+| `~/.one-switch/one-switch-config-v1.db` | 供应商、模型、路由与改写规则 —— **你的配置，值得单独备份** |
 | `~/.one-switch/one-switch-data-v1.db` | 请求日志、正文、用量与健康状态 —— **可以随时删**，只丢历史统计 |
 
 开发版跑的是 `~/.one-switch-development`，不会碰到你真实的数据。
@@ -164,7 +164,7 @@ curl http://127.0.0.1:9300/v1/models
 - **Windows**：`.exe` 安装程序，x64 与 ARM64 各一个
 - **Linux**：`.AppImage`，x64 与 ARM64 各一个
 
-macOS 构建目前是 ad-hoc 签名且未公证。如果系统拦下了首次打开，去「系统设置 → 隐私与安全性」里确认放行，或者在 Finder 里右键应用选「打开」。
+macOS 构建目前是 ad-hoc 签名且未公证。如果系统拦下了首次打开，去「系统设置 → 隐私与安全性」里确认放行，或者在 Finder 里右键应用选「打开」。也正因为这个签名状态，macOS 上只能检查更新并跳到 DMG 下载页，Windows / Linux 则是下载后在应用内直接安装。
 
 ## 现在还不支持
 

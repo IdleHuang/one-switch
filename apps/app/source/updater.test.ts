@@ -5,7 +5,9 @@ const mocks = vi.hoisted(() => {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
   const autoUpdater = {
     autoDownload: true,
-    autoInstallOnAppQuit: true,
+    // 三个开关的初始值都取「代码会写成的反面」，这样断言才有意义：
+    // 否则「代码根本没赋值」也会因为和初始值相同而通过。
+    autoInstallOnAppQuit: false,
     allowPrerelease: false,
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       const eventHandlers = handlers.get(event) ?? []
@@ -38,6 +40,24 @@ import { UpdaterManager } from './updater'
 
 const latestReleaseUrl = 'https://github.com/yinxulai/one-switch/releases/tag/v1.1.0'
 
+/** 真实产物名与顺序（照抄 v1.1.0-beta.9 的 `latest*.yml`，别理想化）。 */
+const windowsFiles = [
+  { url: 'One-Switch-1.1.0-win.exe', sha512: 'checksum', size: 194211246 },
+  { url: 'One-Switch-1.1.0-win-x64.exe', sha512: 'checksum', size: 96353572 },
+  { url: 'One-Switch-1.1.0-win-arm64.exe', sha512: 'checksum', size: 98418281 },
+]
+
+const macFiles = [
+  { url: 'One-Switch-1.1.0-mac-arm64.zip', sha512: 'checksum', size: 106595669 },
+  { url: 'One-Switch-1.1.0-mac-x64.zip', sha512: 'checksum', size: 113790882 },
+  { url: 'One-Switch-1.1.0-mac-x64.dmg', sha512: 'checksum', size: 117927813 },
+  { url: 'One-Switch-1.1.0-mac-arm64.dmg', sha512: 'checksum', size: 110720617 },
+]
+
+const linuxFiles = [
+  { url: 'One-Switch-1.1.0-linux-x86_64.AppImage', sha512: 'checksum', size: 119007720 },
+]
+
 function updateInfo(overrides: Partial<UpdateInfo> = {}): UpdateInfo {
   return {
     version: '1.1.0',
@@ -59,11 +79,12 @@ function emit(event: string, ...args: unknown[]) {
 
 beforeEach(() => {
   vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+  vi.spyOn(process, 'arch', 'get').mockReturnValue('x64')
   mocks.handlers.clear()
   vi.clearAllMocks()
   mocks.app.isPackaged = false
   mocks.autoUpdater.autoDownload = true
-  mocks.autoUpdater.autoInstallOnAppQuit = true
+  mocks.autoUpdater.autoInstallOnAppQuit = false
   mocks.autoUpdater.allowPrerelease = false
   mocks.autoUpdater.checkForUpdates.mockResolvedValue(null)
   mocks.autoUpdater.downloadUpdate.mockResolvedValue([])
@@ -79,7 +100,8 @@ describe('UpdaterManager', () => {
     const manager = new UpdaterManager()
 
     expect(mocks.autoUpdater.autoDownload).toBe(false)
-    expect(mocks.autoUpdater.autoInstallOnAppQuit).toBe(false)
+    // 非 macOS 保留「退出时自动安装」：用户已经下过的东西，退出时该装上。
+    expect(mocks.autoUpdater.autoInstallOnAppQuit).toBe(true)
     expect(mocks.autoUpdater.allowPrerelease).toBe(true)
     expect(manager.getState()).toMatchObject({
       status: 'idle',
@@ -88,6 +110,18 @@ describe('UpdaterManager', () => {
         latestVersion: '1.0.0-beta.10',
       },
     })
+  })
+
+  it('keeps macOS on manual DMG install instead of installing on quit', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    // 先摆成 true：断言 false 才能证明构造过程把它改回来了，而不是它本来就是 false。
+    mocks.autoUpdater.autoInstallOnAppQuit = true
+
+    const manager = new UpdaterManager()
+
+    expect(mocks.autoUpdater.autoInstallOnAppQuit).toBe(false)
+    expect(mocks.autoUpdater.autoDownload).toBe(false)
+    expect(manager.getState().status).toBe('idle')
   })
 
   it('notifies subscribers immediately and stops after unsubscribe', () => {
@@ -158,6 +192,37 @@ describe('UpdaterManager', () => {
       },
     })
     expect(manager.getState().info?.preferredAsset).toBeUndefined()
+  })
+
+  it('picks the architecture-specific installer out of the Windows metadata', () => {
+    const manager = new UpdaterManager()
+
+    emit('update-available', updateInfo({ files: windowsFiles }))
+    // 第一项是「不带架构段的多合一安装包」（194MB），不是这台 x64 机器要下的那个。
+    expect(manager.getState().info?.preferredAsset?.name).toBe('One-Switch-1.1.0-win-x64.exe')
+
+    vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64')
+    emit('update-available', updateInfo({ files: windowsFiles }))
+    expect(manager.getState().info?.preferredAsset?.name).toBe('One-Switch-1.1.0-win-arm64.exe')
+  })
+
+  it('picks the DMG for the running architecture on macOS', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    const manager = new UpdaterManager()
+
+    emit('update-available', updateInfo({ files: macFiles }))
+
+    // 元数据第一项是 arm64 的 zip；手动安装要的是本架构的 DMG
+    expect(manager.getState().info?.preferredAsset?.name).toBe('One-Switch-1.1.0-mac-x64.dmg')
+  })
+
+  it('picks the AppImage whose architecture token is x86_64 on Linux', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
+    const manager = new UpdaterManager()
+
+    emit('update-available', updateInfo({ files: linuxFiles }))
+
+    expect(manager.getState().info?.preferredAsset?.name).toBe('One-Switch-1.1.0-linux-x86_64.AppImage')
   })
 
   it('supplies safe defaults for optional release metadata', () => {
@@ -253,7 +318,7 @@ describe('UpdaterManager', () => {
     const manager = new UpdaterManager()
     emit('update-available', updateInfo())
 
-    await expect(manager.downloadUpdate()).resolves.toBe(true)
+    await expect(manager.downloadUpdate()).resolves.toBe('download-complete')
 
     expect(mocks.autoUpdater.downloadUpdate).toHaveBeenCalledOnce()
     expect(manager.getState()).toMatchObject({
@@ -266,14 +331,15 @@ describe('UpdaterManager', () => {
   it('rejects downloads when no update is available or one is in progress', async () => {
     const manager = new UpdaterManager()
 
-    await expect(manager.downloadUpdate()).resolves.toBe(false)
+    await expect(manager.downloadUpdate()).resolves.toBe('failed')
     expect(manager.getState()).toMatchObject({
       status: 'error',
       errorMessage: 'There is no downloadable update right now',
     })
 
     emit('download-progress', { percent: 10 })
-    await expect(manager.downloadUpdate()).resolves.toBe(false)
+    // 已经在下了：不起第二次下载，也不该报成失败
+    await expect(manager.downloadUpdate()).resolves.toBe('downloading')
     expect(mocks.autoUpdater.downloadUpdate).not.toHaveBeenCalled()
   })
 
@@ -282,7 +348,7 @@ describe('UpdaterManager', () => {
     emit('update-available', updateInfo())
     mocks.autoUpdater.downloadUpdate.mockRejectedValue(new Error('disk full'))
 
-    await expect(manager.downloadUpdate()).resolves.toBe(false)
+    await expect(manager.downloadUpdate()).resolves.toBe('failed')
 
     expect(manager.getState()).toMatchObject({
       status: 'error',
@@ -296,10 +362,12 @@ describe('UpdaterManager', () => {
     const manager = new UpdaterManager()
     emit('update-available', updateInfo())
 
-    await expect(manager.downloadUpdate()).resolves.toBe(false)
+    await expect(manager.downloadUpdate()).resolves.toBe('manual-download')
 
     expect(mocks.shell.openExternal).toHaveBeenCalledWith(latestReleaseUrl)
     expect(mocks.autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+    // 转去下载页不是失败，界面上不该出现「下载失败」
+    expect(manager.getState()).toMatchObject({ status: 'update-available', errorMessage: null })
   })
 
   it('installs a downloaded update on supported platforms', async () => {

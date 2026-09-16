@@ -143,7 +143,7 @@ Configuration, logs and request metadata live in one hidden directory in your ho
 
 | File | Contents |
 | --- | --- |
-| `~/.one-switch/one-switch-config-v2.db` | Providers, models, routing and rewrite rules — **your configuration, worth backing up** |
+| `~/.one-switch/one-switch-config-v1.db` | Providers, models, routing and rewrite rules — **your configuration, worth backing up** |
 | `~/.one-switch/one-switch-data-v1.db` | Request logs, captured bodies, usage and health state — **safe to delete**, you only lose history |
 
 The development build uses `~/.one-switch-development` instead, so a dev instance never touches your real data.
@@ -162,7 +162,7 @@ Download the installer for your platform from [GitHub Releases](https://github.c
 - **Windows**: `.exe` installer, x64 and ARM64
 - **Linux**: `.AppImage`, x64 and ARM64
 
-macOS builds are ad-hoc signed and not notarized. If the system blocks the first launch, allow it under System Settings → Privacy & Security, or right-click the app in Finder and choose Open.
+macOS builds are ad-hoc signed and not notarized. If the system blocks the first launch, allow it under System Settings → Privacy & Security, or right-click the app in Finder and choose Open. The same signature situation is why macOS can only check for updates and open the DMG download page, while Windows and Linux download and install in place.
 
 ## Not supported yet
 

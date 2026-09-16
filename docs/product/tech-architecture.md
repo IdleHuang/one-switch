@@ -245,8 +245,11 @@ React 18 + TypeScript + shadcn/ui + Tailwind。页面通过 `packages/console/so
 - ad-hoc 签名只保证应用包内部完整性，不提供开发者身份信任，也不能提交 Apple 公证
 - GitHub Release 必须附带 DMG 的 SHA-256 文件和“隐私与安全 > 仍要打开”的首次安装说明
 - 未来购买 Apple Developer Program 后，替换为 Developer ID Application 签名和 Apple notarization；不得把免费 Apple Development 证书用于公网分发
-- 自动更新已实现：`apps/app/source/updater.ts` 使用 `electron-updater` ，支持检查、手动下载、进度、安装和状态广播；生产环境启动后静默检查，开发环境无更新元数据时显示友好状态。
-- 无正式 Developer ID 签名阶段，自动更新明确关闭 macOS 更新包发行者签名校验，下载完整性依赖更新元数据中的 SHA-512。这是当前发布方式的预期取舍；启用正式签名和 Apple notarization 后必须恢复签名校验。
+- 自动更新已实现：`apps/app/source/updater.ts` 使用 `electron-updater`，支持检查、手动下载、进度、安装和状态广播；生产环境启动后静默检查，开发环境无更新元数据时显示友好状态
+- 平台差异只有两处，`updater.ts` 里不该再有第三处平台判断：Windows / Linux 走完整链路（下载 → 点击安装，未点安装时由 `autoInstallOnAppQuit` 在退出时安装）；macOS 因 ad-hoc 签名不被 Squirrel.Mac 接受，只保留「检查 → 前往对应的 DMG / Release 页」的手动路径
+- `downloadUpdate()` 返回 `'download-complete' | 'manual-download' | 'downloading' | 'failed'` 而不是布尔值：macOS 打开下载页是「按预期做完」，不能和「下载失败」共用 `false`，否则界面会弹出假报错
+- 同一平台的更新元数据里有多个文件（Windows 的 fat exe / x64 / arm64、macOS 的 zip / DMG），`preferredAsset` 按当前 `process.platform` 与 `process.arch` 挑出该下的那个，不能直接取 `files[0]`
+- 下载完整性依赖更新元数据中的 SHA-512。`verifyUpdateCodeSignature` 只对 Windows 的 `NsisUpdater` 生效，不要在 `initialize()` 里无条件设为 `false`：它既是空操作，又会让人误以为 macOS 的校验已被关掉。启用正式 Developer ID 签名与 Apple notarization 后才谈恢复 macOS 的自动安装。
 
 ## 开发流程
 
