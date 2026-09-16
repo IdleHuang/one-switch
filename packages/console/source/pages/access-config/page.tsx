@@ -1,34 +1,30 @@
-import { useState } from 'react'
 import { PageContent, PageHeader, PageLayout } from '@/components/layout'
 import { ProxyToggleButton } from '@/components/proxy-toggle-button'
 import { useTranslation } from '@/i18n/provider'
+import { AddressCard } from './components/address-card'
+import { InterfaceTableCard } from './components/interface-table-card'
 import { ServiceStatusBar } from './components/service-status-bar'
-import { ToolGuideCard } from './components/tool-guide-card'
-import { ToolListCard } from './components/tool-list-card'
 import { useAccessConfig } from './hooks/use-access-config'
 import { useCopyToClipboard } from './hooks/use-copy-to-clipboard'
-import { DEFAULT_ACCESS_TOOL_ID, findAccessTool, type AccessToolId } from './tools'
 
 /**
- * 接入配置页要回答的问题是「怎么把这个服务配进**我自己的**工具里」，
- * 所以版面只办两件事：先认出用户在用什么工具，再把那个工具的写法摊开。
+ * 接入配置页是一份**本机服务的说明书**，不是一份别人的教程。
  *
- * 形态定成「左栏选、右栏配」：左栏是一条压扁的清单（入口，不是内容），
- * 右栏才是目的地——用户动手的地方只有一处，页面上就不该出现第二块和它争注意力的内容。
+ * 它只讲三件我们自己的事实：服务在哪个地址上、客户端要用的三个值是什么、服务接受哪些路径。
+ * 这三件事都由本仓库的注册表决定，不会因为任何客户端改版而变——所以这一页没有「工具」这个概念，
+ * 没有工具清单，也没有跟着工具走的菜单路径和字段叫法。反过来，任何工具的做法都能在这三件事上
+ * 对上号，用户从客户端连不上回来时，也只需要在这三件事里找答案。
  *
- * 页头之下压一条服务状态带，是因为「服务在不在跑」是前提而不是步骤：它不成立时右栏填什么都没用。
- * 它不参与右栏那 123 的编号，也不是一张卡——两条并列的卡片会立刻把顺序读没。
- * 启停按钮留在页头，换监听地址留在状态带里：次一级的选择不配独占一块版面。
+ * 版面因此是单调的一列：状态 → 三个值 → 接口表。顺序就是读的顺序，页面上没有第二块和它争注意力
+ * 的内容，也就没有「两处答案」的不一致。地址只出现一条（另一种写法是一句话，不是第二条值），
+ * 因为这里最贵的错误是把两条只差 `/v1` 的地址抄串行。
  *
- * 页面上不再有「其它写法」这类补充卡片：同一个信息出现两次，用户从客户端连不上回来时就得两处找答案。
+ * 启停按钮留在页头：它管的是整页的前提；换监听地址放在状态带里，次一级的选择不配独占一块版面。
  */
 export function AccessConfigPage() {
   const config = useAccessConfig()
   const { copiedKey, copy } = useCopyToClipboard()
   const t = useTranslation()
-  const [toolId, setToolId] = useState<AccessToolId>(DEFAULT_ACCESS_TOOL_ID)
-
-  const tool = findAccessTool(toolId)
 
   return (
     <PageLayout>
@@ -45,15 +41,8 @@ export function AccessConfigPage() {
           port={config.port}
           wildcardHost={config.wildcardHost}
         />
-        <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
-          <ToolListCard selectedId={toolId} onSelect={setToolId} />
-          <ToolGuideCard
-            tool={tool}
-            origin={config.origin}
-            copiedKey={copiedKey}
-            onCopy={copy}
-          />
-        </div>
+        <AddressCard origin={config.origin} copiedKey={copiedKey} onCopy={copy} />
+        <InterfaceTableCard />
       </PageContent>
     </PageLayout>
   )

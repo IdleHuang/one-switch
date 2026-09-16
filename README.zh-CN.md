@@ -145,7 +145,7 @@ curl http://127.0.0.1:9300/v1/models
 
 | 文件 | 内容 |
 | --- | --- |
-| `~/.one-switch/one-switch-config-v1.db` | 供应商、模型、路由与改写规则 —— **你的配置，值得单独备份** |
+| `~/.one-switch/one-switch-config-v2.db` | 供应商、模型、路由与改写规则 —— **你的配置，值得单独备份** |
 | `~/.one-switch/one-switch-data-v1.db` | 请求日志、正文、用量与健康状态 —— **可以随时删**，只丢历史统计 |
 
 开发版跑的是 `~/.one-switch-development`，不会碰到你真实的数据。

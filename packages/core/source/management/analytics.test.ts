@@ -15,6 +15,14 @@ function responseData(response: ServerResponse): Record<string, unknown> {
   return JSON.parse(String(body)) as Record<string, unknown>
 }
 
+const HOUR_MILLISECONDS = 60 * 60 * 1000
+
+/** 只取热力图那一段：格数与格宽是这里的断言对象。 */
+interface HeatPayload {
+  heatIntervalMs: number
+  heat: Array<{ label: string; requests: number; success: number; failed: number; totalTokens: number }>
+}
+
 /** 同一请求的同一次序号只能落一行，冲突时 store 返回 `null`。 */
 async function createAttemptOrThrow(input: Parameters<typeof createRequestAttempt>[0]) {
   const attempt = await createRequestAttempt(input)
@@ -63,6 +71,55 @@ describe('analytics route', () => {
 
     await expect(analyticsRoutes.invoke('/api/analytics/summary', res, { range: '90d' })).rejects.toThrow()
     expect(res.end).not.toHaveBeenCalled()
+  })
+
+  it('用量分布按查询范围分桶：格数按完整时长规划、空格补零', async () => {
+    const provider = await createProvider({ name: 'Heat Provider', apiKeyReference: 'key_heat', timeoutMilliseconds: 30_000, enabled: true })
+    const log = await createRequestLog({
+      logicalModelId: 'default',
+      clientProtocol: 'openai-responses',
+      transport: 'http',
+      status: 'success',
+      totalDurationMilliseconds: 1500,
+    })
+    const attempt = await createAttemptOrThrow({
+      requestId: log.id,
+      providerId: provider.id,
+      providerModelId: 'model_heat',
+      providerName: provider.name,
+      providerModelName: 'heat-model',
+      upstreamProtocol: 'openai-responses',
+      upstreamRequestId: null,
+      url: 'https://example.com/heat',
+      httpStatus: 200,
+      retryable: false,
+      upstreamTransport: 'http',
+      attemptIndex: 0,
+      status: 'success',
+      durationMilliseconds: 1500,
+    })
+    // 请求级用量由服务该请求的尝试镜像过来；热力图读的就是请求级这张表。
+    await recordAttemptUsage({ attemptId: attempt.id, servesRequest: true, ...EMPTY_USAGE, inputTokens: 100, outputTokens: 20, cachedInputTokens: 0, cacheCreationInputTokens: 0 })
+
+    const todayRes = mockResponse()
+    await analyticsRoutes.invoke('/api/analytics/summary', todayRes, { range: 'today' })
+    const monthRes = mockResponse()
+    await analyticsRoutes.invoke('/api/analytics/summary', monthRes, { range: '30d' })
+
+    const today = responseData(todayRes) as { success: boolean; data: HeatPayload }
+    const month = responseData(monthRes) as { success: boolean; data: HeatPayload }
+
+    expect(today.success).toBe(true)
+    expect(month.success).toBe(true)
+    // 格数与格宽都只由范围决定，与「此刻」是几点无关：今日恒为整天的 144 格（10 分钟一格），
+    // 近 30 天恒为 181 格（4 小时一格，首尾各占一个不完整的格）。
+    expect(today.data.heatIntervalMs).toBe(10 * 60_000)
+    expect(today.data.heat.length).toBe(144)
+    expect(month.data.heatIntervalMs).toBe(4 * HOUR_MILLISECONDS)
+    expect(month.data.heat.length).toBe(181)
+    // 唯一的请求落在最后一个格里（窗口的终点就是此刻），其余全是零值格。
+    expect(month.data.heat[month.data.heat.length - 1]).toMatchObject({ requests: 1, success: 1, failed: 0, totalTokens: 120 })
+    expect(month.data.heat.slice(0, -1).every(bucket => bucket.requests === 0 && bucket.success === 0 && bucket.failed === 0 && bucket.totalTokens === 0)).toBe(true)
   })
 
   it('returns summary, trend, provider stats and failure reasons for a time range', async () => {

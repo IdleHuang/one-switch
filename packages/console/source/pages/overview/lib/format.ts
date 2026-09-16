@@ -13,15 +13,15 @@ export function formatCount(locale: string, value: number): string {
 }
 
 /**
- * 趋势图的粒度描述。
+ * 把桶宽翻成人话（趋势图与用量分布图共用的副标题）。
  *
  * 粒度是服务端从查询范围推出来的并随范围返回，界面不解一遍「今天 / 7 天 / 30 天」：
- * 各处分别推导就一定会有一处忘了改。这里只把桶宽翻成人话。
+ * 各处分别推导就一定会有一处忘了改。两张图共用一套桶，所以也共用这一句。
  *
  * 桶宽缺失时返回 `null`（卡片头就不写这一句）：这个字段是随响应来的，界面比服务端新
  * 的那段时间里它可能没有值，那时说「每 NaN 分钟」比不说更糟。
  */
-export function formatTrendDescription(t: AppTranslator, trendIntervalMs: number): string | null {
+export function formatIntervalDescription(t: AppTranslator, trendIntervalMs: number): string | null {
   const parts = trendIntervalParts(trendIntervalMs)
   if (!parts) return null
   const { unit, count } = parts

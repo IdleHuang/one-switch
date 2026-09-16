@@ -409,7 +409,7 @@ CI（`.github/workflows/ci.yml`）与发布（`release.yml`）共用 `.github/ac
 | 维度 | 状态 | 说明 |
 | --- | --- | --- |
 | 数据目录 | 一致 | `<用户主目录>/<预设数据目录名>`，见 §5.5 |
-| 数据文件名 | 一致 | 两边都由 `@common/database-file` 从**库自己的 schema 版本常量**推导（`one-switch-config-v1.db` / `one-switch-data-v1.db`）。宿主不算文件名，所以「两边算出不同文件名」这类差异从结构上不存在 |
+| 数据文件名 | 一致 | 两边都由 `@common/database-file` 从**库自己的 schema 版本常量**推导（`one-switch-config-v2.db` / `one-switch-data-v1.db`）。宿主不算文件名，所以「两边算出不同文件名」这类差异从结构上不存在 |
 | `RuntimeConfig` | 一致 | 同一份 `createRuntimeConfig`；命令行只多传端口与数据目录的覆盖值 |
 | 代理引擎与业务 | 一致 | 同一份 `packages/core`，命令行不写业务逻辑（包边界守卫强制） |
 | 设置与日志 | 一致 | 同一对 SQLite 文件（配置库 + 数据库），没有第二份配置 |

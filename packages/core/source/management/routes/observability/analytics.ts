@@ -8,6 +8,7 @@ import { tokensPerSecondFromTotals } from '@common/metrics'
 import {
   getStatsSummary,
   getUsageTrend,
+  getUsageHeat,
   getProviderStats,
   getProviderStat,
   getProviderAnalyticsTrend,
@@ -35,12 +36,13 @@ const ProviderAnalyticsRequestSchema = z.object({
 async function handleAnalyticsSummary(_req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> {
   const { range } = AnalyticsSummaryRequestSchema.parse(body ?? {})
   // 时间窗与粒度都从查询范围推导一次，后续所有查询共用同一份结论（`@common/analytics-buckets`）。
+  // 用量分布的粒度也来自这里：它的格宽与格数同样是范围的函数，只是比趋势桶细。
   const buckets = resolveAnalyticsBuckets(range)
   const { sinceMs } = buckets
 
-  const trend = await getUsageTrend(buckets)
-
-  const [summary, providerStats, modelStats, latencyDistribution, failureReasons, sourceStats] = await Promise.all([
+  const [trend, heat, summary, providerStats, modelStats, latencyDistribution, failureReasons, sourceStats] = await Promise.all([
+    getUsageTrend(buckets),
+    getUsageHeat(buckets),
     getStatsSummary(sinceMs),
     getProviderStats(sinceMs),
     getModelStats(sinceMs, 10),
@@ -75,7 +77,9 @@ async function handleAnalyticsSummary(_req: IncomingMessage, res: ServerResponse
   const response: AnalyticsSummary = {
     summary,
     trendIntervalMs: buckets.trendIntervalMs,
+    heatIntervalMs: buckets.heatIntervalMs,
     trend,
+    heat,
     providerStats: providerStatsWithPercent,
     modelStats: modelStatsWithRate,
     latencyDistribution: latencyWithPercent,

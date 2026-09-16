@@ -14,6 +14,7 @@ import {
   listProviderEndpoints,
   listProviders,
   listProviderSettings,
+  reorderProviders,
   replaceProviderEndpoints,
   updateProvider,
   upsertProviderSetting,
@@ -201,5 +202,20 @@ describe('provider store', () => {
     })
     expect((await listProviders()).map(item => item.id)).not.toContain(provider.id)
     expect((await listProviders(true)).map(item => item.id)).toContain(provider.id)
+  })
+
+  it('persists the dragged provider order across reads and appends later creations', async () => {
+    const alpha = await createProvider({ name: 'Alpha', apiKeyReference: 'key_alpha', enabled: true })
+    const beta = await createProvider({ name: 'Beta', apiKeyReference: 'key_beta', enabled: true })
+    const before = (await listProviders()).map(provider => provider.id)
+    expect(before.slice(-2)).toEqual([alpha.id, beta.id])
+
+    const reversed = [...before].reverse()
+    await reorderProviders(reversed)
+    expect((await listProviders()).map(provider => provider.id)).toEqual(reversed)
+
+    // 拖过序之后再新建，新供应商排在末尾而不是插进已排好的序列里。
+    const gamma = await createProvider({ name: 'Gamma', apiKeyReference: 'key_gamma', enabled: true })
+    expect((await listProviders()).map(provider => provider.id)).toEqual([...reversed, gamma.id])
   })
 })

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { ServerResponse } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecretStore } from '@common/secret-store'
 import { closeDatabases, initDatabases } from '../database'
@@ -11,6 +12,11 @@ import { mockResponse } from './test-support'
 
 let temporaryDirectory: string
 let secretStore: SecretStore
+
+function responseData(response: ServerResponse): Record<string, unknown> {
+  const body = vi.mocked(response.end).mock.calls[0]?.[0]
+  return JSON.parse(String(body)) as Record<string, unknown>
+}
 
 beforeEach(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'one-switch-provider-'))
@@ -64,5 +70,20 @@ describe('provider management', () => {
 
     expect(secretStore.set).toHaveBeenCalledTimes(1)
     expect(secretStore.set).toHaveBeenCalledWith(expect.stringMatching(/^key_/), 'sk-test')
+  })
+
+  it('reorders providers through the management route', async () => {
+    await createProvider({ name: 'Order A', apiKeyReference: 'key_order_a', enabled: true })
+    await createProvider({ name: 'Order B', apiKeyReference: 'key_order_b', enabled: true })
+
+    const listRes = mockResponse()
+    await providerRoutes.invoke('/api/provider/list', listRes)
+    const before = (responseData(listRes).data as { id: string }[]).map(provider => provider.id)
+    const reversed = [...before].reverse()
+
+    const reorderRes = mockResponse()
+    await providerRoutes.invoke('/api/provider/reorder', reorderRes, { ids: reversed })
+    expect((responseData(reorderRes).data as { id: string }[]).map(provider => provider.id)).toEqual(reversed)
+    expect((await listProviders()).map(provider => provider.id)).toEqual(reversed)
   })
 })

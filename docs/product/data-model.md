@@ -146,6 +146,7 @@ erDiagram
     text name
     text description
     boolean enabled
+    integer sortOrder
     integer createdTime
     integer updatedTime
     integer deletedTime

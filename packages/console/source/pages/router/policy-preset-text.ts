@@ -1,5 +1,5 @@
 import type { RouterPolicyPresetId } from '@common/router/presets'
-import type { UiCatalogKey } from '@common/i18n/catalogs'
+import type { PresetTextKeys } from './components/preset-menu'
 
 /**
  * 策略预设的展示文案键。
@@ -8,10 +8,7 @@ import type { UiCatalogKey } from '@common/i18n/catalogs'
  * 而服务端没有「界面语言」这个概念；名称与说明是纯展示内容，因此只放在渲染层目录里。
  * 表用 `RouterPolicyPresetId` 作键，新增预设时漏配会在类型检查阶段被拦住。
  */
-export interface PolicyPresetTextKeys {
-  name: UiCatalogKey
-  description: UiCatalogKey
-}
+export type PolicyPresetTextKeys = PresetTextKeys
 
 export const POLICY_PRESET_TEXT_KEYS: Record<RouterPolicyPresetId, PolicyPresetTextKeys> = {
   'model-direct': { name: 'router.policy.model-direct.name', description: 'router.policy.model-direct.description' },

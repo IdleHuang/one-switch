@@ -94,3 +94,52 @@ export function createProtocolAuthHeaders(protocol: Protocol, apiKey: string | n
   const { replace, fill } = resolveProtocolAuthHeaders(protocol, apiKey, customAuthHeader)
   return { ...fill, ...replace }
 }
+
+/**
+ * 对外接口面：客户端可以直接访问的入口清单。
+ *
+ * 这份清单是**契约**而不是文档：它描述的是「这个服务对外长什么样」，这件事既不属于某一个宿主，
+ * 也不属于实现细节。放在契约层之后，它可以被两边的测试各守一半——代理侧断言自己的注册表与它
+ * 逐条一致（`packages/core/source/proxy/protocols/interface-surface.test.ts`），
+ * 界面侧照着它渲染那张接口表（`pages/access-config`）。于是「说明书过期」不再靠人记得同步，
+ * 而是编译或测试直接失败。
+ *
+ * `paths` 列的是全部等价写法而不是一条：入口的匹配规则本来就成对注册（带 `/v1` 与不带 `/v1`），
+ * 客户端从哪一端开始拼路径都能命中。这个事实值得说明白——不说明白，用户就得去猜
+ * 「我这边的地址要不要带 /v1」这种别人的实现细节。
+ *
+ * 有意不收录的东西：厂商名、产品名、任何工具的名字。它们的含义由别人定义、随时会变，
+ * 而这个服务的接口面不会因为别人改版而变。
+ *
+ * **只收真正支持的接口。** 一条入口要站得住，得有「配一个能用的上游地址」的地方：上游地址按协议
+ * 配在 ProviderModel 端点上（一个协议一个地址），所以只有与该协议同一接口形态的路径才跑得通。
+ * 注册表认得出更多路径（旧版文本补全、文本向量与对话补全同属 `openai-completions`，匹配规则一起
+ * 注册），但正文里的路径与端点地址对不上，转发出去只会落到一个聊天接口的地址上。
+ * 「认得出」与「支持得住」是两件事，这份清单只承诺后者——写上去的路径，用户照抄就一定能跑通。
+ * 注册表里那些认得出但不承诺的路径在代理侧的测试里各自留了名字，多出一条路径必须有人做决定。
+ */
+export const PROXY_INTERFACE_IDS = [
+  'chatCompletions',
+  'responses',
+  'messages',
+  'models',
+] as const
+
+export type ProxyInterfaceId = (typeof PROXY_INTERFACE_IDS)[number]
+
+export interface ProxyInterfaceEntry {
+  readonly id: ProxyInterfaceId
+  /** HTTP 方法，与注册表里声明的一致。 */
+  readonly method: string
+  /** 该入口的全部等价写法，第一条是主写法。 */
+  readonly paths: readonly string[]
+  /** 归属协议；`null` 表示这条入口由本地端点直接应答，不转发给上游。 */
+  readonly protocol: Protocol | null
+}
+
+export const PROXY_INTERFACE_ENTRIES: readonly ProxyInterfaceEntry[] = [
+  { id: 'chatCompletions', method: 'POST', paths: ['/v1/chat/completions', '/chat/completions'], protocol: 'openai-completions' },
+  { id: 'responses', method: 'POST', paths: ['/v1/responses', '/responses'], protocol: 'openai-responses' },
+  { id: 'messages', method: 'POST', paths: ['/v1/messages', '/messages'], protocol: 'anthropic-messages' },
+  { id: 'models', method: 'GET', paths: ['/v1/models'], protocol: null },
+]

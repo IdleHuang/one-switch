@@ -3,7 +3,7 @@
  *
  * 一个数据目录里有**两个**数据库，各自带自己的 schema 版本号：
  *
- *   - `one-switch-config-v1.db`——配置库，用户写的东西（供应商、模型、路由、改写规则、设置）；
+ *   - `one-switch-config-v2.db`——配置库，用户写的东西（供应商、模型、路由、改写规则、设置）；
  *   - `one-switch-data-v1.db`——数据库，系统写的东西（请求日志、用量、正文、运行时日志、健康状态）。
  *
  * 版本号**不跟应用版本号走**：两个库的换代必须能独立发生，也必须与应用版本解耦。用户要
@@ -34,11 +34,11 @@ export const DATABASE_ROLES: readonly DatabaseRole[] = ['config', 'data']
  * 必须与 schema 定义在同一个提交里改。
  */
 export const DATABASE_SCHEMA_VERSIONS: Record<DatabaseRole, number> = {
-  config: 1,
+  config: 2,
   data: 1,
 }
 
-/** 数据文件名：`one-switch-config-v1.db` / `one-switch-data-v1.db`。 */
+/** 数据文件名：`one-switch-config-v2.db` / `one-switch-data-v1.db`。 */
 export function createDatabaseFileName(role: DatabaseRole): string {
   return `${DATABASE_FILE_PREFIX}-${role}-v${DATABASE_SCHEMA_VERSIONS[role]}.db`
 }

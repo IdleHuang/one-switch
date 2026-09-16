@@ -122,6 +122,8 @@ export async function seedDevelopmentData(secretStore: SecretStore, options: Dev
       name: provider.name,
       description: 'Development sample provider',
       enabled: true,
+      // 种子行的侧栏顺序照 fixture 数组来：`createdTime` 全都一样，没有序号就没有确定顺序。
+      sortOrder: PROVIDER_FIXTURES.indexOf(provider),
       createdTime: timestamp,
       updatedTime: timestamp,
     }))).run()

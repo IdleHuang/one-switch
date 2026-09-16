@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import type { AnalyticsRange } from '@common/schemas'
 import { getRouteApi, useNavigate, useParams } from '@tanstack/react-router'
@@ -12,7 +13,7 @@ import { cn } from '@/lib/utils'
 import { routePaths } from '@/routes'
 import { useOverviewService, useProviderAnalyticsDetail } from './service'
 import { StatsGrid } from './components/stats-grid'
-import { TrendChart } from './components/trend-chart'
+import { UsageDistribution, type UsageDistributionMode } from './components/usage-distribution'
 import { ProviderDistribution } from './components/provider-distribution'
 import { ProviderDetail } from './components/provider-detail'
 import { ModelRanking } from './components/model-ranking'
@@ -34,6 +35,9 @@ export function OverviewPage() {
   const { data, loading, refreshing, error, refresh } = useOverviewService(range)
   const providerDetail = useProviderAnalyticsDetail(providerId ?? null, range)
   const t = useTranslation()
+  // 「用量分布」的画法记在页面这一层，而不是那张卡片里：切 range 时数据未到会先走骨架，
+  // 卡片本身会被卸载，状态留在里面会被打回默认值（用户切到柱状图再换范围就丢了）。
+  const [distributionMode, setDistributionMode] = useState<UsageDistributionMode>('heatmap')
   const selectedProviderName = providerDetail.data?.summary.providerName
     ?? data?.providerStats.find(provider => provider.providerId === providerId)?.providerName
 
@@ -60,9 +64,20 @@ export function OverviewPage() {
             ))}
           </div>
         </Card>
+        {/* 用量分布：骨架照着真图的形状铺（热力图 175 格 = 25 列 × 7 行，接近 30 天的 181 格；
+            柱状图是 h-44 的一整块），卡片就不会在数据到位时跳一下高度。 */}
         <Card className="p-4">
-          <Skeleton className="mb-4 h-4 w-24" />
-          <Skeleton className="h-44 w-full" />
+          <Skeleton className="mb-2 h-4 w-24" />
+          <Skeleton className="mb-3 h-3 w-40" />
+          {distributionMode === 'heatmap' ? (
+            <div className="mx-auto grid w-full gap-0.75" style={{ gridTemplateColumns: 'repeat(25, minmax(0, 1fr))' }}>
+              {Array.from({ length: 175 }).map((_, i) => (
+                <Skeleton key={i} className="aspect-square w-full rounded-[2px]" />
+              ))}
+            </div>
+          ) : (
+            <Skeleton className="h-44 w-full" />
+          )}
         </Card>
       </div>
       <div className="grid grid-cols-1 gap-4">
@@ -148,7 +163,14 @@ export function OverviewPage() {
               search: { range },
             })}
           />
-          <TrendChart trend={data.trend} trendIntervalMs={data.trendIntervalMs} stretchToRow />
+          <UsageDistribution
+            mode={distributionMode}
+            onModeChange={setDistributionMode}
+            heat={data.heat}
+            heatIntervalMs={data.heatIntervalMs}
+            trend={data.trend}
+            trendIntervalMs={data.trendIntervalMs}
+          />
         </div>
         <ModelRanking stats={data.modelStats} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
