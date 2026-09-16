@@ -341,6 +341,8 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'requestLogs.contents.section.localFailure': '本地失败原因 · 上游未返回响应',
   'requestLogs.contents.status.upstreamNoResponse': '上游未返回响应',
   'requestLogs.contents.status.noResponse': '未返回响应',
+  'requestLogs.contents.capture.partial': '部分采集',
+  'requestLogs.contents.capture.partialHint': '这份正文没有采全：流式传输中断，或客户端提前结束了读取。已记录的用量与耗时不受影响。',
   'requestLogs.contents.matchCount': '{count} 处',
   'requestLogs.contents.copyLabel': '复制 {label}',
   'requestLogs.contents.unknownReason': '原因未知',

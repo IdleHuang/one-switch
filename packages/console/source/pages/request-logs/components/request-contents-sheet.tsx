@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useToast } from '@/components/ui/toast'
 import { useLocale, useTranslation, type AppTranslator } from '@/i18n/provider'
 import { cn } from '@/lib/utils'
@@ -43,6 +44,13 @@ interface RequestStageProps {
   protocol: string
   /** 该阶段的响应状态；`null` 表示该阶段没有可展示的状态（如尚未拿到正文）。 */
   statusLabel: string | null
+  /**
+   * 这条视角的正文记录没有采全（`captureStatus === 'partial'`）。
+   *
+   * 只给响应阶段置位：请求体在响应头到达之前就已经发完了，「半截」只可能出现在响应上。
+   * 行级状态挂在响应当头，既不会一行说两遍，也不会让人误读成请求体被截断。
+   */
+  partialCapture?: boolean
   sections: RequestStageSection[]
   sectionStates: Record<string, boolean>
   onSectionOpenChange: (id: string, open: boolean) => void
@@ -319,6 +327,7 @@ function AppliedRules(props: AppliedRulesProps) {
 }
 
 function RequestStage(props: RequestStageProps) {
+  const t = useTranslation()
   const sections = props.sections.filter(section => section.value)
   // 正文整体缺失时仍然把阶段画出来（见 `empty`），其余情况没有内容就不占版面。
   if (sections.length === 0 && !props.empty) return null
@@ -331,10 +340,25 @@ function RequestStage(props: RequestStageProps) {
       <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2.5 system-sm-medium text-text-primary">
         <span>{props.title}</span>
         <span className="font-mono system-xs-regular text-text-tertiary">· {props.protocol}</span>
-        {props.statusLabel && (
-          <span className="ml-auto rounded-md bg-inset px-1.5 py-0.5 font-mono system-2xs-regular text-text-tertiary">
-            {props.statusLabel}
-          </span>
+        {(props.statusLabel || props.partialCapture) && (
+          /* 两个尾部徽标合成一个右对齐组：状态码并不是总有（如上游一个字节都没回），
+             各自带 `ml-auto` 会让「谁在右边」随数据有无而变。 */
+          <div className="ml-auto flex items-center gap-1.5">
+            {props.statusLabel && (
+              <span className="rounded-md bg-inset px-1.5 py-0.5 font-mono system-2xs-regular text-text-tertiary">
+                {props.statusLabel}
+              </span>
+            )}
+            {props.partialCapture && (
+              /* 徽标本身就是悬停靶点：不再另加一个 info 图标——多一个图标反而要人先猜到它能点。 */
+              <Tooltip>
+                <TooltipTrigger className="rounded-md bg-warning/10 px-1.5 py-0.5 system-2xs-medium text-text-warning transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-state-accent-solid">
+                  {t('requestLogs.contents.capture.partial')}
+                </TooltipTrigger>
+                <TooltipContent side="top">{t('requestLogs.contents.capture.partialHint')}</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
         )}
       </div>
       <div className="divide-y divide-border/50">
@@ -450,6 +474,7 @@ function buildRequestStages(t: AppTranslator, input: RequestStageBuilderInput): 
       statusLabel: attemptContent
         ? (attemptContent.responseStatus === null ? t('requestLogs.contents.status.upstreamNoResponse') : `HTTP ${attemptContent.responseStatus}`)
         : null,
+      partialCapture: attemptContent?.captureStatus === 'partial',
       sections: [
         { id: sectionKey(upstreamResponseTitle, t('requestLogs.contents.section.responseHeader', { protocol: upstreamLabel })), label: t('requestLogs.contents.section.responseHeader', { protocol: upstreamLabel }), value: attemptContent?.responseHeaders ?? null },
         {
@@ -467,6 +492,7 @@ function buildRequestStages(t: AppTranslator, input: RequestStageBuilderInput): 
       statusLabel: clientContent
         ? (clientContent.responseStatus === null ? t('requestLogs.contents.status.noResponse') : `HTTP ${clientContent.responseStatus}`)
         : null,
+      partialCapture: clientContent?.captureStatus === 'partial',
       sections: [
         { id: sectionKey(clientResponseTitle, t('requestLogs.contents.section.responseHeader', { protocol: clientLabel })), label: t('requestLogs.contents.section.responseHeader', { protocol: clientLabel }), value: clientContent?.responseHeaders ?? null },
         { id: sectionKey(clientResponseTitle, t('requestLogs.contents.section.responseBody', { protocol: clientLabel })), label: t('requestLogs.contents.section.responseBody', { protocol: clientLabel }), value: clientContent?.responseBody ?? null },
