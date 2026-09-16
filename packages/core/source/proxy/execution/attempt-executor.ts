@@ -253,7 +253,30 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
     const durationMilliseconds = Date.now() - attemptStartedAt
     const failure = relay.error
     // 客户端取消优先于一切：搬运被中止且原因是客户端断开时，这次尝试不该记成上游故障。
+    //
+    // 但「取消」要区分两件事：客户端在拿到自己需要的输出后提前关流，与客户端在
+    // 拿到响应前就放弃。前者的上游已经回了成功头、内容也已经交给了客户端，
+    // 用量与 TTFT 都是真实发生的；把它们丢进 cancelled 会丢统计（issue #3）。
+    // 因此只有响应头还没到的取消才按取消收尾；已经交付中的成功流按交付收尾。
     if (isClientRequestCancelled(failure) || (failure === null && !relay.ended && context.signal.aborted)) {
+      if (relay.head !== null && routing.deliverable && routing.successful) {
+        console.debug(`[proxy] client finished early requestId=${requestId} attempt=${attemptIndex} providerModelId=${target.providerModelId} duration=${durationMilliseconds}ms`)
+        return await concludeDeliveredAttempt({
+          attemptLogger,
+          observer,
+          sink,
+          response,
+          statusCode,
+          disposition,
+          upstreamTransport,
+          transportMismatch,
+          streamInterrupted: false,
+          upstreamRequestId,
+          durationMilliseconds,
+          upstreamProtocol: adapter.kind === 'conversion' ? endpointProtocol : null,
+          responseRewriteRuleIds: responseEvaluation.appliedRuleIds,
+        })
+      }
       throw new ClientRequestCancelledError()
     }
     if (failure !== null && relay.head === null) throw new LocalAttemptError(failure, attemptLogger)

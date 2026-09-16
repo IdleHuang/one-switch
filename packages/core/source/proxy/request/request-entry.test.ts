@@ -1460,7 +1460,61 @@ describe('handleProxyRequest', () => {
     }))
   })
 
-  it('cancels the upstream request when the local client aborts', async () => {
+  it('cancels the upstream request when the local client aborts before the response head', async () => {
+    mocks.captureRequestContent = true
+    configureSecretStore({
+      set: async () => undefined,
+      get: async () => 'secret',
+      delete: async () => undefined,
+    })
+
+    let upstreamRequestReceived!: () => void
+    let upstreamConnectionClosed!: () => void
+    let releaseResponseHead!: () => void
+    const requestReceived = new Promise<void>(resolve => { upstreamRequestReceived = resolve })
+    const connectionClosed = new Promise<void>(resolve => { upstreamConnectionClosed = resolve })
+    const headReleased = new Promise<void>(resolve => { releaseResponseHead = resolve })
+    const upstream = await listen((req, res) => {
+      req.once('close', upstreamConnectionClosed)
+      req.once('data', () => upstreamRequestReceived())
+      void headReleased.then(() => {
+        // 模拟客户端在响应头到来前就断开：此时上游不再发出响应头。
+        if (req.destroyed || res.writableEnded) return
+      })
+    })
+    mocks.models = [
+      model('model_cancel', 'prov_cancel', `${upstream.url}/v1/responses`, 'cancel-model', 'openai-responses'),
+    ]
+    const proxy = await listen((req, res) => {
+      void handleProxyRequest(req, res)
+    })
+
+    const client = http.request(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    })
+    client.on('error', () => undefined)
+    client.end(JSON.stringify({ model: 'default', input: 'Hello', stream: true }))
+    await requestReceived
+    client.destroy()
+    releaseResponseHead()
+
+    await connectionClosed
+    await waitFor(() => mocks.updateRequestLogStatus.mock.calls.some(([, input]) => (
+      (input as { status?: string }).status === 'cancelled'
+    )))
+    expect(mocks.markProviderFailure).not.toHaveBeenCalled()
+    expect(mocks.updateRequestLogStatus).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ status: 'cancelled' }),
+    )
+    expect(mocks.updateRequestContent).not.toHaveBeenCalledWith(
+      'content_request',
+      expect.objectContaining({ captureStatus: 'captured' }),
+    )
+  })
+
+  it('keeps usage stats when the client aborts after a successful response head', async () => {
     mocks.captureRequestContent = true
     configureSecretStore({
       set: async () => undefined,
@@ -1476,7 +1530,8 @@ describe('handleProxyRequest', () => {
       req.once('close', upstreamConnectionClosed)
       req.once('data', () => upstreamRequestReceived())
       res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.write('data: {"type":"response.created"}\n\n')
+      // 这条事件既触发观察者，也代表上游已经把成功响应交给了代理。
+      res.write('data: {"type":"response.output_text.delta","delta":"ok"}\n\n')
     })
     mocks.models = [
       model('model_cancel', 'prov_cancel', `${upstream.url}/v1/responses`, 'cancel-model', 'openai-responses'),
@@ -1496,17 +1551,17 @@ describe('handleProxyRequest', () => {
 
     await connectionClosed
     await waitFor(() => mocks.updateRequestLogStatus.mock.calls.some(([, input]) => (
-      (input as { status?: string }).status === 'cancelled'
+      (input as { status?: string }).status === 'success'
     )))
-    expect(mocks.markProviderFailure).not.toHaveBeenCalled()
-    expect(mocks.updateRequestLogStatus).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ status: 'cancelled' }),
-    )
-    expect(mocks.updateRequestContent).not.toHaveBeenCalledWith(
-      'content_request',
-      expect.objectContaining({ captureStatus: 'captured' }),
-    )
+    expect(mocks.markProviderSuccess).toHaveBeenCalled()
+    expect(mocks.createRequestAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'success',
+      httpStatus: 200,
+    }))
+    expect(mocks.updateRequestContent).toHaveBeenCalledWith('content_request', expect.objectContaining({
+      captureStatus: 'captured',
+      responseStatus: 200,
+    }))
   })
 
   it('records a request whose body never finished arriving', async () => {
