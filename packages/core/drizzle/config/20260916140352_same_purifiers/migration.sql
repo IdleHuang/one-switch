@@ -1,0 +1,1 @@
+ALTER TABLE `providers` ADD `sortOrder` integer DEFAULT 0 NOT NULL;

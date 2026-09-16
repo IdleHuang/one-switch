@@ -3,16 +3,18 @@
  *
  * 一个数据目录里有**两个**数据库，各自带自己的 schema 版本号：
  *
- *   - `one-switch-config-v2.db`——配置库，用户写的东西（供应商、模型、路由、改写规则、设置）；
+ *   - `one-switch-config-v1.db`——配置库，用户写的东西（供应商、模型、路由、改写规则、设置）；
  *   - `one-switch-data-v1.db`——数据库，系统写的东西（请求日志、用量、正文、运行时日志、健康状态）。
  *
- * 版本号**不跟应用版本号走**：两个库的换代必须能独立发生，也必须与应用版本解耦。用户要
- * 「配置更安全、加载更快」，前提就是「数据库可以整个删掉重建而配置一行不动」；只要还共用一个
- * 来自 `app.getVersion()` 的版本号，一次纯 UI 版本发布就会同时换掉两个文件——那正是要避免的事。
- * schema 版本本来描述的也是「这个文件的表结构只能是这一版」，与应用版本无关。
+ * 文件名里的数字是**该文件自己的 schema 版本**：手写常量，不在启动时从 `app.getVersion()` 推导，
+ * 而是只在**应用大版本发布**时加一，目的是甩掉累积的迁移历史——换名字就是换文件，新文件从一份
+ * 重新生成的基线开始，旧文件原样留在磁盘上、既不读也不删。两个库各自维护自己的数字，可以停在不同
+ * 版本上。
  *
- * 换代就是换名字：加一之后新版本去开一个全新文件，旧文件原样留在磁盘上，既不读也不删，
- * 所以既不需要写迁移，也不需要任何版本检测代码。见 `docs/product/data-model.md` 的数据库初始化策略。
+ * **日常的结构变化不走这条路**——为它加一条迁移就够了（`packages/core/drizzle/<role>/` 下每个目录
+ * 是一条），否则每次加列都会把用户已经写好的配置甩在一张空表旁边。
+ *
+ * 见 `docs/product/data-model.md` 的数据库初始化策略。
  */
 export const DATABASE_FILE_PREFIX = 'one-switch'
 
@@ -30,15 +32,15 @@ export const DATABASE_ROLES: readonly DatabaseRole[] = ['config', 'data']
 /**
  * 各库当前的 schema 版本。
  *
- * 改结构时手动加一：这是「这个文件里的表结构只能是这一版」的声明，不是从代码推导出来的。
- * 必须与 schema 定义在同一个提交里改。
+ * 只在**应用大版本发布**时手动加一，而且要和「重新生成基线」一起做：加一等于换一个文件名，
+ * 新文件从一个干净的首发基线建起，旧文件原地留下。日常改结构**不要**动这里——加一条迁移。
  */
 export const DATABASE_SCHEMA_VERSIONS: Record<DatabaseRole, number> = {
-  config: 2,
+  config: 1,
   data: 1,
 }
 
-/** 数据文件名：`one-switch-config-v2.db` / `one-switch-data-v1.db`。 */
+/** 数据文件名：`one-switch-config-v1.db` / `one-switch-data-v1.db`。 */
 export function createDatabaseFileName(role: DatabaseRole): string {
   return `${DATABASE_FILE_PREFIX}-${role}-v${DATABASE_SCHEMA_VERSIONS[role]}.db`
 }

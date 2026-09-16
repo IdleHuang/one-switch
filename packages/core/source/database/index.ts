@@ -13,7 +13,7 @@ import { migrate } from 'drizzle-orm/node-sqlite/migrator'
 /**
  * 数据库连接层：一个数据目录、两个文件。
  *
- * `one-switch-config-v2.db`（用户配置）与 `one-switch-data-v1.db`（观测数据）分别开连接、
+ * `one-switch-config-v1.db`（用户配置）与 `one-switch-data-v1.db`（观测数据）分别开连接、
  * 分别迁移、分别调优。文件名由 `@common/database-file` 自己推导，宿主与连接层都不参与，
  * 也不拼任何字面量。为什么要拆、拆的边界在哪，见那个文件与 `docs/product/data-model.md`；
  * 这里只讲连接层自己必须守住的三件事：
@@ -137,7 +137,8 @@ function openDatabase(role: DatabaseRole, dataDir: string): OpenedDatabase {
     // 迁移期间必须放下外键约束：重建式迁移（建新表 → 拷数据 → 删旧表 → 改名）删旧表时的隐式
     // 删除会撞上子表的外键，而 Drizzle 自己写的 `PRAGMA foreign_keys=OFF` 落在它的迁移事务
     // 内部，SQLite 会忽略。迁移结束后立即恢复，运行期约束强度不受影响。
-    // 当前两个 `drizzle/<role>/` 都只有一个纯建表的首发基线，这段是为了让将来生成的迁移仍然成立。
+    // 当前 config 链是「首发基线 + 一条加列」，加列不重建表；这段是为了让将来生成的重建式迁移
+    // （建新表 → 拷数据 → 删旧表 → 改名）也仍然成立。
     client.exec('PRAGMA foreign_keys = OFF')
     try {
       migrate(database, { migrationsFolder })

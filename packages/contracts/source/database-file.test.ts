@@ -8,7 +8,7 @@ import {
 
 describe('database file name', () => {
   it('names the two databases after their role and schema version', () => {
-    expect(createDatabaseFileName('config')).toBe('one-switch-config-v2.db')
+    expect(createDatabaseFileName('config')).toBe('one-switch-config-v1.db')
     expect(createDatabaseFileName('data')).toBe('one-switch-data-v1.db')
   })
 
@@ -20,7 +20,7 @@ describe('database file name', () => {
 
   it('lists exactly the files this version opens', () => {
     expect(listCurrentDatabaseFileNames().sort()).toEqual([
-      'one-switch-config-v2.db',
+      'one-switch-config-v1.db',
       'one-switch-data-v1.db',
     ])
   })

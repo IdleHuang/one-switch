@@ -204,6 +204,7 @@ SQLite（`node:sqlite` + Drizzle ORM）承载配置与日志，表结构与字�
 - 首发基线：两条链各自只保留一份由 schema 直接生成的首发基线迁移与快照，`pnpm db:generate` 按角色各生成一次（drizzle-kit 一份配置只能喂一条链，所以是两份 `drizzle.config.<role>.ts`）
 - 基线随 `@one-switch/core` 包分发：开发期从模块目录逐级上溯找到 `packages/core/drizzle`，再按角色下钻一层；打包后则命中 asar 内映射的同名路径，两端不需要两套写死的深度
 - 首发后冻结基线，只追加后续迁移，不改写已发布历史
+- 换代（把 `DATABASE_SCHEMA_VERSIONS` 加一并重新生成基线）只发生在应用大版本发布时，用来甩掉累积的迁移历史；日常结构变化一律追加迁移，不要换文件名
 - 库边界由 `packages/core/scripts/check-database-boundaries.mjs` 在 `pnpm lint` 中强制：每个 store 只碰自己那个库，两份 schema 不互相引用
 - API Key 等敏感信息存在系统密钥环中，数据库只存引用 ID
 
