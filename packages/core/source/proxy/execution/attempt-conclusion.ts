@@ -46,6 +46,22 @@ export interface InterruptedAttemptInput extends AttemptConclusionInput {
   readonly deliverable: boolean
 }
 
+/** 交付收尾：响应确实写出了客户端。 */
+export interface DeliveredAttemptInput extends AttemptConclusionInput {
+  /**
+   * 这次交付是否完整走到了收尾。
+   *
+   * 为假表示正文只搬了一部分就断了：上游中途断流，或客户端拿到自己需要的输出后提前关流。
+   * 两种情况下「上游视角」与「客户端视角」的正文都是半截，因此正文记录状态必须是
+   * `partial`——详情页据此说明这份正文不完整，而不是把它当完整采集展示。
+   *
+   * 它和 `streamInterrupted` 问的不是同一件事，不能互相顶替：后者问「这算不算上游的故障」
+   * （客户端主动关流不算，那时它必须是假），这里问「这份正文完不完整」
+   * （客户端主动关流时确实是假）。
+   */
+  readonly deliveryComplete: boolean
+}
+
 function upstreamContent(captureStatus: 'captured' | 'partial', statusCode: number, observer: AttemptObserver, body: string | null): UpstreamContentInput {
   return {
     captureStatus,
@@ -152,12 +168,15 @@ export async function concludeUndeliverableAttempt(input: AttemptConclusionInput
  * 「上游视角正文」与「健康度判定用的正文」在下发流式时并不相同：前者是分块快照，
  * 后者是原文。因此成功尝试用快照，非成功尝试用原文——健康度需要看到完整错误信息。
  */
-export async function concludeDeliveredAttempt(input: AttemptConclusionInput): Promise<AttemptOutcome> {
+export async function concludeDeliveredAttempt(input: DeliveredAttemptInput): Promise<AttemptOutcome> {
   const successful = input.disposition === 'success'
   const upstreamBody = input.observer.upstreamBody()
   const resolvedBody = successful ? upstreamBody : input.observer.rawBody()
   const upstreamRequestId = input.upstreamRequestId ?? extractRequestIdFromBody(resolvedBody)
   const ttftMilliseconds = input.observer.ttftMilliseconds()
+  // 只搬了一半就断掉的正文不是「完整采集」：这份记录存在的意义就是告诉详情页
+  // 「你看到的正文是半截的」，标成 captured 等于把它伪装成一份完整记录。
+  const captureStatus = input.deliveryComplete ? 'captured' : 'partial'
   await input.attemptLogger.finalizeAttempt({
     status: successful ? 'success' : 'failed',
     httpStatus: input.statusCode,
@@ -169,7 +188,7 @@ export async function concludeDeliveredAttempt(input: AttemptConclusionInput): P
     errorMessage: successful ? undefined : `Upstream responded with ${input.statusCode}`,
     upstreamRequestId,
     usage: input.observer.usage(),
-    upstreamContent: upstreamContent('captured', input.statusCode, input.observer, upstreamBody),
+    upstreamContent: upstreamContent(captureStatus, input.statusCode, input.observer, upstreamBody),
     responseRewriteRuleIds: input.responseRewriteRuleIds,
     ttftMilliseconds,
   })
@@ -182,7 +201,7 @@ export async function concludeDeliveredAttempt(input: AttemptConclusionInput): P
     upstreamProtocol: input.upstreamProtocol,
     upstreamResponseBody: resolvedBody,
     clientResponse: {
-      captureStatus: 'captured',
+      captureStatus,
       responseHeaders: serializeSentResponseHeaders(input.response),
       responseBody: input.sink.downstreamBody(),
     },

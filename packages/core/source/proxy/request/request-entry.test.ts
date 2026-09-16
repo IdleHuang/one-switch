@@ -1558,8 +1558,13 @@ describe('handleProxyRequest', () => {
       status: 'success',
       httpStatus: 200,
     }))
+    // 客户端提前关流：用量要留下，但正文只搬了一半，两个视角都不能标成完整采集。
     expect(mocks.updateRequestContent).toHaveBeenCalledWith('content_request', expect.objectContaining({
-      captureStatus: 'captured',
+      captureStatus: 'partial',
+      responseStatus: 200,
+    }))
+    expect(mocks.createAttemptContent).toHaveBeenCalledWith(expect.objectContaining({
+      captureStatus: 'partial',
       responseStatus: 200,
     }))
   })

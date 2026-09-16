@@ -252,35 +252,6 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
 
     const durationMilliseconds = Date.now() - attemptStartedAt
     const failure = relay.error
-    // 客户端取消优先于一切：搬运被中止且原因是客户端断开时，这次尝试不该记成上游故障。
-    //
-    // 但「取消」要区分两件事：客户端在拿到自己需要的输出后提前关流，与客户端在
-    // 拿到响应前就放弃。前者的上游已经回了成功头、内容也已经交给了客户端，
-    // 用量与 TTFT 都是真实发生的；把它们丢进 cancelled 会丢统计（issue #3）。
-    // 因此只有响应头还没到的取消才按取消收尾；已经交付中的成功流按交付收尾。
-    if (isClientRequestCancelled(failure) || (failure === null && !relay.ended && context.signal.aborted)) {
-      if (relay.head !== null && routing.deliverable && routing.successful) {
-        console.debug(`[proxy] client finished early requestId=${requestId} attempt=${attemptIndex} providerModelId=${target.providerModelId} duration=${durationMilliseconds}ms`)
-        return await concludeDeliveredAttempt({
-          attemptLogger,
-          observer,
-          sink,
-          response,
-          statusCode,
-          disposition,
-          upstreamTransport,
-          transportMismatch,
-          streamInterrupted: false,
-          upstreamRequestId,
-          durationMilliseconds,
-          upstreamProtocol: adapter.kind === 'conversion' ? endpointProtocol : null,
-          responseRewriteRuleIds: responseEvaluation.appliedRuleIds,
-        })
-      }
-      throw new ClientRequestCancelledError()
-    }
-    if (failure !== null && relay.head === null) throw new LocalAttemptError(failure, attemptLogger)
-
     const conclusion: AttemptConclusionInput = {
       attemptLogger,
       observer,
@@ -298,6 +269,23 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
       upstreamProtocol: adapter.kind === 'conversion' ? endpointProtocol : null,
       responseRewriteRuleIds: responseEvaluation.appliedRuleIds,
     }
+    // 客户端取消优先于一切：搬运被中止且原因是客户端断开时，这次尝试不该记成上游故障。
+    //
+    // 但「取消」要区分两件事：客户端在拿到自己需要的输出后提前关流，与客户端在
+    // 拿到响应前就放弃。前者的上游已经回了成功头、内容也已经交给了客户端，
+    // 用量与 TTFT 都是真实发生的；把它们丢进 cancelled 会丢统计（issue #3）。
+    // 因此只有响应头还没到的取消才按取消收尾；已经交付中的成功流按交付收尾。
+    if (isClientRequestCancelled(failure) || (failure === null && !relay.ended && context.signal.aborted)) {
+      if (relay.head !== null && routing.deliverable && routing.successful) {
+        console.debug(`[proxy] client finished early requestId=${requestId} attempt=${attemptIndex} providerModelId=${target.providerModelId} duration=${durationMilliseconds}ms`)
+        // 客户端主动关流不是上游的故障，但交付确实停在了半路：两个事实分开说，
+        // 让健康度不计故障、正文记录照样标成不完整。
+        return await concludeDeliveredAttempt({ ...conclusion, streamInterrupted: false, deliveryComplete: false })
+      }
+      throw new ClientRequestCancelledError()
+    }
+    if (failure !== null && relay.head === null) throw new LocalAttemptError(failure, attemptLogger)
+
     if (failure !== null) {
       // 上游已经发过响应头，搬运中途断了：按「这次尝试是否已经交付过内容」收尾，
       // 再交给外层决定销毁响应还是继续 failover。
@@ -312,7 +300,7 @@ async function attemptRequest(context: RequestContext, response: ProxyResponse, 
     } else {
       console.debug(`[proxy] response rewrite evaluated requestId=${requestId} attempt=${attemptIndex} providerModelId=${target.providerModelId} transport=${context.transport} rules=${rules.length} applied=${responseEvaluation.appliedRuleIds.length} skipped=${responseEvaluation.skippedRuleIds.length} appliedRuleIds=${responseEvaluation.appliedRuleIds.join(',') || 'none'}`)
     }
-    return await concludeDeliveredAttempt(conclusion)
+    return await concludeDeliveredAttempt({ ...conclusion, deliveryComplete: true })
   } finally {
     context.signal.removeEventListener('abort', abortAttempt)
   }
