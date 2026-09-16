@@ -13,10 +13,10 @@ interface ServiceStatusBarProps {
 }
 
 /**
- * 服务状态带：这一页的前提，不是这一页的一步。
+ * 服务状态带：这一页的前提，不是这一页的内容。
  *
- * 它不带上序号、也不是一张卡，因为右栏那条「① 拿地址 → ② 写进去 → ③ 验一下」才是步骤；
- * 两条并列的卡片会让顺序立刻读不出来，而这条带子讲的是「前提成不成立」。
+ * 它不带上序号、也不是一张卡：下面两张卡讲的是「要填什么」，这条带子讲的是「成不成立」——
+ * 两条并列的卡片会让这个区别立刻读不出来，而这一页最该先知道的就是服务在不在跑。
  *
  * 里面只有一件需要用户动手的事（换监听地址），启停按钮在页头——所以它压成一条带子：
  * 在跑吗 / 监听在哪 / 谁连得上 / 换地址，四句话就够。
@@ -47,7 +47,7 @@ export function ServiceStatusBar(props: ServiceStatusBarProps) {
         {running ? t('access.service.running') : t('access.service.stopped')}
       </span>
 
-      {/* 监听地址是原样的绑定地址（通配监听时就是 0.0.0.0），客户端能用的那一条在第二步的 Base URL。 */}
+      {/* 监听地址是原样的绑定地址（通配监听时就是 0.0.0.0），客户端该用的那一条在下面那张卡的地址一栏。 */}
       <span className={cn('system-xs-regular', listening ? 'font-mono text-text-secondary' : 'text-text-tertiary')}>
         {listening ?? t('access.service.reading')}
       </span>

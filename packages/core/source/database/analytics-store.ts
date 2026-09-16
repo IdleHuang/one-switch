@@ -1,6 +1,6 @@
 import { and, eq, gte, sql, type SQL } from 'drizzle-orm'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
-import { DAY_MILLISECONDS, formatLatencyBinLabel, formatTrendBucketLabel, resolveLatencyBinEdges, resolveTrendBuckets, type AnalyticsBuckets } from '@common/analytics-buckets'
+import { DAY_MILLISECONDS, formatLatencyBinLabel, formatTrendBucketLabel, resolveHeatBuckets, resolveLatencyBinEdges, resolveTrendBuckets, type AnalyticsBuckets } from '@common/analytics-buckets'
 import type { FailureReasonCategory, RequestSourceStat, RequestStatus, UsageTrendPoint } from '@common/schemas'
 import { getDataDb } from './index'
 import { attemptUsages, requestAttempts, requestAttributes, requestLogs, requestUsages } from './data-schema'
@@ -130,21 +130,42 @@ export async function getUsageTrend(buckets: AnalyticsBuckets): Promise<UsageTre
 }
 
 /**
- * 趋势桶号的 SQL 表达式：与 `@common/analytics-buckets` 的 `trendBucketIndexAt` 一一对应，
- * 改动必须同时落到两处。
+ * 桶号的 SQL 表达式：与 `@common/analytics-buckets` 的 `trendBucketIndexAt` 一一对应，
+ * 改动必须同时落到两处。桶宽是入参，趋势图与热力图各传自己那一档。
  *
  * 桶号是「距锚点日的**墙钟**分钟数 ÷ 桶宽」而不是「距某个绝对时间戳的毫秒数 ÷ 桶宽」：
- * 后者在跨夏令时的那一天会把柱子整体错开一小时，前者不会。
+ * 后者在跨夏令时的那一天会把格子整体错开一小时，前者不会。
  * `date(..., 'unixepoch', 'localtime')` 与 `strftime('%H'/'%M', ..., 'localtime')` 取的都是
  * 本地日历，恰是 `trendBucketIndexAt` 里 `localDayOffset` + `minutesOfLocalDay` 的表达。
  */
-function trendBucketIndex(column: AnySQLiteColumn, buckets: AnalyticsBuckets): SQL<number> {
-  const anchorDay = formatTrendBucketLabel(buckets.trendAnchorDayMs, DAY_MILLISECONDS)
-  const slotsPerDay = DAY_MILLISECONDS / buckets.trendIntervalMs
-  const intervalMinutes = buckets.trendIntervalMs / 60_000
-  const localDate = sql`date(${column} / 1000, 'unixepoch', 'localtime')`
+function bucketIndex(column: AnySQLiteColumn, anchorDayMs: number, intervalMs: number): SQL<number> {
+  const anchorDay = formatTrendBucketLabel(anchorDayMs, DAY_MILLISECONDS)
+  const slotsPerDay = DAY_MILLISECONDS / intervalMs
+  const intervalMinutes = intervalMs / 60_000
+  const localDate = localDateExpression(column)
   const localMinuteOfDay = sql`(cast(strftime('%H', ${column} / 1000, 'unixepoch', 'localtime') as integer) * 60 + cast(strftime('%M', ${column} / 1000, 'unixepoch', 'localtime') as integer))`
   return sql<number>`(cast(julianday(${localDate}) - julianday(${anchorDay}) as integer) * ${slotsPerDay} + cast(${localMinuteOfDay} / ${intervalMinutes} as integer))`
+}
+
+/** 趋势图的桶号：走趋势桶宽（与图上的柱子一一对应）。 */
+function trendBucketIndex(column: AnySQLiteColumn, buckets: AnalyticsBuckets): SQL<number> {
+  return bucketIndex(column, buckets.trendAnchorDayMs, buckets.trendIntervalMs)
+}
+
+/** 热力图的桶号：走热力桶宽（比趋势桶细，格数也更多）。 */
+function heatBucketIndex(column: AnySQLiteColumn, buckets: AnalyticsBuckets): SQL<number> {
+  return bucketIndex(column, buckets.trendAnchorDayMs, buckets.heatIntervalMs)
+}
+
+/**
+ * 本地日期的 SQL 表达式（`YYYY-MM-DD`）：与 `@common/analytics-buckets` 的 `formatLocalDate`
+ * 一一对应，改动必须同时落到两处。
+ *
+ * 用本地日历而不是 UTC 切天：不然东八区的「今天」会从 08:00 开始，一天里最早那几格
+ * 会被算到昨天去。
+ */
+function localDateExpression(column: AnySQLiteColumn): SQL<string> {
+  return sql<string>`date(${column} / 1000, 'unixepoch', 'localtime')`
 }
 
 type TrendBucketRow = TrendUsageRow & { bucket: number }
@@ -155,8 +176,59 @@ function fillTrendBuckets(buckets: AnalyticsBuckets, rows: TrendBucketRow[]): Us
   return resolveTrendBuckets(buckets).map(slot => normalizeTrendPoint({ ...byIndex.get(slot.index), label: slot.label }))
 }
 
+/** 按桶清单补齐空格：与 {@link fillTrendBuckets} 同理，只是桶宽更细、格数更多。 */
+function fillHeatBuckets(buckets: AnalyticsBuckets, rows: HeatBucketRow[]): UsageHeatBucketRow[] {
+  const byIndex = new Map(rows.map(row => [row.bucket, row]))
+  return resolveHeatBuckets(buckets).map(slot => {
+    const row = byIndex.get(slot.index)
+    return { label: slot.label, requests: row?.requests ?? 0, success: row?.success ?? 0, failed: row?.failed ?? 0, totalTokens: row?.totalTokens ?? 0 }
+  })
+}
+
 function normalizeTrendPoint(row: TrendPointRow): UsageTrendPoint {
   return { label: row.label, inputTokens: row.inputTokens ?? 0, outputTokens: row.outputTokens ?? 0, cachedInputTokens: row.cachedInputTokens ?? 0, cacheCreationInputTokens: row.cacheCreationInputTokens ?? 0, reasoningTokens: row.reasoningTokens ?? 0 }
+}
+
+/** SQL 产出的热力行（只有桶号，没有标签）与补齐后的热力格（有标签、有零值）是两个形状。 */
+type HeatBucketRow = Omit<UsageHeatBucketRow, 'label'> & { bucket: number }
+
+/** 热力图里的一格：桶标签由桶清单赋上，SQL 只产出数字。 */
+export interface UsageHeatBucketRow {
+  label: string
+  requests: number
+  success: number
+  failed: number
+  totalTokens: number
+}
+
+/**
+ * 用量分布热力图：**按热力桶分组**，一格一桶。
+ *
+ * 粒度不在这里另选：分桶用的是同一个 `bucketIndex` 表达式，只是桶宽换成
+ * `heatIntervalMs`（比趋势桶细，见 `HEAT_TARGET_CELLS`）——「今日 10 分钟一格、
+ * 近 7 天 1 小时一格、近 30 天 4 小时一格」这条规则只写在 `@common/analytics-buckets` 一处。
+ *
+ * 请求数与 token 一次查完：用量表先按请求聚好再左连接回请求表（同 {@link getUsageTrend}），
+ * 中间结果是「桶」而不是「桶 × 用量行」。没数据的桶由 JS 补零——包括还没到的时间段：
+ * 热力图的格数按范围的完整时长规划（今日恒为 144 格），空着的时段就是空格子。
+ */
+export async function getUsageHeat(buckets: AnalyticsBuckets): Promise<UsageHeatBucketRow[]> {
+  const pivot = buildRequestUsagePivot(buckets.sinceMs)
+  const rows = getDataDb()
+    .select({
+      bucket: heatBucketIndex(requestLogs.createdTime, buckets).as('bucket'),
+      requests: sql<number>`count(*)`.as('requests'),
+      success: sql<number>`sum(case when ${requestLogs.status} = 'success' then 1 else 0 end)`.as('success'),
+      failed: sql<number>`sum(case when ${requestLogs.status} = 'failed' then 1 else 0 end)`.as('failed'),
+      // 请求级总 token = 输入 + 输出，与统计卡的口径一致（`raw` 行不参与，见 `TOTAL_REQUEST_TOKENS`）。
+      totalTokens: sql<number>`coalesce(sum(${pivot.inputTokens}), 0) + coalesce(sum(${pivot.outputTokens}), 0)`.as('totalTokens'),
+    })
+    .from(requestLogs)
+    .leftJoin(pivot, eq(pivot.requestId, requestLogs.id))
+    .where(gte(requestLogs.createdTime, buckets.sinceMs))
+    .groupBy(sql`bucket`)
+    .all()
+  return fillHeatBuckets(buckets, rows)
 }
 
 /**

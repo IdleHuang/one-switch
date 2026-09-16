@@ -141,6 +141,7 @@ export function ModelManagementPage() {
         selectedProviderId={service.selectedProviderId}
         onSelectProvider={service.setSelectedProviderId}
         onSelectBuiltInProvider={service.openPresetDialog}
+        onReorderProviders={service.reorderProviders}
       />
       {renderProviderSelection()}
     </div>

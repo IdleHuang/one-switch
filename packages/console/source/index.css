@@ -233,6 +233,18 @@ html[data-magicui-theme-vt="active"] [data-slot="app-sidebar"][data-expanded="tr
   --color-util-colors-violet-violet-500: #875bf7;
   --color-util-colors-yellow-yellow-500: #eaaa08;
   --color-util-colors-pink-pink-500: #ee46bc;
+
+  /* 用量分布热力图的热力色阶（`bg-heat-0~4`）。
+     0 档是「没有请求」，不是色阶的一档，所以刻意用中性色：它在亮色下与凹槽同色（#ebedf0），
+     暗色下比卡面亮一点点（是「空位」而不是一个洞）。
+     1~4 档是同一条绿，亮度等距下台阶：亮色从近白绿走到品牌绿，暗色反过来从深绿走到亮绿，
+     两套都是「越深/越亮 = 越多」。不用 `bg-success/25` 这种 alpha 叠加：
+     同一个 alpha 在暗色卡面上会重新混成深色，颜色分布与亮色完全不同。 */
+  --color-heat-0: #ebedf0;
+  --color-heat-1: #d6f2e6;
+  --color-heat-2: #96dfbe;
+  --color-heat-3: #4cc78d;
+  --color-heat-4: #17b26a;
 }
 
 @layer base {
@@ -324,6 +336,14 @@ html[data-magicui-theme-vt="active"] [data-slot="app-sidebar"][data-expanded="tr
     --color-components-button-ghost-bg-hover: rgb(200 206 218 / 0.08);
     --color-components-button-destructive-ghost-text: #f97066;
     --color-components-button-destructive-ghost-bg-hover: rgb(240 68 56 / 0.14);
+
+    /* 用量分布热力图的热力色阶：暗色下「越多越亮」，与亮色的「越多越深」方向相反，
+       但两边的层次都是均匀的四级台阶（见 `@theme` 里的注释）。 */
+    --color-heat-0: #2c2c32;
+    --color-heat-1: #0e4630;
+    --color-heat-2: #0e7048;
+    --color-heat-3: #1a9e68;
+    --color-heat-4: #3ed392;
   }
 }
 

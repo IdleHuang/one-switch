@@ -8,6 +8,7 @@ import {
   getProvider,
   listProviderEndpoints,
   listProviders,
+  reorderProviders,
   replaceProviderEndpoints,
   updateProvider,
 } from '@server/database/provider-store'
@@ -25,6 +26,7 @@ export const providerRoutes = new HttpRouter<ManagementHandler>()
   .post('/api/provider/endpoints', handleListProviderEndpoints)
   .post('/api/provider/create', handleCreateProvider)
   .post('/api/provider/update', handleUpdateProvider)
+  .post('/api/provider/reorder', handleReorderProviders)
   .post('/api/provider/delete', handleDeleteProvider)
   .post('/api/provider/reset-health', handleResetProviderHealth)
   .post('/api/provider/export', handleExportProviderBundle)
@@ -32,6 +34,12 @@ export const providerRoutes = new HttpRouter<ManagementHandler>()
 
 async function handleListProviders(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   sendSuccess(res, await listProviders())
+}
+
+const ReorderProvidersSchema = z.object({ ids: z.array(z.string().min(1)).min(1) })
+async function handleReorderProviders(_req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> {
+  const { ids } = ReorderProvidersSchema.parse(body)
+  sendSuccess(res, await reorderProviders(ids))
 }
 
 const GetProviderSchema = z.object({ id: z.string() })

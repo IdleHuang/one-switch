@@ -1,8 +1,8 @@
 /**
- * 分析页两张图的分桶规则。
+ * 分析页各图的分桶规则。
  *
- * 「粒度」是这个模块唯一的话题：窗口有多长，决定了趋势图一根柱子覆盖多久、直方图切几档。
- * 规则集中在这里，是因为同一套桶要在三处同时成立——SQL 分桶、标签生成、界面坐标轴。
+ * 「粒度」是这个模块唯一的话题：窗口有多长，决定了趋势图一根柱子覆盖多久、热力图一格代表多久、
+ * 直方图切几档。规则集中在这里，是因为同一套桶要在三处同时成立——SQL 分桶、标签生成、界面坐标轴。
  * 任何一处凭印象写死一个步长，就会出现「窗口是 30 天、柱子还是 15 分钟」，或者
  * 「统计出来的桶」与「画出来的桶」对不上。
  */
@@ -16,18 +16,21 @@ const MINUTE_MS = 60 * 1000
 const MINUTES_PER_DAY = 24 * 60
 
 /**
- * 趋势图的候选步长（分钟）。
+ * 趋势图与热力图共用的候选步长（分钟）。
  *
  * 三条约束一起定下了这张表：
  * 1. 全部整除 1440，桶边界因此落在本地整点或整天上——「每 6 小时」的柱子起点永远是
  *    00:00 / 06:00 / 12:00 / 18:00，而不是从查询时刻往前推出来的随机分钟数；
  * 2. 最细到 5 分钟：再细的画面对「今天的用量」没有新信息，柱子只会细到看不清；
  * 3. 最粗到 1 天：再粗（比如「每 3 天」）会让一周之内的变化整个消失。
+ *
+ * 表里的 10 分钟、60 分钟、4 小时几档是热力图挑出来的（见 {@link HEAT_TARGET_CELLS}），
+ * 趋势图用不上——它的上限定得比热力图紧得多。
  */
-const TREND_INTERVAL_STEPS_MINUTES = [5, 10, 15, 30, 60, 120, 180, 240, 360, 480, 720, 1440]
+const INTERVAL_STEPS_MINUTES = [5, 10, 15, 30, 60, 120, 180, 240, 360, 480, 720, 1440]
 
 /**
- * 一张卡片上最多画多少根柱子，用来反向挑选步长。
+ * 趋势图一张卡片上最多画多少根柱子，用来反向挑选步长。
  *
  * 卡片内宽按 800px 量级估算，60 根柱子每根还有 13px，柱子本身仍看得清、也仍能靠 hover 读数。
  * 结果：「今天」随当天时间从 5 分钟一路粗到 30 分钟（最多 60 根）；「近 7 天」是 3 小时（57 根）；
@@ -38,6 +41,28 @@ const TREND_INTERVAL_STEPS_MINUTES = [5, 10, 15, 30, 60, 120, 180, 240, 360, 480
  * 而柱子密了最差也只是看起来细，hover 与 tooltip 依旧逐桶读数。
  */
 export const TREND_MAX_BUCKETS = 60
+
+/**
+ * 用量分布最多铺多少格：按范围的**完整时长**反向挑粒度。
+ *
+ * 比趋势图宽松得多，因为两者对「密」的容忍度完全不同：趋势图的柱子要容下坐标轴与
+ * hover 命中区，热力图只是一张密度纹理——格子里没有文字，读数靠 tooltip，20px 上下
+ * 仍然逐格可读。取 180 撞上三个刚刚好的档位：
+ *
+ * | 范围 | 格宽 | 格数 |
+ * | --- | --- | --- |
+ * | 今天 | 10 分钟 | 144 |
+ * | 近 7 天 | 1 小时 | 169 |
+ * | 近 30 天 | 4 小时 | 181 |
+ *
+ * 「今天」的窗口本来就是完整的一整天，所以格数是死的 144：时间往前走时画面不会一格一格
+ * 长出来，还没到的时段就是空格子。另外两个范围的窗口是「此刻往前推」，起点与终点各占一个
+ * 不完整的桶，格数因此比「跨度 ÷ 格宽」多一个。
+ *
+ * 格宽不再细分（比如近 7 天用半小时 = 336 格）不是为了省事：格数一多，方形格就会被挤成
+ * 1px 不到的点，整块图从「能读的分布」退化成一片噪声。
+ */
+export const HEAT_TARGET_CELLS = 180
 
 /**
  * TTFT 直方图的候选桶宽（毫秒），全部取自 1-2-5 序列。
@@ -63,45 +88,59 @@ export interface AnalyticsBuckets {
   sinceMs: number
   /** 趋势图每一根柱子覆盖的时长。 */
   trendIntervalMs: number
-  /** 趋势桶号的零点：窗口起点所在的那一天（本地零点）。桶号是「距这一天的墙钟分钟数 ÷ 桶宽」。 */
+  /** 桶号的零点：窗口起点所在的那一天（本地零点）。桶号是「距这一天的墙钟分钟数 ÷ 桶宽」。 */
   trendAnchorDayMs: number
   /** 趋势数组的长度：从窗口起点所在的桶到此刻所在的桶，空桶也要占位。 */
   trendBucketCount: number
+  /** 热力图一格覆盖的时长。比趋势桶细，且按范围的完整时长挑（见 {@link HEAT_TARGET_CELLS}）。 */
+  heatIntervalMs: number
+  /** 热力图的格数：`today` 是整天的格数，`7d` / `30d` 是完整时长再加「此刻」所在的那个半截桶。 */
+  heatBucketCount: number
   /** TTFT 直方图的档数上限；实际档数还要看窗口内的 p95（见 {@link resolveLatencyBinEdges}）。 */
   latencyTargetBins: number
 }
 
-/** 一次趋势桶的编号与标签：`index` 与服务端 SQL 算出的桶号是同一个数。 */
-export interface TrendBucketSlot {
+/** 一个时间桶的编号与标签：`index` 与服务端 SQL 算出的桶号是同一个数。趋势图与热力图共用。 */
+export interface BucketSlot {
   index: number
   label: string
 }
 
+/** 一个范围的名义总时长（`today` 一整天，`7d` / `30d` 各 7 / 30 天毫秒数）。点数按它规划。 */
+export function resolveRangeSpanMs(range: AnalyticsRange): number {
+  return (range === 'today' ? 1 : range === '7d' ? 7 : 30) * DAY_MILLISECONDS
+}
+
 /**
- * 由一个时间范围算出窗口与两张图各自的粒度。
+ * 由一个时间范围算出窗口与三张图各自的粒度。
  *
  * 粒度不写死：它是「范围」的推论，和窗口一起算出来才不会有对不上的组合。
  */
 export function resolveAnalyticsBuckets(range: AnalyticsRange, nowMs = Date.now()): AnalyticsBuckets {
-  const sinceMs = range === 'today' ? startOfLocalDay(nowMs) : nowMs - (range === '7d' ? 7 : 30) * DAY_MILLISECONDS
+  const spanMs = resolveRangeSpanMs(range)
+  // 窗口长度是三个完整时长：`today` 从本地零点起算（一整天），`7d` / `30d` 从此刻往前推。
+  const sinceMs = range === 'today' ? startOfLocalDay(nowMs) : nowMs - spanMs
   const trendAnchorDayMs = startOfLocalDay(sinceMs)
   const trendIntervalMs = resolveTrendIntervalMs(trendAnchorDayMs, sinceMs, nowMs)
+  const heatIntervalMs = resolveHeatIntervalMs(spanMs)
   return {
     sinceMs,
     trendIntervalMs,
     trendAnchorDayMs,
     trendBucketCount: resolveTrendBucketCount(trendAnchorDayMs, sinceMs, nowMs, trendIntervalMs),
+    heatIntervalMs,
+    heatBucketCount: resolveHeatBucketCount(trendAnchorDayMs, sinceMs, nowMs, heatIntervalMs, spanMs),
     latencyTargetBins: LATENCY_TARGET_BINS,
   }
 }
 
 /** 趋势图每一根柱子覆盖多久：取「桶数不超上限」的最细一档。 */
 export function resolveTrendIntervalMs(anchorDayMs: number, sinceMs: number, nowMs: number): number {
-  for (const minutes of TREND_INTERVAL_STEPS_MINUTES) {
+  for (const minutes of INTERVAL_STEPS_MINUTES) {
     const intervalMs = minutes * MINUTE_MS
     if (resolveTrendBucketCount(anchorDayMs, sinceMs, nowMs, intervalMs) <= TREND_MAX_BUCKETS) return intervalMs
   }
-  return TREND_INTERVAL_STEPS_MINUTES[TREND_INTERVAL_STEPS_MINUTES.length - 1] * MINUTE_MS
+  return lastIntervalStepMs()
 }
 
 /** 趋势数组的长度：含窗口起点与「此刻」各所在的那两个桶。 */
@@ -136,12 +175,54 @@ export function trendBucketStartMs(anchorDayMs: number, index: number, intervalM
 }
 
 /** 趋势图的桶清单（编号 + 标签），按时间递增；服务端按这份清单补齐空桶。 */
-export function resolveTrendBuckets(buckets: AnalyticsBuckets): TrendBucketSlot[] {
-  const first = trendBucketIndexAt(buckets.trendAnchorDayMs, buckets.sinceMs, buckets.trendIntervalMs)
-  return Array.from({ length: buckets.trendBucketCount }, (_, offset) => {
+export function resolveTrendBuckets(buckets: AnalyticsBuckets): BucketSlot[] {
+  return resolveBucketSlots(buckets.trendAnchorDayMs, buckets.sinceMs, buckets.trendIntervalMs, buckets.trendBucketCount)
+}
+
+/**
+ * 热力图一格覆盖多久：取「按完整时长规划的格数不超上限」的最细一档。
+ *
+ * 只看完整时长，不看「已经过去多少」：`today` 在凌晨 6 点就要按 144 格画好，而不是当时
+ * 只画 36 格、随时间推移再一格格长出来——格宽一旦随当前时刻漂移，同一张图在两个时刻
+ * 的格子含义就不一样了。
+ */
+export function resolveHeatIntervalMs(spanMs: number): number {
+  for (const minutes of INTERVAL_STEPS_MINUTES) {
+    const intervalMs = minutes * MINUTE_MS
+    if (Math.ceil(spanMs / intervalMs) <= HEAT_TARGET_CELLS) return intervalMs
+  }
+  return lastIntervalStepMs()
+}
+
+/**
+ * 热力图的格数：按完整时长规划的格数，与「已经走到的最后一个桶」取大者。
+ *
+ * 两者在正常情况下相等（`today` 恒为整天的 144 格）；取大者只是为了兜住「此刻落在规划
+ * 终点之外」这种边界（比如时钟被往前调过），免得最后一个已有数据的桶算不进清单里。
+ */
+export function resolveHeatBucketCount(anchorDayMs: number, sinceMs: number, nowMs: number, intervalMs: number, spanMs: number): number {
+  const planned = Math.ceil(spanMs / intervalMs)
+  const elapsed = trendBucketIndexAt(anchorDayMs, nowMs, intervalMs) - trendBucketIndexAt(anchorDayMs, sinceMs, intervalMs) + 1
+  return Math.max(planned, elapsed)
+}
+
+/** 热力图的格子清单：与 {@link resolveTrendBuckets} 同一套编号与标签，只是格宽更细。 */
+export function resolveHeatBuckets(buckets: AnalyticsBuckets): BucketSlot[] {
+  return resolveBucketSlots(buckets.trendAnchorDayMs, buckets.sinceMs, buckets.heatIntervalMs, buckets.heatBucketCount)
+}
+
+/** 按「窗口起点所在的桶」往后取若干格，编号与标签一起算出来。 */
+function resolveBucketSlots(anchorDayMs: number, sinceMs: number, intervalMs: number, count: number): BucketSlot[] {
+  const first = trendBucketIndexAt(anchorDayMs, sinceMs, intervalMs)
+  return Array.from({ length: count }, (_, offset) => {
     const index = first + offset
-    return { index, label: trendBucketLabelAt(buckets.trendAnchorDayMs, index, buckets.trendIntervalMs) }
+    return { index, label: trendBucketLabelAt(anchorDayMs, index, intervalMs) }
   })
+}
+
+/** 候选步长都试过还超上限时的兜底：最粗的一档。窗口最长 30 天，正常走不到这里。 */
+function lastIntervalStepMs(): number {
+  return INTERVAL_STEPS_MINUTES[INTERVAL_STEPS_MINUTES.length - 1] * MINUTE_MS
 }
 
 /** 粒度的人话分解：界面据此挑文案（`每 5 分钟` / `每 6 小时` / `每日`），不自己反推。 */
@@ -249,7 +330,7 @@ export function minutesOfLocalDay(ms: number): number {
  */
 export function formatTrendBucketLabel(startMs: number, intervalMs: number): string {
   const date = new Date(startMs)
-  const day = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+  const day = formatLocalDate(startMs)
   if (intervalMs >= DAY_MILLISECONDS) return day
   return `${day} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
 }
@@ -375,6 +456,73 @@ function parseTrendBucketLabel(label: string): TrendBucketLabelParts | null {
 
 function pad2(value: number): string {
   return String(value).padStart(2, '0')
+}
+
+/* ==========================================================================
+   用量分布（贡献图式的热力图）
+
+   格宽同样由范围推导，但**档位独立于趋势图**：趋势图一根柱子要占 13px 才看得清，
+   热力图一格 20px 上下仍然逐格可读，所以它按「完整时长铺 144 ~ 181 格」挑格宽——
+   今日 10 分钟、近 7 天 1 小时、近 30 天 4 小时。格数与格宽仍和窗口一起在
+   `resolveAnalyticsBuckets` 里算好，服务端分桶、界面填空用的是同一份结论。
+
+   下面是「怎么把用量涂成深浅」，与粒度无关。
+   ========================================================================== */
+
+/** 热力档数（不含「没有请求」这一档）。贡献图的口径就是 4 档，再多一档颜色就难分了。 */
+export const HEAT_LEVELS = 4
+
+/**
+ * 把每桶的用量映射到 0 ~ {@link HEAT_LEVELS} 档。
+ *
+ * 按**非零桶的分位数**切档，而不是按最大值等分：用量是重尾分布，某个桶撞上一个超长上下文
+ * 会把其余所有桶压到最浅一档，整张图只剩一个深格子。按分位数切，深浅的分布才是均匀的，
+ * 这也正是贡献图的做法。
+ *
+ * 分位数退化时（只有两三个桶有请求，或者每桶的用量一模一样）退回按最大值等分，
+ * 否则整张图会只剩一种颜色。
+ */
+export function resolveUsageHeatLevels(values: number[]): (value: number) => number {
+  const nonZero = values.filter(value => value > 0).sort((left, right) => left - right)
+  if (nonZero.length === 0) return () => 0
+  const thresholds = resolveHeatThresholds(nonZero)
+  if (!thresholds) {
+    const min = nonZero[0]
+    const max = nonZero[nonZero.length - 1]
+    // 非零桶全都一模一样（刚装上、每个窗口一两条请求就是这样）：线性等分会把每一格都涂成最深一档，
+    // 读起来像「满负荷跑了一整天」。统一给中间档——「有请求，但分不出多少」才是事实。
+    if (min === max) {
+      const middle = Math.ceil(HEAT_LEVELS / 2)
+      return value => value > 0 ? middle : 0
+    }
+    return value => value > 0 ? Math.min(HEAT_LEVELS, Math.max(1, Math.ceil((value / max) * HEAT_LEVELS))) : 0
+  }
+  return value => {
+    if (value <= 0) return 0
+    if (value <= thresholds[0]) return 1
+    if (value <= thresholds[1]) return 2
+    if (value <= thresholds[2]) return 3
+    return HEAT_LEVELS
+  }
+}
+
+/** 三个分位阈值（非零桶的 p25 / p50 / p75）；分位完全相同时返回 `null`，调用方退回等分。 */
+function resolveHeatThresholds(sortedNonZero: number[]): [number, number, number] | null {
+  if (sortedNonZero.length < HEAT_LEVELS) return null
+  const at = (percentile: number) => sortedNonZero[Math.min(sortedNonZero.length - 1, Math.floor(percentile * sortedNonZero.length))]
+  const thresholds: [number, number, number] = [at(0.25), at(0.5), at(0.75)]
+  return thresholds[0] === thresholds[2] ? null : thresholds
+}
+
+/**
+ * 本地日期标签 `YYYY-MM-DD`。
+ *
+ * 整天粒度的桶标签用的是这个写法，服务端 SQL 的 `date(..., 'unixepoch', 'localtime')`
+ * 也是同一个写法，两边必须同时改。
+ */
+function formatLocalDate(dayMs: number): string {
+  const date = new Date(dayMs)
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
 }
 
 /** `Intl.DateTimeFormat` 的构造不便宜，而坐标轴一次渲染要调用十几次，按「语言 + 选项」缓存。 */

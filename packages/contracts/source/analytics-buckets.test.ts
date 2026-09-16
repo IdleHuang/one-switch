@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DAY_MILLISECONDS,
+  HEAT_TARGET_CELLS,
   formatDuration,
   formatLatencyBinLabel,
   formatLatencyBinTick,
@@ -8,10 +9,15 @@ import {
   formatTrendTickLabel,
   formatTrendTooltipLabel,
   resolveAnalyticsBuckets,
+  resolveHeatBuckets,
+  resolveHeatBucketCount,
+  resolveHeatIntervalMs,
   resolveLatencyBinEdges,
+  resolveRangeSpanMs,
   resolveTrendBuckets,
   resolveTrendIntervalMs,
   resolveTrendTicks,
+  resolveUsageHeatLevels,
   startOfLocalDay,
   trendBucketIndexAt,
   trendBucketLabelAt,
@@ -151,12 +157,104 @@ describe('resolveAnalyticsBuckets', () => {
     expect(month.trendBucketCount).toBe(31)
   })
 
+  it('热力图的粒度比趋势图细，且三个范围铺出来的格数都在同一个量级', () => {
+    const today = resolveAnalyticsBuckets('today', nowMs)
+    expect(today.heatIntervalMs).toBe(10 * MINUTE)
+    expect(today.heatBucketCount).toBe(144)
+
+    const week = resolveAnalyticsBuckets('7d', nowMs)
+    expect(week.heatIntervalMs).toBe(HOUR)
+    expect(week.heatBucketCount).toBe(169)
+
+    const month = resolveAnalyticsBuckets('30d', nowMs)
+    expect(month.heatIntervalMs).toBe(4 * HOUR)
+    expect(month.heatBucketCount).toBe(181)
+  })
+
   it('桶清单覆盖整个窗口且标签与桶号一一对应', () => {
     const buckets = resolveAnalyticsBuckets('today', nowMs)
     const slots = resolveTrendBuckets(buckets)
     expect(slots).toHaveLength(buckets.trendBucketCount)
     expect(slots[0]).toEqual({ index: 0, label: '2026-09-09 00:00' })
     expect(slots[slots.length - 1]).toEqual({ index: 30, label: '2026-09-09 15:00' })
+  })
+})
+
+describe('resolveRangeSpanMs', () => {
+  it('三个范围的名义时长各是一整天 / 7 天 / 30 天', () => {
+    expect(resolveRangeSpanMs('today')).toBe(DAY_MILLISECONDS)
+    expect(resolveRangeSpanMs('7d')).toBe(7 * DAY_MILLISECONDS)
+    expect(resolveRangeSpanMs('30d')).toBe(30 * DAY_MILLISECONDS)
+  })
+})
+
+describe('resolveHeatIntervalMs', () => {
+  it('按完整时长挑格宽，三个范围各落一档', () => {
+    expect(resolveHeatIntervalMs(DAY_MILLISECONDS)).toBe(10 * MINUTE)
+    expect(resolveHeatIntervalMs(7 * DAY_MILLISECONDS)).toBe(HOUR)
+    expect(resolveHeatIntervalMs(30 * DAY_MILLISECONDS)).toBe(4 * HOUR)
+  })
+
+  it('任何范围都不超格数上限，且格宽定为最细的那一档', () => {
+    // 「最细」看的是下一档：比它细一档就超上限了，否则格数还可以再小一轮。
+    const steps = [5, 10, 15, 30, 60, 120, 180, 240, 360, 480, 720, 1440]
+    for (const days of [1, 7, 30]) {
+      const spanMs = days * DAY_MILLISECONDS
+      const intervalMs = resolveHeatIntervalMs(spanMs)
+      expect(Math.ceil(spanMs / intervalMs)).toBeLessThanOrEqual(HEAT_TARGET_CELLS)
+      const finer = steps[steps.indexOf(intervalMs / MINUTE) - 1]
+      expect(Math.ceil(spanMs / (finer * MINUTE))).toBeGreaterThan(HEAT_TARGET_CELLS)
+    }
+  })
+
+  it('格宽都整除一天，格子边界因此落在本地整点上', () => {
+    for (const days of [1, 7, 30]) {
+      expect(DAY_MILLISECONDS % resolveHeatIntervalMs(days * DAY_MILLISECONDS)).toBe(0)
+    }
+  })
+})
+
+describe('resolveHeatBuckets', () => {
+  const nowMs = localTime(15)
+
+  it('今天的格子铺满一整天，后半天就是空格子', () => {
+    const buckets = resolveAnalyticsBuckets('today', nowMs)
+    const slots = resolveHeatBuckets(buckets)
+    expect(slots).toHaveLength(144)
+    expect(slots[0]).toEqual({ index: 0, label: '2026-09-09 00:00' })
+    expect(slots[143]).toEqual({ index: 143, label: '2026-09-09 23:50' })
+  })
+
+  it('7 天与 30 天的格子从此刻往前铺满完整时长', () => {
+    const week = resolveAnalyticsBuckets('7d', nowMs)
+    const weekSlots = resolveHeatBuckets(week)
+    expect(weekSlots[0].label).toBe('2026-09-02 15:00')
+    expect(weekSlots[weekSlots.length - 1].label).toBe('2026-09-09 15:00')
+    // 首尾各占一个不完整的桶，所以格数比「跨度 ÷ 格宽」多一个。
+    expect((weekSlots.length - 1) * week.heatIntervalMs).toBe(resolveRangeSpanMs('7d'))
+
+    const month = resolveAnalyticsBuckets('30d', nowMs)
+    const monthSlots = resolveHeatBuckets(month)
+    // 4 小时一格的网格不会落在 15:00 上：首格对齐到 12:00，末格是含「此刻」的那一格。
+    expect(monthSlots[0].label).toBe('2026-08-10 12:00')
+    expect(monthSlots[monthSlots.length - 1].label).toBe('2026-09-09 12:00')
+    expect((monthSlots.length - 1) * month.heatIntervalMs).toBe(resolveRangeSpanMs('30d'))
+  })
+
+  it('格号与格宽一致，且相邻两格的标签不重不漏', () => {
+    const buckets = resolveAnalyticsBuckets('today', nowMs)
+    const slots = resolveHeatBuckets(buckets)
+    expect(slots.map(slot => slot.index)).toEqual(Array.from({ length: 144 }, (_, index) => index))
+    expect(new Set(slots.map(slot => slot.label)).size).toBe(144)
+  })
+
+  it('恰好遇到已经走过的格时取两者里更大的格数，不会把已有数据的格漏掉', () => {
+    const anchor = startOfLocalDay(nowMs)
+    // 时钟被往前调过（此刻落在规划终点之后）：按已经走过的格算，而不是按名义时长截断。
+    const elapsed = 200
+    expect(resolveHeatBucketCount(anchor, anchor, anchor + elapsed * 10 * MINUTE, 10 * MINUTE, DAY_MILLISECONDS)).toBe(elapsed + 1)
+    // 正常情况：今日永远是整天的格数，与时刻无关。
+    expect(resolveHeatBucketCount(anchor, anchor, localTime(6), 10 * MINUTE, DAY_MILLISECONDS)).toBe(144)
   })
 })
 
@@ -242,6 +340,61 @@ describe('resolveTrendTicks', () => {
     const ticks = resolveTrendTicks(labels, 16)
     expect(ticks[0]).toBe('00:00')
     expect(ticks.length).toBeLessThanOrEqual(16)
+  })
+})
+
+describe('resolveUsageHeatLevels（用量分布的档位）', () => {
+  /** 真实场景是 144 ~ 181 个桶，这里按 180 铺，末尾用零桶把长度补齐。 */
+  function buildValues(buckets: number[]): number[] {
+    return [...buckets, ...Array.from({ length: 180 - buckets.length }, () => 0)]
+  }
+
+  it('全是零桶时整张图都是 0 档', () => {
+    const levelOf = resolveUsageHeatLevels(buildValues([]))
+    expect(levelOf(0)).toBe(0)
+    expect(levelOf(1)).toBe(0)
+  })
+
+  it('零桶永远是 0 档，哪怕分位数把它夹在中间', () => {
+    const levelOf = resolveUsageHeatLevels(buildValues([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+    expect(levelOf(0)).toBe(0)
+  })
+
+  it('档位按非零桶的分位数切，四档都有人', () => {
+    // 十个桶的用量 1~10：p25 = 3、p50 = 6、p75 = 8，切出来 3/3/2/2 个桶。
+    const levelOf = resolveUsageHeatLevels(buildValues([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+    expect([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(levelOf)).toEqual([1, 1, 1, 2, 2, 2, 3, 3, 4, 4])
+    expect(new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(levelOf))).toEqual(new Set([1, 2, 3, 4]))
+  })
+
+  it('重尾分布下不会只剩一个深格子', () => {
+    // 某个桶撞上一次超长上下文（100 倍于平时），其余 29 个桶用量相近。
+    const ordinary = Array.from({ length: 29 }, (_, index) => 100 + index)
+    const levelOf = resolveUsageHeatLevels(buildValues([...ordinary, 10_000]))
+    expect(new Set(ordinary.map(levelOf)).size).toBeGreaterThan(1)
+    expect(levelOf(10_000)).toBe(4)
+  })
+
+  it('非零桶不足四档时退回按最大值等分', () => {
+    const levelOf = resolveUsageHeatLevels(buildValues([1, 50, 100]))
+    expect(levelOf(1)).toBe(1)
+    expect(levelOf(50)).toBe(2)
+    expect(levelOf(100)).toBe(4)
+  })
+
+  it('非零桶全都一样时统一给中间档，不涂成满格', () => {
+    // 刚装上、每个窗口一两条请求就是这种形状：涂成最深一档读起来像「满负荷跑了一整天」。
+    const levelOf = resolveUsageHeatLevels(buildValues([7, 7, 7]))
+    expect(levelOf(7)).toBe(2)
+    expect(levelOf(6)).toBe(2)
+    expect(levelOf(0)).toBe(0)
+  })
+
+  it('档位是纯函数：同一份数据算两次给同一个结果', () => {
+    const values = buildValues([3, 9, 27, 81, 243])
+    const first = resolveUsageHeatLevels(values)
+    const second = resolveUsageHeatLevels(values)
+    expect(values.map(first)).toEqual(values.map(second))
   })
 })
 

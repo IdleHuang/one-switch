@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, ne, notInArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, max, ne, notInArray } from 'drizzle-orm'
 import { ProviderEndpointSchema, ProviderSchema, ProviderSettingSchema } from '@common/schemas'
 import type { Provider, ProviderEndpoint, ProviderSetting } from '@common/schemas'
 import { generateId, now } from '@common/utils'
@@ -15,9 +15,11 @@ import {
 
 export async function listProviders(includeDeleted = false): Promise<Provider[]> {
   const db = getConfigDb()
+  // 侧栏顺序由用户在界面上拖出来（`sortOrder`）；序号相同的历史行再按创建时间倒序，
+  // 因此「全为 0」的老数据仍然稳定地保持原来的相对位置。
   const rows = includeDeleted
-    ? db.select().from(providers).orderBy(desc(providers.createdTime)).all()
-    : db.select().from(providers).where(isNull(providers.deletedTime)).orderBy(desc(providers.createdTime)).all()
+    ? db.select().from(providers).orderBy(asc(providers.sortOrder), desc(providers.createdTime)).all()
+    : db.select().from(providers).where(isNull(providers.deletedTime)).orderBy(asc(providers.sortOrder), desc(providers.createdTime)).all()
   return rows.map(mapProvider)
 }
 
@@ -33,7 +35,9 @@ export async function createProvider(input: CreateProviderInput): Promise<Provid
   const time = now()
   const db = getConfigDb()
   const provider = ProviderSchema.parse({ ...input, description: input.description ?? '', id, createdTime: time, updatedTime: time, deletedTime: null })
-  db.insert(providers).values({ id, name: provider.name, description: provider.description ?? '', enabled: provider.enabled, createdTime: time, updatedTime: time }).run()
+  // 新建的供应商追加到侧栏末尾：用户拖动排序后的相对顺序不会被后续创建打乱。
+  const maxSortOrder = db.select({ value: max(providers.sortOrder) }).from(providers).get()?.value ?? -1
+  db.insert(providers).values({ id, name: provider.name, description: provider.description ?? '', enabled: provider.enabled, sortOrder: Number(maxSortOrder) + 1, createdTime: time, updatedTime: time }).run()
   db.insert(providerSettings).values([
     { providerId: id, key: 'security.secretReference', value: provider.apiKeyReference, valueType: 'string', updatedTime: time },
     { providerId: id, key: 'connection.timeoutMilliseconds', value: String(provider.timeoutMilliseconds), valueType: 'number', updatedTime: time },
@@ -57,6 +61,21 @@ export async function updateProvider(id: string, updates: Partial<Omit<Provider,
     }).run()
   }
   return next
+}
+
+/** 按传入的 id 顺序重写侧栏展示顺序；未出现在列表中的供应商保持原有顺序，不受影响。 */
+export async function reorderProviders(ids: string[]): Promise<Provider[]> {
+  const db = getConfigDb()
+  const time = now()
+  db.transaction(transaction => {
+    ids.forEach((id, index) => {
+      transaction.update(providers)
+        .set({ sortOrder: index, updatedTime: time })
+        .where(and(eq(providers.id, id), isNull(providers.deletedTime)))
+        .run()
+    })
+  })
+  return listProviders()
 }
 
 export async function listProviderSettings(providerId: string): Promise<ProviderSetting[]> {

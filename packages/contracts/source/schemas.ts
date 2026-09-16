@@ -839,9 +839,31 @@ export const ProviderAnalyticsDetailSchema = z.object({
 })
 export type ProviderAnalyticsDetail = z.infer<typeof ProviderAnalyticsDetailSchema>
 
+/**
+ * 用量分布热力图的一格：一个热力桶的请求数。
+ *
+ * `label` 沿用时间桶的写法（见 {@link UsageTrendPoint}），界面因此可以直接复用趋势图那套
+ * tooltip 标题格式化，不必再定义一份时间写法。格宽不在这里重复回传：它是
+ * `AnalyticsSummary.heatIntervalMs`——热力格比趋势柱细，两者不是一个数。
+ *
+ * 热力深浅按 `requests` 算（贡献图数的也是「次数」而不是「体积」），token 用量退到 tooltip 里。
+ */
+export const UsageHeatBucketSchema = z.object({
+  label: z.string(),
+  requests: z.number().int().nonnegative(),
+  success: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+})
+export type UsageHeatBucket = z.infer<typeof UsageHeatBucketSchema>
+
 export const AnalyticsSummarySchema = z.object({
   summary: StatsSummarySchema,
+  /** 趋势桶宽，趋势图按它写坐标轴。 */
   trendIntervalMs: TrendIntervalSchema,
+  /** 热力格宽，用量分布按它写标题。 */
+  heatIntervalMs: TrendIntervalSchema,
+  heat: z.array(UsageHeatBucketSchema),
   trend: z.array(UsageTrendPointSchema),
   providerStats: z.array(ProviderStatSchema),
   modelStats: z.array(ModelStatSchema),

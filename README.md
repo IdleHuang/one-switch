@@ -143,7 +143,7 @@ Configuration, logs and request metadata live in one hidden directory in your ho
 
 | File | Contents |
 | --- | --- |
-| `~/.one-switch/one-switch-config-v1.db` | Providers, models, routing and rewrite rules — **your configuration, worth backing up** |
+| `~/.one-switch/one-switch-config-v2.db` | Providers, models, routing and rewrite rules — **your configuration, worth backing up** |
 | `~/.one-switch/one-switch-data-v1.db` | Request logs, captured bodies, usage and health state — **safe to delete**, you only lose history |
 
 The development build uses `~/.one-switch-development` instead, so a dev instance never touches your real data.

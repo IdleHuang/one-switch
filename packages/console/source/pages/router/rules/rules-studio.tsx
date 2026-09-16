@@ -28,25 +28,27 @@ import {
   type RouteRule,
   type RouteRuleSet,
 } from '@common/router/route-rules'
-import { ROUTER_POLICY_PRESETS, createId, samplePayload } from '@common/router/presets'
+import { ROUTER_RULE_PRESETS, type RouterRulePreset } from '@common/router/rule-presets'
+import { createId, samplePayload } from '@common/router/presets'
 import { RouteModeSwitch } from '../components/route-mode-switch'
 import { SaveVersionDialog, type VersionDraft } from '../components/save-version-dialog'
 import { VersionMenu } from '../components/version-menu'
 import { WorkflowButton } from '../components/workflow-button'
-import { policyPresetTextKeys } from '../policy-preset-text'
 import { hasSavedVersion, toRouteRuleSetVersion, toRouteRuleSetVersions, type RouteVersion } from '../route-versions'
 import { RulesList } from './rules-list'
+import { RulesPresetMenu } from './rules-preset-menu'
+import { rulePresetTextKeys } from './rules-preset-text'
 import { RulesRunDrawer } from './rules-run-drawer'
 
 const EMPTY_VERSION_DRAFT: VersionDraft = { name: '', description: '' }
 
 /**
- * 内建默认规则表与内建默认策略表达的是同一条策略，所以首版的默认注记沿用那条策略的文案。
+ * 内建默认规则表（菜单里那一项「逻辑模型命中」）的 id。
  *
  * 一版都没保存过时，保存弹窗的两个框空着不是「没得写」，而是用户得自己想一个名字；
- * 直接把它填成「逻辑模型命中」 —— 这份表本身确实就是这条策略。
+ * 直接把它填成这份表自己的名字 —— 列表上铺的确实就是这条预设。
  */
-const DEFAULT_POLICY_PRESET_ID = ROUTER_POLICY_PRESETS.find(preset => preset.isDefault)?.id
+const DEFAULT_RULE_PRESET_ID = ROUTER_RULE_PRESETS.find(preset => preset.isDefault)?.id
 
 /**
  * 规则模式的工作台。
@@ -115,10 +117,18 @@ export function RouteRulesStudio() {
   const [payloadError, setPayloadError] = useState('')
   const [runResult, setRunResult] = useState<RouteRuleRunResult | null>(null)
 
-  /** 内建默认表自带的名字与说明，作为保存弹窗的初值（与图侧的预设初值同一个口径）。 */
-  const defaultDraft = useCallback((): VersionDraft => {
-    const textKeys = DEFAULT_POLICY_PRESET_ID ? policyPresetTextKeys(DEFAULT_POLICY_PRESET_ID) : undefined
-    return textKeys ? { name: t(textKeys.name), description: t(textKeys.description) } : EMPTY_VERSION_DRAFT
+  /**
+   * 预设自带的名字与说明，作为保存弹窗的初值。
+   *
+   * 预设不是从任何一版改来的，沿用上一版的注记只会误导；但「名字留空」同样不好用：
+   * 套用「按客户端来源分流」改完直接保存时，本来就白拿一个说得清的名字与说明。
+   * 口径与图模式完全一致。
+   */
+  const presetDraftDefaults = useCallback((presetId: string | undefined): VersionDraft => {
+    const textKeys = presetId ? rulePresetTextKeys(presetId) : undefined
+    return textKeys
+      ? { name: t(textKeys.name), description: t(textKeys.description) }
+      : EMPTY_VERSION_DRAFT
   }, [t])
 
   /**
@@ -147,7 +157,7 @@ export function RouteRulesStudio() {
         setVersionDraftDefaults(
           hasSavedVersion(snapshot.version) && baseline
             ? { name: baseline.name, description: baseline.description }
-            : defaultDraft(),
+            : presetDraftDefaults(DEFAULT_RULE_PRESET_ID),
         )
       } catch (error) {
         if (cancelled) return
@@ -157,7 +167,7 @@ export function RouteRulesStudio() {
       }
     })()
     return () => { cancelled = true }
-  }, [defaultDraft, toast, t])
+  }, [presetDraftDefaults, toast, t])
 
   /**
    * 保存 = 发布一个新版本。
@@ -208,6 +218,7 @@ export function RouteRulesStudio() {
       setRuleSet(snapshot.ruleSet)
       setExpandedRuleId(null)
       setFreshRuleId(null)
+      setFallbackExpanded(false)
       setRunResult(null)
       // 列表换成这一版了，保存时默认接着用它的名字与说明。
       setVersionDraftDefaults({ name: version.name, description: version.description })
@@ -216,6 +227,25 @@ export function RouteRulesStudio() {
       toast.error(error instanceof Error ? error.message : t('router.error.restoreFailed'))
     }
   }, [toast, t])
+
+  /**
+   * 套用内置预设：整张规则表换成预设内容。
+   *
+   * 预设里没有用户的改动，所以不需要额外确认，但会清掉展开态、待填名的新规则与上次试跑结果 ——
+   * 它们对应当前这份内容，换了表就不再成立。保存弹窗的初值换成这张预设自己的名字与说明：
+   * 用户改完直接存，就能得到「按客户端来源分流」这样的注记，而不是一个没有名字的版本。
+   * 与图模式的 `applyPolicy` 逐一对应。
+   */
+  const applyPreset = useCallback((preset: RouterRulePreset) => {
+    setRuleSet(preset.createRuleSet(runtimeLogicalModels))
+    setExpandedRuleId(null)
+    setFreshRuleId(null)
+    setFallbackExpanded(false)
+    setRunResult(null)
+    setVersionDraftDefaults(presetDraftDefaults(preset.id))
+    const textKeys = rulePresetTextKeys(preset.id)
+    toast.success(t('router.toast.presetApplied', { name: textKeys ? t(textKeys.name) : preset.id }))
+  }, [presetDraftDefaults, runtimeLogicalModels, toast, t])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -337,6 +367,12 @@ export function RouteRulesStudio() {
 
   const atLimit = ruleSet.rules.length >= MAX_ROUTE_RULES
 
+  /** 当前规则表与哪个预设一致（不一致时为 null）。比对口径与图模式相同。 */
+  const activePresetId = useMemo(
+    () => ROUTER_RULE_PRESETS.find(preset => isSameRouteRuleSet(preset.createRuleSet(runtimeLogicalModels), ruleSet))?.id ?? null,
+    [ruleSet, runtimeLogicalModels],
+  )
+
   /**
    * 列表相对「当前生效的那一版」有改动才允许保存。
    *
@@ -359,9 +395,10 @@ export function RouteRulesStudio() {
         // 说明文案保持单行截断：标题栏高度固定，下面的列表位置才不会随文案换行跳动。
         className="[&_p]:truncate"
         actions={(
-          // 标题栏不提供 gap，按钮之间得自己隔开。四个动作从左到右是「编辑 → 验证 → 发布 → 回滚」，
-          // 与图模式摆同一个次序：换个模式不用重新找按钮。
+          // 标题栏不提供 gap，按钮之间得自己隔开。五个动作从左到右是「预设 → 编辑 → 验证 → 发布 → 回滚」，
+          // 与图模式摆同一个次序：预设都在最前，换个模式不用重新找按钮。
           <div className="flex items-center gap-2">
+            <RulesPresetMenu activePresetId={activePresetId} onApply={applyPreset} />
             <WorkflowButton size="medium" disabled={atLimit} onClick={createRule}>
               <Plus className="size-3.5" aria-hidden /> {t('router.rules.add')}
             </WorkflowButton>

@@ -26,6 +26,7 @@ export const providerApi = {
   fetchModels: (input: FetchProviderModelsInput) => request<{ models: FetchedProviderModel[]; matchedUrl: string; attempts: { url: string; statusCode?: number; error?: string }[] }>('/provider/fetch-models', input),
   create: (data: CreateProviderInput) => request<Provider>('/provider/create', data),
   update: (id: string, updates: UpdateProviderInput) => request<Provider>('/provider/update', { id, ...updates }),
+  reorder: (ids: string[]) => request<Provider[]>('/provider/reorder', { ids }),
   remove: (id: string) => request<{ id: string }>('/provider/delete', { id }),
   resetHealth: (providerId: string) => request<{ providerId: string }>('/provider/reset-health', { providerId }),
 }

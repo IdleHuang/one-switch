@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { ChartContainer, type ChartConfig } from '@/components/ui/chart'
 import { CardSectionHeader } from '@/components/card-section-header'
 import { useLocale, useTranslation, type AppTranslator } from '@/i18n/provider'
-import { formatTokens, formatTrendDescription } from '../lib/format'
+import { formatTokens, formatIntervalDescription } from '../lib/format'
 
 function buildChartConfig(t: AppTranslator): ChartConfig {
   return {
@@ -18,11 +18,13 @@ function buildChartConfig(t: AppTranslator): ChartConfig {
   }
 }
 
-interface TrendChartProps {
+interface TrendBarsProps {
   trend: UsageTrendPoint[]
+}
+
+interface TrendChartProps extends TrendBarsProps {
   /** 每根柱子覆盖的时长，由查询范围推导（`AnalyticsSummary.trendIntervalMs`）。 */
   trendIntervalMs: number
-  stretchToRow?: boolean
 }
 
 interface TrendTooltipProps {
@@ -66,59 +68,70 @@ function TrendTooltip(props: TrendTooltipProps) {
   )
 }
 
-export function TrendChart(props: TrendChartProps) {
-  const { trend, trendIntervalMs, stretchToRow = false } = props
+/**
+ * 柱状图本体，不含卡片外壳。
+ *
+ * 分析页的「用量分布」把它当作热力图的另一种模式，卡片头与模式切换由 `UsageDistribution`
+ * 统一给；供应商下钻页用下面包好外壳的 `TrendChart`。
+ */
+export function TrendBars(props: TrendBarsProps) {
+  const { trend } = props
   const t = useTranslation()
   const locale = useLocale()
-  const contentClassName = stretchToRow
-    ? 'flex min-h-0 min-w-0 flex-1 flex-col'
-    : 'min-w-0'
-  const chartClassName = stretchToRow
-    ? 'aspect-auto min-h-44 w-full flex-1'
-    : 'aspect-auto h-44 w-full'
   // 首尾标签落在同一天时不写日期：今天的每小时不必把日期重复一遍。
   const crossesDays = trendCrossesDays(trend.map(point => point.label))
   // 刻度不在这里算：挑哪几格由 `@common/analytics-buckets` 定，
   // 否则「柱子变细了但刻度还按根数等距抽」会抽出每 21 小时一格这种位置。
   const ticks = resolveTrendTicks(trend.map(point => point.label), TREND_MAX_TICKS)
 
+  if (trend.length === 0) {
+    return (
+      <div className="flex min-h-44 items-center justify-center system-xs-regular text-text-tertiary">
+        {t('overview.trend.empty')}
+      </div>
+    )
+  }
+
+  return (
+    <ChartContainer config={buildChartConfig(t)} className="aspect-auto h-44 w-full">
+      <BarChart data={trend} margin={{ top: 8, right: 4, bottom: 0, left: 0 }} barCategoryGap="25%">
+        <CartesianGrid vertical={false} />
+        <XAxis
+          dataKey="label"
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+          ticks={ticks}
+          interval={0}
+          tickFormatter={value => formatTrendTickLabel(locale, String(value), crossesDays)}
+          fontSize={11}
+        />
+        <YAxis
+          tickLine={false}
+          axisLine={false}
+          width={40}
+          allowDecimals={false}
+          tickFormatter={value => formatTokens(Number(value))}
+          fontSize={11}
+        />
+        <Tooltip content={<TrendTooltip crossesDays={crossesDays} />} />
+        {STACK_ITEMS.map(([key], index) => (
+          <Bar key={key} dataKey={key} stackId="usage" fill={`var(--color-${key})`} radius={index === STACK_ITEMS.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
+        ))}
+      </BarChart>
+    </ChartContainer>
+  )
+}
+
+export function TrendChart(props: TrendChartProps) {
+  const { trend, trendIntervalMs } = props
+  const t = useTranslation()
+
   return (
     <Card className="min-w-0 w-full">
-      <CardSectionHeader title={t('overview.trend.title')} description={formatTrendDescription(t, trendIntervalMs)} compact />
-      <CardContent className={contentClassName}>
-        {trend.length === 0 ? (
-          <div className={`${stretchToRow ? 'flex-1 ' : ''}flex min-h-44 items-center justify-center system-xs-regular text-text-tertiary`}>
-            {t('overview.trend.empty')}
-          </div>
-        ) : (
-          <ChartContainer config={buildChartConfig(t)} className={chartClassName}>
-            <BarChart data={trend} margin={{ top: 8, right: 4, bottom: 0, left: 0 }} barCategoryGap="25%">
-              <CartesianGrid vertical={false} />
-              <XAxis
-                dataKey="label"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                ticks={ticks}
-                interval={0}
-                tickFormatter={value => formatTrendTickLabel(locale, String(value), crossesDays)}
-                fontSize={11}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                width={40}
-                allowDecimals={false}
-                tickFormatter={value => formatTokens(Number(value))}
-                fontSize={11}
-              />
-              <Tooltip content={<TrendTooltip crossesDays={crossesDays} />} />
-              {STACK_ITEMS.map(([key], index) => (
-                <Bar key={key} dataKey={key} stackId="usage" fill={`var(--color-${key})`} radius={index === STACK_ITEMS.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
-              ))}
-            </BarChart>
-          </ChartContainer>
-        )}
+      <CardSectionHeader title={t('overview.trend.title')} description={formatIntervalDescription(t, trendIntervalMs)} compact />
+      <CardContent className="min-w-0">
+        <TrendBars trend={trend} />
       </CardContent>
     </Card>
   )
