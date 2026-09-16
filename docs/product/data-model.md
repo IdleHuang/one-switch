@@ -2,7 +2,7 @@
 
 > 本文是新大版本的目标数据库结构。
 >
-> **发布策略：换代只换文件名。** 每个库的文件名里带自己的 schema 版本号；结构发生不兼容变化时把那个数字加一，应用下次启动就在一个全新的空文件上初始化，旧文件既不读取、不迁移、不检测。
+> **发布策略：迁移优先，换代只在大版本发布时发生。** 结构变化默认加一条迁移（`packages/core/drizzle/<role>/` 下每个目录是一条，启动时按目录名顺序执行）；只有应用大版本发布时才把 `DATABASE_SCHEMA_VERSIONS` 里对应角色那个数字加一，以换文件名的方式甩掉累积的迁移历史——那时才会在一个全新的空文件上初始化，旧文件既不读取、不迁移、不检测。
 > 数据库由**两个**文件组成：用户写的配置和系统写的观测数据各自独立（理由见 §2.1）。
 
 ## 1. 设计目标
@@ -48,9 +48,11 @@ One Switch 的配置内容会持续增加，尤其是供应商、模型端点、
 | `one-switch-config-<v>.db` | 配置库 | 12 | 用户 | 供应商、模型、路由、改写规则全没了——**不可再生** |
 | `one-switch-data-<v>.db` | 数据库 | 10 | 系统 | 历史请求、日志与健康状态归零，代理照常工作——**可丢弃** |
 
-文件名里的 `<v>` 是**该库自己的 schema 版本号**，不是应用版本号；两个数字各自独立地写在 `packages/contracts/source/database-file.ts`（`DATABASE_SCHEMA_VERSIONS`），该文件是这条规则的唯一实现。库结构发生不兼容变化时，只把对应角色那个数字加一：应用下次启动在全新的空文件上初始化，旧文件既不读取也不删除——换代因此不需要任何检测代码，也不需要任何迁移，只是换了一个文件名。库版本与应用版本解耦，是因为二者变化频率根本不同：一个补丁版本也会发应用版本号，但不该让用户的配置换个文件住。
+文件名里的 `<v>` 是**该库自己的 schema 版本号**，不是应用版本号；两个数字各自独立地写在 `packages/contracts/source/database-file.ts`（`DATABASE_SCHEMA_VERSIONS`），该文件是这条规则的唯一实现。**它只在应用大版本发布时加一**，且这一下必须与「重新生成首发基线、丢掉旧链」一起做：换名字就是换文件，新文件从干净基线建起，旧文件既不读取也不删除。**日常改结构不走这条路，加一条迁移就好**——把每次加列都做成换代，等于每加一列就让用户在一张空表上重新开始。两个库的版本各自独立，可以停在不同的数字上。
 
-两个文件各有一条 Drizzle migration 链，分别落在 `packages/core/drizzle/config/` 与 `packages/core/drizzle/data/`（drizzle-kit 一份配置只能喂一条链，所以是两份 `drizzle.config.<role>.ts`）。两条链各自只有一个由 schema 直接生成的首发基线，启动时由 Drizzle runtime migrator 应用，由各自的 `__drizzle_migrations` 记录已执行版本。`logical_models.default` 是应用 seed，不属于 schema migration。
+两条路的代价完全不同，选错了会直接伤到用户：**加迁移**保留用户已有数据，只是启动时多跑几条语句；**换代**则让配置库从空文件重新开始——用户自己写的供应商、模型、路由、规则不会跟过来，界面上只剩 seed 出来的默认逻辑模型，旧文件原地留着但不读。所以配置库加一只有一个正当理由：应用大版本发布、要甩掉迁移历史。为了给某次加列省一条迁移而换代，是拿用户的配置当耗材。
+
+两个文件各有一条 Drizzle migration 链，分别落在 `packages/core/drizzle/config/` 与 `packages/core/drizzle/data/`（drizzle-kit 一份配置只能喂一条链，所以是两份 `drizzle.config.<role>.ts`）。链的形态是 drizzle-kit 1.0 的约定，与 0.x 不同：`drizzle/<role>/` 下**每个目录是一条迁移**，目录名以 14 位时间戳开头、按名字排序决定执行顺序；`migration.sql` 是内容（按 `--> statement-breakpoint` 切分），同目录里的 `snapshot.json` 只供 drizzle-kit 生成下一条迁移时算 diff、运行时不读；**没有** `meta/_journal.json`，rc 版的 migrator 见到它会直接报错。启动时由 Drizzle runtime migrator 跳过 `__drizzle_migrations` 里已记录目录名的那几条、按顺序执行剩下的——**判定依据是目录名，不是内容 hash**，所以重命名一个已发布的迁移目录会被当成一条新迁移而重放。`logical_models.default` 是应用 seed，不属于 schema migration。
 
 两条链互相独立：一个库的演进不会牵扯另一个库，也不存在同时改两个库的事务。
 

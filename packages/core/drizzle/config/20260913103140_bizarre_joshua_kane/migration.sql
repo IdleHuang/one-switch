@@ -84,7 +84,6 @@ CREATE TABLE `providers` (
 	`name` text NOT NULL,
 	`description` text DEFAULT '' NOT NULL,
 	`enabled` integer DEFAULT true NOT NULL,
-	`sortOrder` integer DEFAULT 0 NOT NULL,
 	`createdTime` integer NOT NULL,
 	`updatedTime` integer NOT NULL,
 	`deletedTime` integer

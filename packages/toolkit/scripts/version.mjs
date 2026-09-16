@@ -14,8 +14,9 @@ import { log } from './lib/log.mjs'
 // 界面上显示的版本也不是实际在跑的那个。所以只留一个入口。
 //
 // 数据文件名刻意不在这里：文件名带的是**数据库结构版本**（见
-// `packages/contracts/source/database-file.ts`），与发布版本无关。若它跟着应用主版本走，
-// 一次应用大版本升级就会让用户的配置在界面上凭空消失。
+// `packages/contracts/source/database-file.ts`），由那个文件里的常量手动维护、只在应用大版本
+// 发布时加一，所以它不是这个脚本该推的数字。若让每次发布都自动改它，一次补丁升级就会让用户的
+// 配置在界面上凭空消失。
 //
 // 为什么住在 toolkit：它改的是每一个 workspace 包的 manifest，任何单一包都不是它的归属物；
 // 而 toolkit 就是「跨包脚本」的落脚处（与 `lint.mjs` / `test.mjs` / `typecheck.mjs` 同级），

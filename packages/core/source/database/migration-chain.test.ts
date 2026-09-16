@@ -43,8 +43,8 @@ function readSnapshots(role: (typeof databaseRoles)[number]): MigrationSnapshot[
 // 这些不变量保护的是 drizzle-kit 的 diff 基线选择：
 // 缺失 snapshot.json 会让基线回退到更早的状态，而分叉的链（多个叶子）会被当成
 // 分支合并，从而生成一份把早已应用过的 DDL 再重放一遍的假迁移。
-// 当前每条链里只有一个首发基线，这些不变量就是「它必须保持干净」的定义；
-// 将来真的开始追加迁移时，它们同样成立。
+// 链开始追加迁移之后，这些不变量就是「它必须保持线性」的定义：只有基线允许挂在图外，
+// 每个节点最多一个孩子，末节点只能是那条最新的迁移。
 describe.each(databaseRoles)('%s migration chain integrity', (role) => {
   const folders = listMigrationFolders(role)
 
