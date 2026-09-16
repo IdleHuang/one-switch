@@ -203,3 +203,11 @@ Design goals, behaviour contracts and acceptance criteria have a single authorit
 ## Feedback
 
 Issues and ideas are welcome in [Issues](https://github.com/yinxulai/one-switch/issues). The version number, operating system, protocol and a redacted runtime log go a long way — but please **do not** paste API keys, full prompts or other sensitive content.
+
+---
+
+## Contributors
+
+[![Contributors](https://contrib.rocks/image?repo=yinxulai/one-switch)](https://github.com/yinxulai/one-switch/graphs/contributors)
+
+Thanks to everyone who has put work into One Switch — code, bug reports, ideas and documentation fixes all count.

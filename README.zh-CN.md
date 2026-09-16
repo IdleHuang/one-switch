@@ -205,3 +205,11 @@ pnpm release:linux   # 构建 Linux arm64 / x64 安装包
 ## 反馈
 
 有问题或想法欢迎开 [Issue](https://github.com/yinxulai/one-switch/issues)。附上版本号、操作系统、请求协议和脱敏后的运行日志会好定位很多 —— 但请**不要**贴 API Key、完整提示词或其他敏感内容。
+
+---
+
+## 贡献者
+
+[![贡献者](https://contrib.rocks/image?repo=yinxulai/one-switch)](https://github.com/yinxulai/one-switch/graphs/contributors)
+
+感谢每一位为 One Switch 出过力的人 —— 写代码、提 Issue、提想法、修文档，都算。
