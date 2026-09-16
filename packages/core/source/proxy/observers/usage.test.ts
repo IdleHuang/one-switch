@@ -38,6 +38,50 @@ describe('usage tracker', () => {
     expect(tracker.usage()).toMatchObject(expected)
   })
 
+  it('prefers the real values when a gateway mixes chat-style placeholder zeros with responses-style fields', () => {
+    // api.usvip.cc 这类聚合网关会把两套字段塞进同一个 usage：Chat 风格的
+    // prompt_tokens / completion_tokens 是占位 0，真实值只在 Responses 风格的
+    // input_tokens / output_tokens / input_tokens_details 里。按字段顺序取第一个数字
+    // 会命中占位 0，输入、输出、缓存全被记成 0，TPS 与缓存命中率都算不出来。
+    const tracker = createUsageTracker()
+    tracker.consumeJson(JSON.stringify({
+      usage: {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        prompt_tokens_details: { cached_tokens: 0 },
+        input_tokens: 38829,
+        output_tokens: 477,
+        input_tokens_details: { cached_tokens: 38272 },
+      },
+    }))
+    expect(tracker.usage()).toMatchObject({
+      inputTokens: 38829,
+      outputTokens: 477,
+      cachedInputTokens: 38272,
+    })
+  })
+
+  it('keeps placeholder zeros as zero when every candidate is zero', () => {
+    // 「真实的 0」与「没上报」必须分得开：上游确实报了 0 时回落值仍然是 0，
+    // 只有所有候选都缺席才返回 null。
+    const tracker = createUsageTracker()
+    tracker.consumeJson('{"usage":{"prompt_tokens":0,"completion_tokens":0,"prompt_tokens_details":{"cached_tokens":0}}}')
+    expect(tracker.usage()).toMatchObject({ inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 })
+  })
+
+  it('still reports null when no candidate is present at all', () => {
+    const tracker = createUsageTracker()
+    tracker.consumeJson('{"usage":{"total_tokens":7}}')
+    expect(tracker.usage()).toMatchObject({ inputTokens: null, outputTokens: null, cachedInputTokens: null })
+  })
+
+  it('prefers a reported positive over a real zero across the same field family', () => {
+    // 占位 0 不只出现在「另一套字段」里：同一族里前面的键也可能是占位的 0。
+    const tracker = createUsageTracker()
+    tracker.consumeJson('{"usage":{"completion_tokens_details":{"reasoning_tokens":0},"output_tokens_details":{"reasoning_tokens":12},"prompt_tokens":0,"input_tokens":30,"completion_tokens":0,"output_tokens":4}}')
+    expect(tracker.usage()).toMatchObject({ inputTokens: 30, outputTokens: 4, reasoningTokens: 12 })
+  })
+
   it('preserves zero cache metrics', () => {
     const tracker = createUsageTracker()
     tracker.consumeJson('{"usage":{"prompt_tokens":3,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}')
