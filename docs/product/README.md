@@ -17,7 +17,7 @@
 | 系统总览与核心概念 | [architecture.md](./architecture.md) | 概念一句话定义、协议识别与转换总原则 |
 | 代理行为契约 | [proxy.md](./proxy.md) | 协议识别、候选过滤、自动切换、流式边界、超时、透传规则 |
 | 代理引擎内部结构 | [proxy-engine.md](./proxy-engine.md) | 分层职责、协议无关透传内核、观察/修改扩展接口、协议 × 传输双轴 |
-| 路由设计与节点语义 | [route-design.md](./route-design.md) | 产品口径、`route` 输出契约、路径/类型/操作符、节点设计、默认策略 |
+| 路由设计与节点语义 | [route-design.md](./route-design.md) | 两种模式（工作流图 / 规则表）的划分与语义、`route` 输出契约、路径/类型/操作符、节点设计、默认策略 |
 | 路由工作台画布 | [route-workbench.md](./route-workbench.md) | 节点外壳与面板分层、端口与插入交互、边与条件分支视觉 |
 | 工作流引擎语义 | [workflow-engine.md](./workflow-engine.md) | 图模型与边、控制流与迭代、能力注入、校验层次、图持久化 |
 | 请求重写规则 | [request-rewrite-rules.md](./request-rewrite-rules.md) | 规则链执行语义、作用位置、排序与失败语义 |

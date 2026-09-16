@@ -292,6 +292,17 @@ export type OutboundProxyMode = z.infer<typeof OutboundProxyModeSchema>
 export const LanguagePreferenceSchema = z.enum(LANGUAGE_PREFERENCES)
 export type LanguagePreference = z.infer<typeof LanguagePreferenceSchema>
 
+/**
+ * 智能路由的生效模式：工作流编排（`workflow`）或路由规则（`rules`）。
+ *
+ * 两种模式各自是一份独立的真相（各自的定义、各自的版本列表、各自的编辑器），
+ * 因此「哪一份生效」本身就是必须持久化、必须只有一个的事实——
+ * 它放在设置里而不是某一份定义上：谁的编辑都不能顺手把自己提成生效模式。
+ * 由它单点决定代理执行哪一份，另一个模式的定义只是暂时不生效，不会被删。
+ */
+export const RouteModeSchema = z.enum(['workflow', 'rules'])
+export type RouteMode = z.infer<typeof RouteModeSchema>
+
 export const SettingsSchema = z.object({
   id: z.literal('singleton'),
   listenHost: z.string().default('127.0.0.1'),
@@ -337,6 +348,13 @@ export const SettingsSchema = z.object({
    * 主进程读不到渲染进程的存储（见 `docs/product/i18n.md` §3）。
    */
   language: LanguagePreferenceSchema.default('system'),
+  /**
+   * 生效的智能路由模式。
+   *
+   * 默认是工作流编排：它是这个功能最早的样子，升级到新版本时不该有人发现自己的路由静默换了实现。
+   * 切到规则模式后，图仍然完整保留（在它的版本列表里），切回来就恢复。
+   */
+  routeMode: RouteModeSchema.default('workflow'),
   updatedTime: z.number().int(),
 })
 export type Settings = z.infer<typeof SettingsSchema>

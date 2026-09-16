@@ -10,6 +10,7 @@ import { ListenConfigCard } from './components/listen-config-card'
 import { OutboundProxyCard } from './components/outbound-proxy-card'
 import { FailoverCard } from './components/failover-card'
 import { LogRetentionCard } from './components/log-retention-card'
+import { RouteModeCard } from './components/route-mode-card'
 import { GeneralCard } from './components/general-card'
 import { DevelopmentCard } from './components/development-card'
 import { UpdateCard } from './components/update-card'
@@ -54,7 +55,7 @@ export function RuntimeSettingsPage() {
       <PageContent>
         {service.loading || !service.settings ? (
           <div className="space-y-3">
-            {Array.from({ length: 6 }).map((_, i) => (
+            {Array.from({ length: 7 }).map((_, i) => (
               <Card key={i} className="min-h-36 p-4">
                 <Skeleton className="mb-3 h-4 w-32" />
                 <Skeleton className="mb-5 h-3 w-52" />
@@ -92,6 +93,10 @@ export function RuntimeSettingsPage() {
                 onProxyUrlChange={value => service.updateField('outboundProxyUrl', value)}
                 onBypassChange={value => service.updateField('outboundProxyBypass', value)}
               />
+            </SettingsSection>
+
+            <SettingsSection title={t('settings.section.routing')}>
+              <RouteModeCard />
             </SettingsSection>
 
             <SettingsSection title={t('settings.section.reliability')}>

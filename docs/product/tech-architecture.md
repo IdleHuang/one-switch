@@ -78,7 +78,7 @@ one-switch/
 │   │       ├── keychain.ts
 │   │       ├── runtime-profile.ts
 │   │       ├── i18n/                    # i18n 核心与语言目录，见 i18n.md
-│   │       └── router/                  # 路由契约类型与预设
+│   │       └── router/                  # 路由契约类型、预设与规则表引擎
 │   │
 │   ├── core/                            # 核心主体：runtime + management + proxy + database
 │   │   ├── drizzle/                     # 迁移基线（随包分发，打包时映射进 asar）

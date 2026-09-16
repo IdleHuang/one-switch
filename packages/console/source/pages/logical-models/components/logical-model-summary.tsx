@@ -38,11 +38,14 @@ export function LogicalModelSummary(props: LogicalModelSummaryProps) {
   const metrics = props.summaryMetrics
 
   return (
+    // 指标卡只有「标签 + 数值」两行：口径说明压在标签旁的 info 图标里（悬停 / 聚焦才出现），
+    // 不在数字下面铺第三行小字——那一行把「看一个数」变成「读一句话」，
+    // 而且只有算得复杂的指标才写得出来，四张卡摆在一起就是两行与三行参差。
     <MetricGrid items={[
-      { label: t('logicalModels.summary.successRate'), value: metrics?.successRate == null ? '—' : <><TickerValue value={metrics.successRate * 100} decimalPlaces={1} suffix="%" /></>, Icon: Activity, hint: metrics ? <>{t('logicalModels.summary.successRateHint', { count: metrics.completedRequestCount })}</> : t('logicalModels.summary.awaitingData') },
-      { label: t('logicalModels.summary.avgDuration'), value: metrics?.avgDurationMilliseconds == null ? '—' : <DurationTicker milliseconds={metrics.avgDurationMilliseconds} />, Icon: Clock3, hint: t('logicalModels.summary.avgDurationHint') },
-      { label: t('logicalModels.summary.avgTps'), value: metrics?.avgTps == null ? '—' : <TickerValue value={metrics.avgTps} decimalPlaces={outputSpeedDecimalPlaces(metrics.avgTps)} />, Icon: Zap, hint: t('logicalModels.summary.avgTpsHint') },
-      { label: t('logicalModels.summary.availableModels'), value: <><TickerValue value={enabledCount} /> / <TickerValue value={props.models.length} /></>, Icon: Layers3, hint: metrics?.failoverCount ? <>{t('logicalModels.summary.failoverHint', { count: metrics.failoverCount })}</> : t('logicalModels.summary.noFailover') },
+      { label: t('logicalModels.summary.successRate'), value: metrics?.successRate == null ? '—' : <><TickerValue value={metrics.successRate * 100} decimalPlaces={1} suffix="%" /></>, Icon: Activity, info: metrics ? t('logicalModels.summary.successRateHint', { count: metrics.completedRequestCount }) : t('logicalModels.summary.awaitingData') },
+      { label: t('logicalModels.summary.avgDuration'), value: metrics?.avgDurationMilliseconds == null ? '—' : <DurationTicker milliseconds={metrics.avgDurationMilliseconds} />, Icon: Clock3, info: t('logicalModels.summary.avgDurationHint') },
+      { label: t('logicalModels.summary.avgTps'), value: metrics?.avgTps == null ? '—' : <TickerValue value={metrics.avgTps} decimalPlaces={outputSpeedDecimalPlaces(metrics.avgTps)} />, Icon: Zap, info: t('logicalModels.summary.avgTpsHint') },
+      { label: t('logicalModels.summary.availableModels'), value: <><TickerValue value={enabledCount} /> / <TickerValue value={props.models.length} /></>, Icon: Layers3, info: metrics?.failoverCount ? t('logicalModels.summary.failoverHint', { count: metrics.failoverCount }) : t('logicalModels.summary.noFailover') },
     ]} />
   )
 }

@@ -15,6 +15,14 @@ export interface PageBreadcrumb {
 
 interface PageHeaderProps {
   title: string
+  /**
+   * 紧跟在标题后面的控件。
+   *
+   * 与 `actions` 的区别是它属于**标题本身**而不是页面的操作：切换标题指的是哪个对象（如路由的两种模式）
+   * 应该紧跟标题，而「试运行 / 新建」这类动作在右侧。两者位置不同，是因为读完标题后的下一个问题是
+   * 「现在看的是哪一个」，而不是「能做什么」。
+   */
+  titleAdornment?: ReactNode
   description?: string
   actions?: ReactNode
   breadcrumbs?: PageBreadcrumb[]
@@ -51,7 +59,7 @@ export function PageLayout(props: PageLayoutProps) {
 }
 
 export function PageHeader(props: PageHeaderProps) {
-  const { title, description, actions, breadcrumbs, className } = props
+  const { title, titleAdornment, description, actions, breadcrumbs, className } = props
   const t = useTranslation()
   return (
     <header
@@ -73,7 +81,10 @@ export function PageHeader(props: PageHeaderProps) {
             ))}
           </nav>
         )}
-        <h1 className="system-xl-semibold text-text-primary">{title}</h1>
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <h1 className="system-xl-semibold text-text-primary">{title}</h1>
+          {titleAdornment}
+        </div>
         {description && <p className="mt-1 system-xs-regular text-text-tertiary">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}

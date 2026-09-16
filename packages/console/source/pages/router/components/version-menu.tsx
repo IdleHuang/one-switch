@@ -11,24 +11,29 @@ import {
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/i18n/provider'
 
-import { formatVersionTime, type RouterGraphVersion } from '../graph-versions'
+import type { UiCatalogKey } from '@common/i18n/catalogs'
+
+import { formatVersionTime, type RouteVersion } from '../route-versions'
 import { PANEL_POPUP_SURFACE_CLASSNAME } from '../panel/panel-fields'
 import { WorkflowButton } from './workflow-button'
 
 type VersionMenuProps = {
-  versions: RouterGraphVersion[]
-  onRestore: (version: RouterGraphVersion) => void
+  versions: RouteVersion[]
+  /** 一版的规模用哪个量词讲：图是「个节点」，规则表是「条规则」 */
+  itemUnitKey: UiCatalogKey
+  onRestore: (version: RouteVersion) => void
 }
 
 /**
  * 「保存」右侧的历史版本下拉。
  *
- * 每次保存都会生成一个新版本（见 `graph-versions.ts`），这里列出所有版本并支持随时回到其中之一。
+ * 每次保存都会生成一个新版本（见 `route-versions.ts`），这里列出所有版本并支持随时回到其中之一。
+ * 两种路由模式共用这套列表：只有「一版有多大」那个量词不同，由 `itemUnitKey` 传进来。
  * 浮层被 portal 到 body，因此复用 `PANEL_POPUP_SURFACE_CLASSNAME` 自带 `workflow-ui-surface`
  * 圆角还原标记，并按仓库偏好去掉阴影与描边。
  */
 export function VersionMenu(props: VersionMenuProps) {
-  const { versions, onRestore } = props
+  const { versions, itemUnitKey, onRestore } = props
   const t = useTranslation()
 
   return (
@@ -76,7 +81,7 @@ export function VersionMenu(props: VersionMenuProps) {
               两行的高度因此不随「这一版有没有说明」跳动。
             */}
             <span className="truncate system-2xs-regular text-text-tertiary">
-              {version.description || t('router.version.itemHint', { count: version.nodeCount })}
+              {version.description || t('router.version.itemHint', { count: version.itemCount, unit: t(itemUnitKey) })}
             </span>
           </DropdownMenuItem>
         ))}

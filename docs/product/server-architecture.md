@@ -39,7 +39,7 @@ packages/core/source/
 │   │   ├── relations/                  # 绑定关系、请求重写规则
 │   │   ├── operations/                 # 设置、代理生命周期、开发种子
 │   │   ├── observability/              # 运行日志、请求日志、统计
-│   │   ├── router/                     # 路由工作台图与试跑
+│   │   ├── router/                     # 路由工作台：工作流图 / 规则表与各自试跑
 │   │   └── diagnostics/                # 模型测试、协议发现、出站代理测试
 │   └── provider-transfer/              # 供应商包导入导出
 ├── proxy/                              # 分层代理链路，分层契约见 proxy-engine.md
@@ -57,7 +57,7 @@ packages/core/source/
 │   ├── config-schema.ts              # 用户配置（12 张表）
 │   ├── data-schema.ts                # 观测数据（10 张表）
 │   ├── provider-store.ts / model-store.ts / logical-model-store.ts
-│   ├── settings-store.ts / workflow-store.ts / request-rewrite-rule-store.ts
+│   ├── settings-store.ts / workflow-store.ts / route-rule-store.ts / request-rewrite-rule-store.ts
 │   ├── health-store.ts / request-log-store.ts / analytics-store.ts / runtime-log-store.ts
 │   └── development-seed.ts
 ├── infrastructure/{secrets/,security/}

@@ -33,7 +33,7 @@ flowchart LR
 | Protocol | 由请求 path 识别的 API 协议，当前只有 `openai-completions`、`openai-responses`、`anthropic-messages` | [proxy.md](./proxy.md) |
 | Logical Model | 对外暴露的路由模型；v0.3 只有兜底用的 `default` | [data-model.md](./data-model.md) |
 | 调度绑定 | LogicalModel × ProviderModel 的候选池绑定，含优先级、权重、启用状态（`scheduling_policies`） | [data-model.md](./data-model.md) |
-| Route | 一次请求的路由决策结果与决策依据，由工作流图算出后写进 `route` 命名空间 | [route-design.md](./route-design.md) |
+| Route | 一次请求的路由决策结果与决策依据，由当前生效的路由定义（工作流图或规则表）算出后写进 `route` 命名空间 | [route-design.md](./route-design.md) |
 | Attempt | 一次上游调用尝试：ProviderModel、耗时、HTTP 状态、错误分类、是否流式 | [data-model.md](./data-model.md)、[observability.md](./observability.md) |
 | Health | Provider 与 ProviderModel 两级的运行时健康状态与冷却 | [observability.md](./observability.md)、[data-model.md](./data-model.md) |
 

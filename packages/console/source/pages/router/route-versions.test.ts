@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { createDefaultPolicyGraph } from '@common/router/presets'
+import { UNSAVED_ROUTE_RULE_VERSION } from '@common/router/route-rules'
 import { UNSAVED_ROUTER_GRAPH_VERSION } from '@common/router/types'
-import { formatVersionTime, hasSavedVersion, toRouterGraphVersion, toRouterGraphVersions } from './graph-versions'
+import { formatVersionTime, hasSavedVersion, toRouterGraphVersion, toRouterGraphVersions } from './route-versions'
 
-describe('router 图版本展示模型', () => {
+describe('路由版本展示模型', () => {
   it('把服务端摘要翻成列表要用的形状', () => {
     const version = toRouterGraphVersion({ version: 7, name: '命中分流', description: '按 UA 分流', savedAt: Date.parse('2026-09-11T14:41:05.000Z'), nodeCount: 4 })
 
@@ -14,7 +14,7 @@ describe('router 图版本展示模型', () => {
     expect(version.name).toBe('命中分流')
     expect(version.description).toBe('按 UA 分流')
     expect(version.savedAt).toBe('2026-09-11T14:41:05.000Z')
-    expect(version.nodeCount).toBe(4)
+    expect(version.itemCount).toBe(4)
   })
 
   it('没起名就是空串，版本号不塞进名字里', () => {
@@ -39,11 +39,11 @@ describe('router 图版本展示模型', () => {
     expect(formatVersionTime('not-a-date')).toBe('not-a-date')
   })
 
-  it('内建默认策略（版本号 0）不算已保存版本', () => {
-    const graph = createDefaultPolicyGraph([])
-
-    // 一版都没存过时服务端给的就是这份图：它算「当前生效」，但不算「用户存下来的」。
-    expect(hasSavedVersion({ graph, version: UNSAVED_ROUTER_GRAPH_VERSION, savedAt: 0 })).toBe(false)
-    expect(hasSavedVersion({ graph, version: 1, savedAt: 1_700_000_000_000 })).toBe(true)
+  it('内建默认定义（版本号 0）不算已保存版本', () => {
+    // 一版都没存过时服务端给的就是内建默认那一份：它算「当前生效」，但不算「用户存下来的」——
+    // 否则保存按钮一打开就是灰的，用户没法把这份默认内容存成 v1。
+    expect(UNSAVED_ROUTER_GRAPH_VERSION).toBe(UNSAVED_ROUTE_RULE_VERSION)
+    expect(hasSavedVersion(UNSAVED_ROUTER_GRAPH_VERSION)).toBe(false)
+    expect(hasSavedVersion(1)).toBe(true)
   })
 })

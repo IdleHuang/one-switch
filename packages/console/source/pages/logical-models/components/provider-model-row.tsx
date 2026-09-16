@@ -142,9 +142,9 @@ export function ProviderModelRow(props: ProviderModelRowProps) {
           <div
             className={cn(
               'flex h-5 w-0 shrink-0 items-center justify-center overflow-hidden rounded-sm text-text-quaternary transition-[width,color] hover:text-text-primary focus-visible:w-6.5 focus-visible:text-text-primary focus-visible:outline-none',
-              // 自动转移下只在浮入这一行（或正在拖动）时才露出手柄：否则列表左边是一整排抓取图标。
+              // 故障转移下只在浮入这一行（或正在拖动）时才露出手柄：否则列表左边是一整排抓取图标。
               props.mode === 'auto' && 'cursor-grab touch-none select-none active:cursor-grabbing',
-              // 手动指定的圆点要一直看得见；自动转移下手柄只在浮入或拖动时撑开（20px + 6px 间距）。
+              // 手动指定的圆点要一直看得见；故障转移下手柄只在浮入或拖动时撑开（20px + 6px 间距）。
               props.mode !== 'auto' || props.dragging ? 'w-6.5' : 'group-hover/row:w-6.5',
             )}
             {...(props.mode === 'auto' ? props.dragHandleProps : {})}

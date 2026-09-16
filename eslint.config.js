@@ -50,6 +50,7 @@ export default [
     // （见 docs/product/i18n.md §4）。
     files: [
       'packages/contracts/source/router/presets.ts',
+      'packages/contracts/source/router/route-rules.ts',
       'packages/console/source/pages/model-management/lib/provider-presets.ts',
       'packages/core/source/database/development-seed.ts',
     ],
