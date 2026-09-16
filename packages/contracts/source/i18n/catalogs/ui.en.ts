@@ -336,6 +336,8 @@ export const uiEn = {
   'requestLogs.contents.section.localFailure': 'Local failure reason · no upstream response',
   'requestLogs.contents.status.upstreamNoResponse': 'No upstream response',
   'requestLogs.contents.status.noResponse': 'No response returned',
+  'requestLogs.contents.capture.partial': 'Partial capture',
+  'requestLogs.contents.capture.partialHint': 'This body was not captured in full: the stream was interrupted, or the client stopped reading early. The recorded usage and duration are unaffected.',
   'requestLogs.contents.matchCount': '{count} matches',
   'requestLogs.contents.copyLabel': 'Copy {label}',
   'requestLogs.contents.unknownReason': 'Reason unknown',

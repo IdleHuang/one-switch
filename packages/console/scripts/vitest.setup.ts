@@ -11,3 +11,20 @@ afterEach(async () => {
   const { cleanup } = await import('@testing-library/react')
   cleanup()
 })
+
+// jsdom 没有实现 `matchMedia`，而订阅深色偏好的两处代码（App 的主题监听、
+// sonner 的 Toaster）都在挂载时就会调用它，缺了这个 shim 组件压根渲染不出来。
+// 固定返回「不匹配」，即测试一律跑在浅色分支上，断言不受宿主系统主题影响。
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList
+}
