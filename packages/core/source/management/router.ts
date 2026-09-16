@@ -10,6 +10,7 @@ import {
   outboundProxyTestRoutes,
   providerModelFetchRoutes,
   routerGraphRoutes,
+  routerRuleRoutes,
   routerRunRoutes,
   providerModelRoutes,
   providerRoutes,
@@ -38,6 +39,7 @@ const router = new HttpRouter<ManagementHandler>()
   .mount(outboundProxyTestRoutes)
   .mount(providerModelFetchRoutes)
   .mount(routerGraphRoutes)
+  .mount(routerRuleRoutes)
   .mount(routerRunRoutes)
   .mount(relationRoutes)
   .mount(requestRewriteRuleRoutes)

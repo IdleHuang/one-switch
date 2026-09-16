@@ -87,7 +87,7 @@ One Switch 的配置内容会持续增加，尤其是供应商、模型端点、
 | `scheduling_policies` | 逻辑模型的调度策略 | 配置实体 |
 | `request_rewrite_rules` | 可复用的请求/响应改写规则 | 配置实体 |
 | `provider_model_request_rewrite_rules` | ProviderModel 与改写规则的启用关系 | 配置实体 |
-| `workflows` | 工作流定义 | 配置实体 |
+| `workflows` | 路由定义（工作流图与规则表） | 配置实体 |
 
 这个库里的外键全部指向自己。
 
@@ -500,7 +500,7 @@ CREATE INDEX idx_provider_endpoints_deleted_time
 
 `default` 是代理内部的兜底逻辑模型：客户端请求中的任意非空模型名在没有命中其他逻辑模型时都由它处理，无需显式请求 `default`。它由初始化幂等创建，名称固定（请求按名称命中它），只有说明可编辑。
 
-除 `default` 之外，逻辑模型可以在控制台自由创建、改名、改说明与软删除：名称是展示名，同时可以作为请求命中的依据；说明是自由文本。删除只打 `deletedTime` 时间戳（§8），行留在表里——历史请求日志、调度绑定与路由图落点都按 ID 引用逻辑模型，硬删会把它们变成悬空引用。
+除 `default` 之外，逻辑模型可以在控制台自由创建、改名、改说明与软删除：名称是展示名，同时可以作为请求命中的依据；说明是自由文本。删除只打 `deletedTime` 时间戳（§8），行留在表里——历史请求日志、调度绑定与路由落点都按 ID 引用逻辑模型，硬删会把它们变成悬空引用。
 
 ```sql
 CREATE TABLE logical_models (
@@ -1106,7 +1106,7 @@ CREATE INDEX idx_workflows_deleted_time
 - `request_attributes` 保存请求的客户端/网络属性（来源 UA、入口地址等）。值一律是字符串——采集侧只产出字符串，因此没有「值类型」维度。
 - `runtime_logs` 是应用运行时日志，与配置和请求生命周期无关，按 `timestamp` 保留和清理；日志级别与保留策略见 [observability.md](./observability.md)。
 - `request_rewrite_rules` 是可复用的规则定义，`match` 与 `actions` 是 JSON 文本；`provider_model_request_rewrite_rules` 把规则绑定到 ProviderModel，生效顺序由 `priority` 表达。匹配条件、动作语义与四阶段执行次序见 [request-rewrite-rules.md](./request-rewrite-rules.md)。
-- `workflows` 按 `type + version` 唯一保存工作流定义，`definition` 是 JSON 文本，`version` 即路由工作台策略图的版本号；`name` 与 `description` 是用户在保存时给这一版写的人类注记，不参与任何运行时判定，也不承担唯一性 ——**版本的身份是 `version` 本身**，同名多版完全正常，两者留空即空串（不会自动填成 `Version N`）。图的节点与端口语义见 [route-design.md](./route-design.md)，执行模型见 [workflow-engine.md](./workflow-engine.md)。
+- `workflows` 按 `type + version` 唯一保存路由定义，`definition` 是 JSON 文本，`version` 是这一份定义的版本号；`type = 'router'` 存工作流图，一行一版、版本号单调递增；`type = 'route-rules'` 存规则模式的规则表，**同样是每次保存一行、版本号各自从 1 单调递增**（上限 30 版），两种定义各写各的行、各算各的版本号，互不干扰；`name` 与 `description` 是用户在保存时给这一版写的人类注记，不参与任何运行时判定，也不承担唯一性 ——**版本的身份是 `version` 本身**，同名多版完全正常，两者留空即空串（不会自动填成 `Version N`）。模式划分与规则表语义见 [route-design.md](./route-design.md) §2.11，图的节点与端口语义见同文 §4，执行模型见 [workflow-engine.md](./workflow-engine.md)。
 
 ## 4. JSON 文档版本
 

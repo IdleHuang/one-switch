@@ -76,7 +76,7 @@ const ProtocolDiscoveryNodeSchema = WorkflowNodeBaseSchema.extend({
   kind: z.literal('protocol-discovery'),
 })
 
-const ConditionRuleSchema = z.object({
+export const ConditionRuleSchema = z.object({
   fieldPath: z.string().min(1),
   valueType: z.enum(['string', 'number', 'boolean', 'enum', 'array', 'object', 'unknown']),
   operator: z.enum(['equals', 'notEquals', 'contains', 'notContains', 'startsWith', 'endsWith', 'in', 'notIn', 'regex', 'gt', 'gte', 'lt', 'lte', 'between', 'isTrue', 'isFalse', 'empty', 'notEmpty', 'exists']),

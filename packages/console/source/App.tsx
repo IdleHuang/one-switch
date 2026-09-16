@@ -8,6 +8,7 @@ import { ErrorBoundary, ErrorFallback } from '@/components/error-boundary'
 import { AppSidebar, type Theme } from '@/components/app-sidebar'
 import { useAppUiStore } from '@/store/app-ui-store'
 import { useTranslation } from '@/i18n/provider'
+import { RouteModeDialog } from './features/route-mode/route-mode-dialog'
 import { useProxyStatus } from './features/proxy/hooks'
 
 function App() {
@@ -68,6 +69,13 @@ function App() {
               <Outlet />
             </ErrorBoundary>
           </AppLayout>
+
+          {/*
+           * 路由模式弹窗挂在这里，而不挂在某个页面上：它的入口分布在不相关的两处
+           * （页头标题旁的图标、设置页的一行），能打开的必须是同一个弹窗。
+           * 挂在 `AppLayout` 外、`TooltipProvider` 内：它不属于任何一页，但两者都在同一棵树下。
+           */}
+          <RouteModeDialog />
         </TooltipProvider>
       </ConfirmProvider>
     </ToastProvider>

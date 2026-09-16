@@ -6,6 +6,7 @@ import {
   PROMPT_TIMEOUT_LIMIT,
   SCRIPT_TIMEOUT_LIMIT,
   type ConditionCase,
+  type ConditionLogicalOperator,
   type ConditionOperator,
   type ConditionRule,
   type ControlInputNode,
@@ -244,13 +245,22 @@ function normalizeHeaderValue(value: unknown): string {
 }
 
 function getHeader(headers: Record<string, unknown>, name: string): string {
-  const lowered = name.toLowerCase()
+  return normalizeHeaderValue(findHeaderValue(headers, name))
+}
+
+/**
+ * 按头名大小写不敏感取值。
+ *
+ * 全仓读请求头只走这里（`getHeader` 与条件字段解析都是它的包装）：
+ * 「头名大小写不敏感」是 HTTP 的规矩，写两遍迟早只改一处。
+ * 头不存在时返回 `undefined`，与「头是空的」区分开。
+ */
+function findHeaderValue(headers: Record<string, unknown>, name: string): unknown {
+  const lowered = name.trim().toLowerCase()
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === lowered) {
-      return normalizeHeaderValue(value)
-    }
+    if (key.toLowerCase() === lowered) return value
   }
-  return ''
+  return undefined
 }
 
 /**
@@ -388,6 +398,67 @@ function isEmptyValue(value: unknown): boolean {
   return false
 }
 
+/** 条件字段里「请求头」的路径前缀：这一段之后的名字按头名大小写不敏感解析。 */
+const HEADER_FIELD_PREFIX = 'request.headers.'
+
+/**
+ * 解析条件字段的**运行时取值**。
+ *
+ * 与 `getByPath` 只差一处：`request.headers.<名字>` 按头名**大小写不敏感**解析。
+ * HTTP 头名本来就大小写不敏感（`User-Agent` 与 `user-agent` 是同一个头），而 `getByPath`
+ * 是精确的键匹配 —— 照文档写 `request.headers.user-agent`、客户端发来 `User-Agent` 就读成
+ * 「字段不存在」，那是引擎替 RFC 说错话。
+ * 头不存在时返回 `undefined`（而不是空串）：`exists` / `empty` 因此仍能如实区分
+ * 「没这个头」与「头是空的」。
+ *
+ * 头名允许带 `.`（如 `x.feishu-request-id`），所以前缀之后的整段都算头名，不再按路径分段 ——
+ * 头值只可能是字符串，不存在「再往下读一层」的情形。
+ */
+export function resolveConditionField(payload: Record<string, unknown>, fieldPath: string): unknown {
+  if (!fieldPath.startsWith(HEADER_FIELD_PREFIX)) return getByPath(payload, fieldPath)
+
+  const name = fieldPath.slice(HEADER_FIELD_PREFIX.length).trim()
+  const headers = getByPath(payload, 'request.headers')
+  if (!name || !isPlainObject(headers)) return undefined
+
+  const value = findHeaderValue(headers, name)
+  return value === undefined ? undefined : normalizeHeaderValue(value)
+}
+
+/** 一条条件的判定明细：`actual` 是运行时读到的值，供「为什么命中」核对。 */
+export interface ConditionRuleEvaluation {
+  fieldPath: string
+  operator: ConditionOperator
+  actual: unknown
+  matched: boolean
+}
+
+/** 一组条件的判定结果：布尔结论 + 逐条明细。 */
+export interface ConditionGroupEvaluation {
+  matched: boolean
+  conditions: ConditionRuleEvaluation[]
+}
+
+/**
+ * 判定一组条件的**唯一入口**：图的条件分支与规则表都走这里。
+ *
+ * 逐条明细一并回传：规则表的测试运行要能回答「为什么是这条」，只给一个布尔值没法解释；
+ * 图侧的条件分支只看 `matched`，多出来的明细它不用。
+ * 同一个条件在两种模式里因此不可能有第二种判定。
+ */
+export function evaluateConditionGroup(conditions: ConditionRule[], logicalOperator: ConditionLogicalOperator, payload: Record<string, unknown>): ConditionGroupEvaluation {
+  const evaluations = conditions.map(rule => {
+    const actual = resolveConditionField(payload, rule.fieldPath)
+    return { fieldPath: rule.fieldPath, operator: rule.operator, actual, matched: evaluateCondition(rule, actual, payload) }
+  })
+  return {
+    matched: logicalOperator === 'and'
+      ? evaluations.every(item => item.matched)
+      : evaluations.some(item => item.matched),
+    conditions: evaluations,
+  }
+}
+
 /**
  * 包含判定：
  * - 数组：比较每个元素（对象元素按结构化序列化比较）；
@@ -494,10 +565,7 @@ function evaluateCondition(rule: ConditionRule, actual: unknown, payload: Record
 }
 
 function evaluateCase(caseNode: ConditionCase, payload: Record<string, unknown>): boolean {
-  const results = caseNode.conditions.map(rule => evaluateCondition(rule, getByPath(payload, rule.fieldPath), payload))
-  return caseNode.logicalOperator === 'and'
-    ? results.every(Boolean)
-    : results.some(Boolean)
+  return evaluateConditionGroup(caseNode.conditions, caseNode.logicalOperator, payload).matched
 }
 
 function discoverProtocol(_node: ProtocolDiscoveryNode, payload: Record<string, unknown>): {
@@ -626,12 +694,12 @@ function addNodeOutput(outputs: NodeOutputMap, nodeId: string, name: string, val
   outputs[nodeId] = list
 }
 
-function normalizeModelIds(modelIds: string[]): string[] {
+export function normalizeModelIds(modelIds: string[]): string[] {
   return [...new Set(modelIds.map(id => id.trim()).filter(Boolean))]
 }
 
 /** 变量取值 → 逻辑模型 id 列表。字段可以是单个 id（字符串），也可以是 id 列表（字符串数组）。 */
-function readModelIdsFromValue(value: unknown): string[] {
+export function readModelIdsFromValue(value: unknown): string[] {
   if (Array.isArray(value)) return normalizeModelIds(value.map(item => String(item)))
   if (typeof value === 'string') return normalizeModelIds([value])
   return []

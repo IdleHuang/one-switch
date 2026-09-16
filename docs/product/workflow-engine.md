@@ -1,5 +1,7 @@
 # Router 工作流引擎设计
 
+本文描述**工作流模式**的引擎。规则模式不走这张图：它由规则表求值器（`packages/contracts/source/router/route-rule-engine.ts`）从上往下逐条匹配，只复用本文的公共部分——字段路径解析、条件判定（`evaluateConditionGroup`）与 `route` 输出契约；两种模式的产品语义与模式划分见 [route-design.md](./route-design.md) §2.11。
+
 ## 设计结论
 
 Router 使用 **节点配置 + 显式边图 + 结构化控制流状态** 的分层模式：

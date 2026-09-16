@@ -1,46 +1,81 @@
-import type { Protocol, TransportKind } from '@common/schemas'
+import type { Protocol, RouteMode, TransportKind } from '@common/schemas'
 import { readLandingModelIds, readRouteDecision, runWorkflow } from '@common/router/engine'
+import { runRouteRules, type RouteRuleStep } from '@common/router/route-rule-engine'
 import type { RouteContextInput, WorkflowRequestPayload, WorkflowRunResult, WorkflowTrace } from '@common/router/types'
 import { listLogicalModels } from '@server/database/logical-model-store'
+import { resolveRouteRuleSet } from '@server/database/route-rule-store'
 import { resolveRouterGraph } from '@server/database/router-graph-store'
+import { getSettings } from '@server/database/settings-store'
 import { createRouteCapabilities } from '../capabilities/route-capabilities'
 import type { HeaderMap } from '../contracts'
 
 /**
- * 一次请求的路由求解：读当前生效的图 → 组装上下文 → 跑图 → 取落点。
+ * 一次请求的路由求解：读生效模式 → 读那一份定义 → 算出落点。
  *
- * 这是「工作流图接入代理」的唯一交接面。代理入口不解释图，图也不认识 HTTP：
- * 入口负责把请求摊成图能读的形状（路径、方法、头、体），图负责算出落点逻辑模型，
- * 之后照旧交给规划器与执行器。
+ * 这是「智能路由接入代理」的**唯一**交接面。代理入口不解释图也不解释规则表：
+ * 入口负责把请求摊成两种模式都能读的形状（路径、方法、头、体），定义负责算出落点逻辑模型，
+ * 之后照旧交给规划器与执行器。模式只在这一处分流，往下游看到的都是同一份 `RouteResolution`，
+ * 规划、执行、请求日志因此一行都不用知道今天生效的是哪种模式。
  */
 
 export interface RouteResolutionInput {
-  /** 归一化后的客户端请求：图能读到的就是这些。 */
+  /** 归一化后的客户端请求：定义能读到的就是这些。 */
   readonly request: WorkflowRequestPayload
-  /** 客户端协议。端点匹配时就已经确定，不再让图去猜。 */
+  /** 客户端协议。端点匹配时就已经确定，不再让定义去猜。 */
   readonly clientProtocol: Protocol
   /** 客户端跳的传输形态（**事实**）：入口按接口封装描述解析出来，不由请求头临时猜。 */
   readonly transport: TransportKind
-  /** 本次运行的追踪 id，直接沿用交换 id，让图与请求日志指向同一个交换。 */
+  /** 本次运行的追踪 id，直接沿用交换 id，让定义与请求日志指向同一个交换。 */
   readonly traceId: string
 }
 
-export interface RouteResolution {
-  /** 图选出的落点逻辑模型，按优先级排列；没有落点时为空数组。 */
+/** 两种模式共有的求解结果：调用方只需要看到这些就能继续往下走。 */
+interface RouteResolutionBase {
+  /** 选出的落点逻辑模型，按优先级排列；没有落点时为空数组。 */
   readonly logicalModelIds: string[]
-  /** 图最终认定的协议；图没跑到协议发现节点时退回入口匹配到的协议。 */
+  /** 最终认定的协议；定义没给出结论时退回入口匹配到的协议。 */
   readonly protocol: Protocol
-  /** 图最终认定的客户端跳传输形态；同样退回入口给出的事实。 */
+  /** 最终认定的客户端跳传输形态；同样退回入口给出的事实。 */
   readonly transport: TransportKind
-  /** 生效的图版本；`0` 表示还没有人保存过图，用的是内建默认策略。 */
-  readonly graphVersion: number
+  /** 本次实际生效的模式。**它是事实，不是配置回读**：日志里报的就是刚刚真正跑的那一种。 */
+  readonly mode: RouteMode
+  /** 生效定义的版本号（图或规则表）；`0` 表示还没有人保存过，用的是内建默认。 */
+  readonly definitionVersion: number
+}
+
+/** 工作流编排求解出的结果：带图的停止原因与节点轨迹。 */
+export interface WorkflowRouteResolution extends RouteResolutionBase {
+  readonly mode: 'workflow'
   /** 图停下来时的原因，用于日志。 */
   readonly stopReason: WorkflowRunResult['stopReason']
   /** 完整的节点轨迹，用于排查「为什么落点不是我预期的那个」。 */
   readonly trace: WorkflowTrace[]
 }
 
+/** 路由规则求解出的结果：带逐条规则的判定经过。 */
+export interface RuleRouteResolution extends RouteResolutionBase {
+  readonly mode: 'rules'
+  /** `rule` 表示某条规则胜出，`fallback` 表示走了兜底。 */
+  readonly stopReason: 'rule' | 'fallback'
+  /** 逐条规则的判定经过，用于排查「为什么是这条」。 */
+  readonly steps: RouteRuleStep[]
+}
+
+export type RouteResolution = WorkflowRouteResolution | RuleRouteResolution
+
+/**
+ * 求解一次请求的路由。
+ *
+ * 模式从设置里读：它是「哪一份定义生效」的唯一下场，两个模式的定义只在自己被选中时才被读取 ——
+ * 没生效的那一份既不会参与求解，也不会把内建默认表（图）白白生成一遍。
+ */
 export async function resolveRoute(input: RouteResolutionInput): Promise<RouteResolution> {
+  const settings = await getSettings()
+  return settings.routeMode === 'rules' ? resolveByRules(input) : resolveByWorkflow(input)
+}
+
+/** 工作流编排：读当前生效的图 → 组装上下文 → 跑图 → 取落点。 */
+async function resolveByWorkflow(input: RouteResolutionInput): Promise<WorkflowRouteResolution> {
   const [snapshot, logicalModels] = await Promise.all([resolveRouterGraph(), listLogicalModels()])
 
   const routeContext = {
@@ -62,14 +97,43 @@ export async function resolveRoute(input: RouteResolutionInput): Promise<RouteRe
   // 图判定为 `unknown` 说明协议发现节点没猜出来；此时入口匹配到的协议更可信。
   const protocol: Protocol = discovered && discovered !== 'unknown' ? discovered : input.clientProtocol
 
-  const transport = decision?.transport ?? input.transport
   return {
+    mode: 'workflow',
     logicalModelIds: readLandingModelIds(result.outputPayload),
     protocol,
-    transport,
-    graphVersion: snapshot.version,
+    transport: decision?.transport ?? input.transport,
+    definitionVersion: snapshot.version,
     stopReason: result.stopReason,
     trace: result.trace,
+  }
+}
+
+/**
+ * 路由规则：读当前生效的规则表 → 从上往下匹配 → 取落点。
+ *
+ * 不需要注入任何能力：规则表只能读请求与做判定，没有脚本、没有提示词调用 ——
+ * 这正是它比图轻的地方，也是它没有能力可以缺失的地方。
+ */
+async function resolveByRules(input: RouteResolutionInput): Promise<RuleRouteResolution> {
+  const [snapshot, logicalModels] = await Promise.all([resolveRouteRuleSet(), listLogicalModels()])
+
+  const result = runRouteRules(snapshot.ruleSet, {
+    request: input.request,
+    logicalModels,
+    metadata: { traceId: input.traceId },
+    protocol: input.clientProtocol,
+    transport: input.transport,
+  } satisfies RouteContextInput)
+
+  return {
+    mode: 'rules',
+    logicalModelIds: result.logicalModelIds,
+    // 规则表不猜协议：它读到的 `route.protocol` 就是入口声明的那一个，只有真拿到 `unknown` 才退回入口。
+    protocol: result.protocol !== 'unknown' ? result.protocol : input.clientProtocol,
+    transport: result.transport,
+    definitionVersion: snapshot.version,
+    stopReason: result.stopReason,
+    steps: result.steps,
   }
 }
 

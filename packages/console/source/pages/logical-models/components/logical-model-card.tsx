@@ -9,7 +9,7 @@ import {
 } from '@dnd-kit/core'
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { GripVertical, ListTree, Pencil, RefreshCw, Target, Trash2 } from 'lucide-react'
+import { GripVertical, ListTree, Pencil, Plus, RefreshCw, Target, Trash2 } from 'lucide-react'
 import { useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -103,7 +103,7 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
     : logicalModelDescription
 
   // 卡片头分两行：上行是身份（名称 + 状态）与调度模式，下行是说明。
-  // 单行放不下「标题 + 添加模型 + 模式切换」——瀑布流最窄 420px，标题会被挤断。
+  // 单行放不下「标题 + 模式切换」——瀑布流最窄 420px，标题会被挤断。
   const renderHeader = () => (
     <CardHeader className="group/header relative border-b border-border/50 pb-3">
       {/* 手柄跟着标题所在的那一行：拆成「手柄列 + 两行文字」时它会按整块高度居中，
@@ -139,41 +139,40 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
             // 期间就点不动；所以标签页必须待在遮罩左边，而空位只在浮入时才出现。
             // 键盘不走 hover：焦点落进遮罩里的按钮时（has-…）同样让开。
             (onEdit || onDelete) && (onDelete
-              ? 'group-hover/header:pr-[68px] has-[[data-slot=card-header-actions]:focus-within]:pr-[68px]'
-              : 'group-hover/header:pr-[36px] has-[[data-slot=card-header-actions]:focus-within]:pr-[36px]'),
+              ? 'group-hover/header:pr-17 has-[[data-slot=card-header-actions]:focus-within]:pr-17'
+              : 'group-hover/header:pr-9 has-[[data-slot=card-header-actions]:focus-within]:pr-9'),
           )}>
-            {onAddModel && <Button variant="outline" size="sm" onClick={onAddModel}>{t('logicalModels.card.addModel')}</Button>}
             <Tabs value={mode} onValueChange={value => onModeChange(value as 'auto' | 'manual')}>
               <TabsList>
                 <TabsTrigger value="auto" disabled={switchingMode} className="px-2.5 system-xs-medium"><RefreshCw size={12} className={switchingMode ? 'animate-spin' : undefined} /> {t('logicalModels.card.mode.auto')}</TabsTrigger>
                 <TabsTrigger value="manual" disabled={switchingMode} className="px-2.5 system-xs-medium"><Target size={12} /> {t('logicalModels.card.mode.manual')}</TabsTrigger>
               </TabsList>
             </Tabs>
-            {/* 编辑与删除挂在卡片头右侧的一整条模糊遮罩上（同供应商模型行的做法）：静止时不显示，
-                浮入时也只压住让开后的空位，不会盖住「添加模型」与模式标签页。
-                遮罩按整个卡片头铺满（inset-y-0），按钮却对齐上面那一行：编辑与删除是对「这张卡片」
-                的操作，与名称同一水平线才读得出归属，落在说明行上会被读成说明的一部分。
-                左缘只留 8px 淡出边（pl-2，渐变的实心部分刚好铺满按钮）：浮出时图标左边
-                不再多出一块看着像占位的空白。
+            {/* 编辑与删除落在名称这一行的右端（同供应商模型行的做法）：静止时不显示，
+                浮入时也只压住让开后的空位，不会盖住模式标签页。
+                但这里**不铺底色**：模型行的遮罩是盖着「供应商链接 + 指标 + 徽标」的，需要一层
+                模糊把底下的字吃掉；卡片头这里空位是让出来的（标签页缩了 pr），按钮背后本来
+                就没有内容，遮罩却把整个卡片头铺满，那块底与卡面不同色，在深色下就显出一块
+                灰斑（用户原话：「这个背景有奇怪的颜色，去掉！」）。所以遮罩只留定位职责，
+                高度也收到按钮这一行，不再压到说明行上。
+                左缘仍留 8px（pl-2），图标才不会贴住模式标签页。
                 挂在这一组里，是为了让「焦点落进遮罩按钮」与「浮入」走同一条让位逻辑（见上）。 */}
             {(onEdit || onDelete) && (
               <div
                 data-slot="card-header-actions"
                 className={cn(
-                  'pointer-events-none absolute inset-y-0 right-(--card-spacing) flex flex-col bg-linear-to-l from-components-panel-bg-blur from-[calc(100%-8px)] to-transparent pl-2 opacity-0 backdrop-blur-[5px] transition-opacity',
+                  // 与名称、模式标签页同高的一行（标签页撑出的 32px），按钮在其中居中，
+                  // 于是三者在同一条水平线上。
+                  'pointer-events-none absolute top-0 right-(--card-spacing) flex h-8 items-center gap-1 pl-2 opacity-0 transition-opacity',
                   'group-hover/header:pointer-events-auto group-hover/header:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
                 )}
               >
-                {/* 这一格与上面那一行同高（模式标签页撑出的 32px），按钮在其中居中，
-                    于是与名称、模式标签页在同一条水平线上。 */}
-                <div className="flex h-8 shrink-0 items-center gap-1">
-                  {onEdit && (
-                    <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={t('logicalModels.card.editAria', { name: logicalModelName })} title={t('logicalModels.card.editTitle')}><Pencil size={16} /></Button>
-                  )}
-                  {onDelete && (
-                    <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={t('logicalModels.card.deleteAria', { name: logicalModelName })} title={t('logicalModels.card.deleteTitle')}><Trash2 size={16} /></Button>
-                  )}
-                </div>
+                {onEdit && (
+                  <Button variant="ghost" size="icon-sm" onClick={onEdit} aria-label={t('logicalModels.card.editAria', { name: logicalModelName })} title={t('logicalModels.card.editTitle')}><Pencil size={16} /></Button>
+                )}
+                {onDelete && (
+                  <Button variant="ghost" size="icon-sm" onClick={onDelete} aria-label={t('logicalModels.card.deleteAria', { name: logicalModelName })} title={t('logicalModels.card.deleteTitle')}><Trash2 size={16} /></Button>
+                )}
               </div>
             )}
           </div>
@@ -195,7 +194,7 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
       onDragEnd={event => void onDragEnd(event)}
     >
       <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
-        <div className="max-h-96 overflow-x-auto overflow-y-auto rounded-b-lg">
+        <div className="max-h-96 overflow-x-auto overflow-y-auto">
           {rows.map(row => (
             <SortableProviderModel key={row.model.id} id={row.model.id}>
               {(handleProps, dragging) => (
@@ -222,13 +221,14 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
     </DndContext>
   )
 
-  // 空状态不再挂「添加模型」按钮：卡片头已经有了，同一张卡里放两遍只会分不清主次。
+  // 空状态不再挂「添加模型」按钮：非空时那一格落在列表末尾，空着时当然不能在卡片头再来一个。
   const renderEmptyState = () => (
     <EmptyState
+      embedded
       icon={ListTree}
       title={t('logicalModels.card.empty.title')}
       description={t('logicalModels.card.empty.description')}
-      className="min-h-48 border-0 py-10"
+      className="border-0 py-8"
     />
   )
 
@@ -238,9 +238,39 @@ export function LogicalModelCard(props: LogicalModelCardProps) {
   }
 
   return (
-    <Card className={cn('group overflow-hidden', dragging && 'bg-accent')}>
+    // 卡片内容整块通栏（列表、空状态、末尾的「添加模型」都贴到左右边缘），只有卡片头靠 Card
+    // 的内边距与上边缘留白；所以**下内边距要去掉**，否则最后一行下面会多出一条 16px 的卡底色空带——
+    // 那条空带既没有发丝线收尾，也不属于任何一行，看着就像列表没铺满（用户原话：
+    // 「下面都没挨着边，还留着一块空白」）。去掉后最后一行直接与卡片下边缘齐平，
+    // 浮入底色也能一路铺到圆角处（Card 自带 overflow-hidden，会被圆角裁掉）。
+    <Card className={cn('group overflow-hidden pb-0', dragging && 'bg-accent')}>
       {renderHeader()}
-      <CardContent className="p-0">{renderContent()}</CardContent>
+      <CardContent className="p-0">
+        {renderContent()}
+        {/*
+          「添加模型」不是这张卡的头等操作，而是**这一列的下一行**：和上面的模型行同宽、
+          同一个左内边距、同样靠浮入底色和文字变深表示可点，读下来就是列表末尾多了一行。
+
+          所以它不做成虚线框：模型行本身没有边框，只用发丝线分格，一个描了边、带圆角、
+          又往里缩了 8px 的空盒子会立刻变成第三种形状（用户原话：「太大了，不适合这个
+          模型队列的尺寸和设计」）——它像把路由规则里的「再加一条」整块搬了过来，而那一处
+          的条件行本来就是盒子，虚线才成网格。这里也不需要那么高：模型行有两行（名称 + 指标）
+          才要 56px，这一格只有一句话，36px 就够，轻一点才像「操作」而不是「数据」。
+
+          它落在滚动区之外并自带一条上发丝线：列表是可滚动的，最后一行常常被截半，
+          没有这条线就看不出「下面这一行不属于列表」。
+        */}
+        {onAddModel && (
+          <button
+            type="button"
+            className="flex h-9 w-full items-center gap-1.5 border-t border-border/50 px-3 text-left text-text-tertiary outline-none transition-colors hover:bg-state-base-hover hover:text-text-secondary focus-visible:bg-state-base-hover focus-visible:text-text-secondary focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-state-accent-solid"
+            onClick={onAddModel}
+          >
+            <Plus className="size-3.5 shrink-0" aria-hidden />
+            <span className="system-xs-regular">{t('logicalModels.card.addModel')}</span>
+          </button>
+        )}
+      </CardContent>
     </Card>
   )
 }

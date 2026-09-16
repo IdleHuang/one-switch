@@ -25,7 +25,7 @@ Logical models: drag to set priority, and every model carries its own recent tra
 
 ![Logical models: channel queue with live metrics](./snapshot/en/01-logical-models.png)
 
-Smart Routing: a node graph for "which requests land in which channel group", saved as versions you can roll back.
+Smart Routing: the header switches between a node graph and a plain rule table — two interchangeable modes for "which requests land in which channel group" — and every save is a version you can roll back.
 
 ![Smart Routing: node graph and request matching](./snapshot/en/02-smart-routing.png)
 
@@ -107,11 +107,16 @@ These paths are recognised with or without the `/v1` prefix. `GET /v1/models` is
 
 ## Smart Routing
 
-This is the landing page after install, and it answers one question: **which requests belong to which channel group.**
+This is the landing page after install, and it answers one question: **which requests belong to which channel group.** Two modes, switched from the page header — exactly one is in effect at a time, and neither rewrites the other's definition:
 
-- Four ready-made policies you can drop straight onto the canvas: **Logical model hit** (use the requested model when it names a logical model, otherwise fall back to the default), **Route by user agent** (recognise Cursor or Claude CLI and split accordingly, everything else falls back), **LLM request complexity** (let a model judge difficulty and send the hard ones to the strong channel, the rest to the fast cheap one), and **JS script request handling** (a sandboxed script scores the request and buckets it).
-- Or build your own from nodes: input → protocol discovery → conditions → logical model selection → output. Each node does exactly one thing.
-- **Test run** takes a real request body and shows which branch it takes and what each node produced. Nothing is forwarded upstream.
+- **Workflow graph** (the default): draw the policy as a node graph.
+  - Four ready-made policies you can drop straight onto the canvas: **Logical model hit** (use the requested model when it names a logical model, otherwise fall back to the default), **Route by user agent** (recognise Cursor or Claude CLI and split accordingly, everything else falls back), **LLM request complexity** (let a model judge difficulty and send the hard ones to the strong channel, the rest to the fast cheap one), and **JS script request handling** (a sandboxed script scores the request and buckets it).
+  - Or build your own from nodes: input → protocol discovery → conditions → logical model selection → output. Each node does exactly one thing.
+- **Rule table**: cheaper to read and write for simple cases — a list of rules read top to bottom, one condition and one landing each. The first rule that both matches and yields a landing wins, the row at the end is the fallback, and reprioritising is dragging a row where you want it. Conditions are the same kind the graph uses, so a policy never means one thing in one mode and something else in the other.
+
+Both modes are versioned separately, and both cover the same everyday behaviour out of the box.
+
+- **Test run** takes a real request body and shows which branch it takes and what each node produced; in rule mode it lists every rule as matched / not matched / disabled together with the live value of each condition. Nothing is forwarded upstream.
 - Every save leaves a version behind, so a bad policy is one rollback away.
 
 The built-in `default` logical model is the safety net: anything no policy matches ends up there.

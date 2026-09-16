@@ -38,20 +38,23 @@ import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { useLogicalModels } from '@/features/logical-models/hooks'
+import { useRouteMode } from '@/features/route-mode/use-route-mode'
 import { useTranslation } from '@/i18n/provider'
 import { cn } from '@/lib/utils'
 
 import { NodeSelector } from './components/node-selector'
 import { WorkflowButton } from './components/workflow-button'
 import { PolicyMenu } from './components/policy-menu'
-import { SaveVersionDialog, type RouterGraphVersionDraft } from './components/save-version-dialog'
+import { RouteModeSwitch } from './components/route-mode-switch'
+import { SaveVersionDialog, type VersionDraft } from './components/save-version-dialog'
 import { VersionMenu } from './components/version-menu'
 import { WorkflowConnectionLine } from './components/workflow-connection-line'
 import { WorkflowNodePanel } from './components/workflow-node-panel'
 import { resolveInputHints } from './field-hints'
 import { policyPresetTextKeys } from './policy-preset-text'
 import { buildFlowEdges, layoutRouterNodes, type WorkflowFlowEdge } from './flow-projection'
-import { hasSavedVersion, toRouterGraphVersion, toRouterGraphVersions, type RouterGraphVersion } from './graph-versions'
+import { hasSavedVersion, toRouterGraphVersion, toRouterGraphVersions, type RouteVersion } from './route-versions'
+import { RouteRulesStudio } from './rules/rules-studio'
 import {
   ROUTER_POLICY_PRESETS,
   createDefaultPolicyGraph,
@@ -83,7 +86,7 @@ import type { AppendableKind, NodePosition, NoteNodeSize, WorkflowGraph, Workflo
 const EDITABLE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
 
 /** 画布内容没有来源版本（内建默认策略、套用预设）时，保存弹窗的输入初值。 */
-const EMPTY_VERSION_DRAFT: RouterGraphVersionDraft = { name: '', description: '' }
+const EMPTY_VERSION_DRAFT: VersionDraft = { name: '', description: '' }
 
 /** 内建默认策略的 id：一版都没保存过时，代理跑的就是它，画布铺的也是这张图。 */
 const DEFAULT_POLICY_PRESET_ID = ROUTER_POLICY_PRESETS.find(preset => preset.isDefault)?.id
@@ -155,7 +158,7 @@ function WorkflowStudioCanvas() {
   const [payloadText, setPayloadText] = useState(() => JSON.stringify(samplePayload, null, 2))
   const [payloadError, setPayloadError] = useState('')
   const [runResult, setRunResult] = useState<WorkflowRunResult | null>(null)
-  const [versions, setVersions] = useState<RouterGraphVersion[]>([])
+  const [versions, setVersions] = useState<RouteVersion[]>([])
   /**
    * 服务端当前生效的那张图 —— 「有没有可保存的改动」以它为基线。
    *
@@ -173,7 +176,7 @@ function WorkflowStudioCanvas() {
    * 只跟着画布的来源走：首屏载入是当前生效的那一版，载入历史版本就是载入的那一版，
    * 套用预设则清空（预设不是从任何一版改来的）。
    */
-  const [versionDraftDefaults, setVersionDraftDefaults] = useState<RouterGraphVersionDraft>(EMPTY_VERSION_DRAFT)
+  const [versionDraftDefaults, setVersionDraftDefaults] = useState<VersionDraft>(EMPTY_VERSION_DRAFT)
 
   /**
    * 预设自带的名字与说明，作为保存弹窗的初值。
@@ -181,7 +184,7 @@ function WorkflowStudioCanvas() {
    * 预设不是从任何一版改来的，沿用上一版的注记只会误导；但「名字留空」同样不好用：
    * 套用「UA 分流」改完直接保存时，本来就白拿一个说得清的名字与说明。
    */
-  const presetDraftDefaults = useCallback((presetId: string | undefined): RouterGraphVersionDraft => {
+  const presetDraftDefaults = useCallback((presetId: string | undefined): VersionDraft => {
     const textKeys = presetId ? policyPresetTextKeys(presetId) : undefined
     return textKeys
       ? { name: t(textKeys.name), description: t(textKeys.description) }
@@ -207,14 +210,14 @@ function WorkflowStudioCanvas() {
         const canvasGraph = toCanvasGraph(snapshot.graph)
         setGraph(canvasGraph)
         // 内建默认策略（版本号 0）不是已保存版本：基线留空，画布内容一律算未保存。
-        setActiveGraph(hasSavedVersion(snapshot) ? canvasGraph : null)
+        setActiveGraph(hasSavedVersion(snapshot.version) ? canvasGraph : null)
         const loadedVersions = toRouterGraphVersions(summaries)
         setVersions(loadedVersions)
         const baseline = loadedVersions[0]
         // 画布铺的就是最新保存的那一版；一版都没保存过时铺的是内建默认策略，
         // 初值就跟着这张默认策略走 —— 于是打开应用直接保存，拿到的是有名字的「逻辑模型命中」这一版。
         setVersionDraftDefaults(
-          hasSavedVersion(snapshot) && baseline
+          hasSavedVersion(snapshot.version) && baseline
             ? { name: baseline.name, description: baseline.description }
             : presetDraftDefaults(DEFAULT_POLICY_PRESET_ID),
         )
@@ -613,7 +616,7 @@ function WorkflowStudioCanvas() {
    * 名字与说明是这一次保存的注记，只在真的生成新版本时才会落库（内容没变时一并丢弃）。
    * 出错时故意不关弹窗：用户刚敲进去的东西不能因为一次网络失败就没地方找回来。
    */
-  const saveWorkflow = useCallback(async (draft: RouterGraphVersionDraft) => {
+  const saveWorkflow = useCallback(async (draft: VersionDraft) => {
     const graphToSave = graphRef.current
     setSaving(true)
     try {
@@ -643,7 +646,7 @@ function WorkflowStudioCanvas() {
    * 载入只是「拿到编辑起点」：代理仍然跑着当前生效的那一版，直到这里再点一次「保存」。
    * 因此不会像从前那样改了本地副本就等于改了线上行为。
    */
-  const restoreVersion = useCallback(async (version: RouterGraphVersion) => {
+  const restoreVersion = useCallback(async (version: RouteVersion) => {
     try {
       const snapshot = await unwrap(routerApi.getGraphVersion(version.sequence))
       if (!snapshot) {
@@ -705,8 +708,10 @@ function WorkflowStudioCanvas() {
   return (
     <PageLayout>
       <PageHeader
-        title={t('router.title')}
-        description={t('router.description')}
+        title={t('router.workflow.title')}
+        // 模式切换紧跟在标题后面：它在回答「这个标题指的是哪一种定义」，而不是一个页面动作。
+        titleAdornment={<RouteModeSwitch />}
+        description={t('router.workflow.description')}
         // 说明文案保持单行截断：标题栏高度固定，画布高度才不会随文案换行变化。
         className="[&_p]:truncate"
         actions={(
@@ -714,12 +719,12 @@ function WorkflowStudioCanvas() {
           <div className="flex items-center gap-2">
             <PolicyMenu activePolicyId={activePolicyId} onApply={applyPolicy} />
             <WorkflowButton size="medium" onClick={() => setTestDrawerOpen(true)}>
-              <CirclePlay className="size-3.5" aria-hidden /> {t('router.run')}
+              <CirclePlay className="size-3.5" aria-hidden /> {t('router.workflow.run')}
             </WorkflowButton>
             <WorkflowButton size="medium" variant="primary" onClick={() => setSaveDialogOpen(true)} disabled={!canSaveWorkflow}>
               <Save className="size-3.5" aria-hidden /> {t('router.save')}
             </WorkflowButton>
-            <VersionMenu versions={versions} onRestore={restoreVersion} />
+            <VersionMenu versions={versions} itemUnitKey="router.version.unit.nodes" onRestore={restoreVersion} />
           </div>
         )}
       />
@@ -864,7 +869,7 @@ function WorkflowStudioCanvas() {
       <Drawer open={testDrawerOpen} onOpenChange={setTestDrawerOpen} direction="right">
         <DrawerContent className="workflow-test-drawer workflow-ui-surface h-full w-208! max-w-[90vw]! border-l-[0.5px] border-components-panel-border bg-components-panel-bg">
           <DrawerHeader>
-            <DrawerTitle className="flex items-center gap-2"><ArrowRight className="size-4" /> {t('router.run')}</DrawerTitle>
+            <DrawerTitle className="flex items-center gap-2"><ArrowRight className="size-4" /> {t('router.workflow.run')}</DrawerTitle>
             <DrawerDescription>{t('router.runPanel.description')}</DrawerDescription>
           </DrawerHeader>
 
@@ -947,8 +952,9 @@ function WorkflowStudioCanvas() {
           </div>
 
           <DrawerFooter className="flex-row justify-end">
-            <WorkflowButton size="medium" variant="primary" onClick={runLocalTest}>{t('router.runPanel.run')}</WorkflowButton>
+            {/* 关闭在左、主操作在右：与规则模式那个试运行抽屉摆同一个位置，换个模式不用重新找按钮。 */}
             <WorkflowButton size="medium" onClick={() => setTestDrawerOpen(false)}>{t('common.action.close')}</WorkflowButton>
+            <WorkflowButton size="medium" variant="primary" onClick={runLocalTest}>{t('router.runPanel.run')}</WorkflowButton>
           </DrawerFooter>
         </DrawerContent>
       </Drawer>
@@ -957,6 +963,7 @@ function WorkflowStudioCanvas() {
       <SaveVersionDialog
         open={saveDialogOpen}
         nextVersion={nextVersion}
+        description={t('router.saveDialog.description')}
         initialName={versionDraftDefaults.name}
         initialDescription={versionDraftDefaults.description}
         saving={saving}
@@ -968,6 +975,18 @@ function WorkflowStudioCanvas() {
 }
 
 export function RouterPage() {
+  const { mode } = useRouteMode()
+
+  /**
+   * 两个工作台按当前生效的模式二选一挂载，而不是同时挂着再藏一个。
+   *
+   * 未生效的那份定义因此连拉取都不会发生 —— 「同一时刻只有一种生效」在界面上就是这条规则。
+   * 模式本身由页头的 `RouteModeSwitch` 自己读、自己开弹窗，不再经由这一层往下传。
+   */
+  if (mode === 'rules') {
+    return <RouteRulesStudio />
+  }
+
   return (
     <ReactFlowProvider>
       <WorkflowStudioCanvas />
