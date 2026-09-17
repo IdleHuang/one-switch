@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { RequestLogEntry } from './schemas'
 import {
-  averageOutputDisplayParts,
-  averageOutputTokensPerRequest,
+  averageOutputTokensPerCall,
   averageOutputTokensPerSecond,
+  cacheHitRate,
   formatAverageOutput,
   formatMilliseconds,
   formatOutputSpeed,
@@ -207,19 +207,21 @@ describe('output speed display', () => {
   })
 })
 
-describe('average output per request', () => {
-  it('divides total output tokens by the total request count', () => {
-    expect(averageOutputTokensPerRequest(3400, 10)).toBeCloseTo(340, 6)
-    expect(averageOutputTokensPerRequest(0, 10)).toBe(0)
+describe('average output per call', () => {
+  it('divides total output tokens by the call count', () => {
+    expect(averageOutputTokensPerCall(3400, 10)).toBeCloseTo(340, 6)
+    expect(averageOutputTokensPerCall(0, 10)).toBe(0)
   })
 
-  it('returns null instead of zero when there were no requests', () => {
-    expect(averageOutputTokensPerRequest(500, 0)).toBeNull()
+  it('returns null instead of zero when there were no calls', () => {
+    expect(averageOutputTokensPerCall(500, 0)).toBeNull()
   })
 
-  it('counts every request, successful or not', () => {
-    // 分子是全部输出之和、分母是全部请求，两者同一批样本：10 个请求产出 800 Token。
-    expect(averageOutputTokensPerRequest(800, 10)).toBeCloseTo(80, 6)
+  it('serves both calibers: window totals and one model row', () => {
+    // 请求级：分子是全部输出之和、分母是全部请求（不区分成功与否），两者同一批样本。
+    expect(averageOutputTokensPerCall(800, 10)).toBeCloseTo(80, 6)
+    // 模型行：分子只含成功调用的输出，分母就必须是成功调用数。
+    expect(averageOutputTokensPerCall(800, 8)).toBeCloseTo(100, 6)
   })
 
   it('keeps one decimal below ten and rounds above it', () => {
@@ -233,15 +235,23 @@ describe('average output per request', () => {
     expect(formatAverageOutput(Number.NaN)).toBe('—')
   })
 
-  it('hands animations the same split between value and decimals', () => {
-    expect(averageOutputDisplayParts(8.34)).toEqual({ value: 8.34, decimalPlaces: 1 })
-    expect(averageOutputDisplayParts(80.34)).toEqual({ value: 80.34, decimalPlaces: 0 })
-    expect(averageOutputDisplayParts(null)).toBeNull()
-  })
-
   it('shares the magnitude rule with the output speed', () => {
     expect(magnitudeDecimalPlaces(9.9)).toBe(1)
     expect(magnitudeDecimalPlaces(10)).toBe(0)
     expect(magnitudeDecimalPlaces(1_200)).toBe(0)
+  })
+})
+
+describe('cache hit rate', () => {
+  it('divides cached input tokens by the total input tokens', () => {
+    expect(cacheHitRate(300, 1000)).toBeCloseTo(0.3, 6)
+  })
+
+  it('returns zero when input was read but nothing was cached', () => {
+    expect(cacheHitRate(0, 1000)).toBe(0)
+  })
+
+  it('returns null instead of zero when there was no input', () => {
+    expect(cacheHitRate(0, 0)).toBeNull()
   })
 })

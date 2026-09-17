@@ -4,7 +4,7 @@ import type { ManagementHandler } from '../../core/response'
 import { sendError, sendSuccess } from '../../core/response'
 import { AnalyticsRangeSchema, type AnalyticsSummary, type ModelStat, type ProviderAnalyticsDetail } from '@common/schemas'
 import { resolveAnalyticsBuckets } from '@common/analytics-buckets'
-import { tokensPerSecondFromTotals } from '@common/metrics'
+import { averageOutputTokensPerCall, cacheHitRate, tokensPerSecondFromTotals } from '@common/metrics'
 import {
   getStatsSummary,
   getUsageTrend,
@@ -144,7 +144,10 @@ function mapModelStat(model: DatabaseModelStat): ModelStat {
     // 参数由数据库成对选出：分子是这批尝试的输出 Token，分母是同一批尝试的整段耗时。
     avgTps: tokensPerSecondFromTotals(model.speedOutputTokens, model.speedDurationMs),
     successRate: model.attempts > 0 ? model.success / model.attempts : 0,
+    // 平均输出的分母是**成功调用数**而不是 `attempts`：`outputTokens` 由 `successOnly` 选出，
+    // 只含成功尝试的输出；分母换成全部尝试会让比值被失败尝试压低，分子分母就不同源了。
+    avgOutputTokens: averageOutputTokensPerCall(model.outputTokens, model.success),
     // 缓存读取量本就是输入量的一部分，同口径相除才是命中率。
-    cacheHitRate: model.inputTokens > 0 ? model.cachedInputTokens / model.inputTokens : null,
+    cacheHitRate: cacheHitRate(model.cachedInputTokens, model.inputTokens),
   }
 }

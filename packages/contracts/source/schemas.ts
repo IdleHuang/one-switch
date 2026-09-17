@@ -725,11 +725,17 @@ export const StatsSummarySchema = z.object({
    */
   inputTokens: z.number().int().nonnegative(),
   /**
-   * 输出 Token 总量。与 `totalRequests` 一起构成「单次请求平均输出」的分子与分母。
+   * 输出 Token 总量。与 `inputTokens` 一起构成「Token 消耗」的加数。
    */
   outputTokens: z.number().int().nonnegative(),
   /** 输入 + 输出，派生值；卡片上的「Token 消耗」。 */
   totalTokens: z.number().int().nonnegative(),
+  /**
+   * 缓存命中率：缓存读取 Token ÷ `inputTokens`（后者本就含缓存读取）。
+   *
+   * 窗口内输入为 0 时为 `null`：没测到不是命中率为零。口径见 `@common/metrics` 的 `cacheHitRate`。
+   */
+  cacheHitRate: z.number().min(0).max(1).nullable(),
 })
 export type StatsSummary = z.infer<typeof StatsSummarySchema>
 
@@ -777,6 +783,13 @@ export const ModelStatSchema = z.object({
   avgLatencyMs: z.number().nonnegative(),
   avgTtftMs: z.number().nonnegative().nullable(),
   avgTps: z.number().nonnegative().nullable(),
+  /**
+   * 平均输出 Token：该模型成功调用的输出总量 ÷ 成功调用数。
+   *
+   * 分子只含成功调用的输出（见 `analytics-store` 的 `successOnly`），分母就必须是成功调用数——
+   * 拿它去除以全部调用会让比值被单方面压低。没有成功调用时为 `null`。
+   */
+  avgOutputTokens: z.number().nonnegative().nullable(),
   cacheHitRate: z.number().min(0).max(1).nullable(),
 })
 export type ModelStat = z.infer<typeof ModelStatSchema>
