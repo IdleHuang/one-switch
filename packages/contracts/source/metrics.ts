@@ -153,12 +153,19 @@ export function formatMilliseconds(value: number | null | undefined): string {
 }
 
 /**
- * 输出速度的展示小数位：两位数以上取整，个位数保留一位小数。
+ * 量级决定的小数位：10 及以上取整，10 以下保留一位小数。
  *
  * 10 以下的差别是有信息的（3.3 与 4.7 是两种速度），10 以上再带小数只剩噪声。
+ * 这条规则同时管着输出速度与平均输出——**同一个数在一处写 `24.0`、在另一处写 `24`
+ * 就会被读成两个数**，所以取舍只能有一处。
  */
+export function magnitudeDecimalPlaces(value: number): number {
+  return value >= 10 ? 0 : 1
+}
+
+/** 输出速度的展示小数位（取舍规则见 {@link magnitudeDecimalPlaces}）。 */
 export function outputSpeedDecimalPlaces(tokensPerSecond: number): number {
-  return tokensPerSecond >= 10 ? 0 : 1
+  return magnitudeDecimalPlaces(tokensPerSecond)
 }
 
 /**
@@ -169,4 +176,41 @@ export function outputSpeedDecimalPlaces(tokensPerSecond: number): number {
 export function formatOutputSpeed(tokensPerSecond: number | null | undefined): string {
   if (tokensPerSecond == null || !Number.isFinite(tokensPerSecond)) return '—'
   return tokensPerSecond.toFixed(outputSpeedDecimalPlaces(tokensPerSecond))
+}
+
+/**
+ * 单次请求的平均输出 Token：同一时间窗内的输出 Token 总量 ÷ 请求总数。
+ *
+ * 分子是**所有请求的输出之和**，不区分成功与否——分母是窗口里的全部请求，
+ * 分子就必须是这些请求产出的全部输出，两边是同一批样本；请求级聚合天然满足这一点。
+ *
+ * 它回答「一次请求平均产出多少内容」，与响应体量成正比不是缺陷，正是它的定义。
+ *
+ * 请求数为 0 时返回 `null` 而不是 0：没有请求就是「没测到」，不是「平均输出为零」。
+ * 有请求但输出为 0 时返回 0，那是真实的「测得 0」。
+ */
+export function averageOutputTokensPerRequest(outputTokens: number, totalRequests: number): number | null {
+  if (!(totalRequests > 0)) return null
+  return outputTokens / totalRequests
+}
+
+/**
+ * 平均输出的展示分解：显示的数值与小数位。
+ *
+ * {@link formatAverageOutput} 是它的文本形态，两者共用同一套取舍规则
+ * （见 {@link magnitudeDecimalPlaces}）。没有样本时为 `null`——界面据此写 `—`，而不是 `0`。
+ */
+export function averageOutputDisplayParts(value: number | null | undefined): { value: number; decimalPlaces: number } | null {
+  if (value == null || !Number.isFinite(value)) return null
+  return { value, decimalPlaces: magnitudeDecimalPlaces(value) }
+}
+
+/**
+ * 单次请求平均输出的文本形态。
+ *
+ * 没有样本时写 `—`，不写 `0`——「没测到」和「测得 0」必须在界面上分得开。
+ */
+export function formatAverageOutput(value: number | null | undefined): string {
+  const parts = averageOutputDisplayParts(value)
+  return parts ? parts.value.toFixed(parts.decimalPlaces) : '—'
 }

@@ -41,7 +41,8 @@ export interface StatsSummary {
   successCount: number
   failedCount: number
   successRate: number
-  avgLatencyMs: number
+  inputTokens: number
+  outputTokens: number
   totalTokens: number
 }
 
@@ -52,26 +53,33 @@ export async function getStatsSummary(sinceMs: number): Promise<StatsSummary> {
       total: sql<number>`count(*)`.as('total'),
       success: sql<number>`sum(case when ${requestLogs.status} = 'success' then 1 else 0 end)`.as('success'),
       failed: sql<number>`sum(case when ${requestLogs.status} = 'failed' then 1 else 0 end)`.as('failed'),
-      // 总耗时已经是请求表自己的列；进行中的请求还没有结果，不参与平均。
-      avgLatency: sql<number>`avg(case when ${requestLogs.status} <> 'pending' then ${requestLogs.totalDurationMilliseconds} end)`.as('avgLatency'),
     })
     .from(requestLogs)
     .where(sql`${requestLogs.createdTime} >= ${sinceMs}`)
     .get()
-  // 总 token 是派生值：输入 + 输出。只对数值类型求和，原始报文行不参与。
+  // 用量拆成两个合计值取，而不是先合再分：界面要的「单次请求平均输出」是输出 ÷ 请求数，
+  // 分子与分母必须是**同一批样本**的两个总量，同一次扫描同时取出才不会各写一份筛选条件。
+  //
+  // 逐类型取值意味着 `raw` 行（上游原始报文，数值列为 NULL）不会进入任何一列。
   //
   // 这里不再连 `request_logs`：`request_usages` 本来就是请求级视角
   // （服务该请求的那次尝试写入时把它镜像过来），它的 `createdTime` 必然不早于
   // 请求的创建时间，所以按同一时间窗过滤得到的就是同一批行，少一次 join 就少一次全表扫描。
   const usageResult = db
-    .select({ tokens: sql<number>`coalesce(sum(${TOTAL_REQUEST_TOKENS}), 0)`.as('tokens') })
+    .select({
+      inputTokens: sql<number>`coalesce(sum(case when ${requestUsages.type} = 'inputTokens' then ${requestUsages.value} else 0 end), 0)`.as('inputTokens'),
+      outputTokens: sql<number>`coalesce(sum(case when ${requestUsages.type} = 'outputTokens' then ${requestUsages.value} else 0 end), 0)`.as('outputTokens'),
+    })
     .from(requestUsages)
     .where(gte(requestUsages.createdTime, sinceMs))
     .get()
   const total = result?.total ?? 0
   const success = result?.success ?? 0
   const failed = result?.failed ?? 0
-  return { totalRequests: total, successCount: success, failedCount: failed, successRate: total > 0 ? success / total : 0, avgLatencyMs: result?.avgLatency ?? 0, totalTokens: usageResult?.tokens ?? 0 }
+  const inputTokens = usageResult?.inputTokens ?? 0
+  const outputTokens = usageResult?.outputTokens ?? 0
+  // 总 token 是派生值：输入 + 输出。两个加数来自同一次扫描，合计与两列必然自洽。
+  return { totalRequests: total, successCount: success, failedCount: failed, successRate: total > 0 ? success / total : 0, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }
 }
 
 /** SQL 侧只能产出用量列：标签属于桶清单，由 JS 在补齐空桶时赋上。 */

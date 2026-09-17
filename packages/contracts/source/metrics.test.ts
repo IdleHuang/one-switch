@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { RequestLogEntry } from './schemas'
 import {
+  averageOutputDisplayParts,
+  averageOutputTokensPerRequest,
   averageOutputTokensPerSecond,
+  formatAverageOutput,
   formatMilliseconds,
   formatOutputSpeed,
+  magnitudeDecimalPlaces,
   millisecondsDisplayParts,
   outputSpeedDecimalPlaces,
   outputSpeedSampleOf,
@@ -200,5 +204,44 @@ describe('output speed display', () => {
   it('exposes the decimal rule so animated numbers match the text', () => {
     expect(outputSpeedDecimalPlaces(9.6)).toBe(1)
     expect(outputSpeedDecimalPlaces(10)).toBe(0)
+  })
+})
+
+describe('average output per request', () => {
+  it('divides total output tokens by the total request count', () => {
+    expect(averageOutputTokensPerRequest(3400, 10)).toBeCloseTo(340, 6)
+    expect(averageOutputTokensPerRequest(0, 10)).toBe(0)
+  })
+
+  it('returns null instead of zero when there were no requests', () => {
+    expect(averageOutputTokensPerRequest(500, 0)).toBeNull()
+  })
+
+  it('counts every request, successful or not', () => {
+    // 分子是全部输出之和、分母是全部请求，两者同一批样本：10 个请求产出 800 Token。
+    expect(averageOutputTokensPerRequest(800, 10)).toBeCloseTo(80, 6)
+  })
+
+  it('keeps one decimal below ten and rounds above it', () => {
+    expect(formatAverageOutput(8.34)).toBe('8.3')
+    expect(formatAverageOutput(80.34)).toBe('80')
+  })
+
+  it('writes a dash, not a zero, when there is no sample', () => {
+    expect(formatAverageOutput(null)).toBe('—')
+    expect(formatAverageOutput(undefined)).toBe('—')
+    expect(formatAverageOutput(Number.NaN)).toBe('—')
+  })
+
+  it('hands animations the same split between value and decimals', () => {
+    expect(averageOutputDisplayParts(8.34)).toEqual({ value: 8.34, decimalPlaces: 1 })
+    expect(averageOutputDisplayParts(80.34)).toEqual({ value: 80.34, decimalPlaces: 0 })
+    expect(averageOutputDisplayParts(null)).toBeNull()
+  })
+
+  it('shares the magnitude rule with the output speed', () => {
+    expect(magnitudeDecimalPlaces(9.9)).toBe(1)
+    expect(magnitudeDecimalPlaces(10)).toBe(0)
+    expect(magnitudeDecimalPlaces(1_200)).toBe(0)
   })
 })

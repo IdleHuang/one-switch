@@ -188,7 +188,7 @@ describe('analytics route', () => {
     const payload = responseData(res) as {
       success: boolean
       data: {
-        summary: { totalRequests: number; failedCount: number }
+        summary: { totalRequests: number; failedCount: number; inputTokens: number; outputTokens: number; totalTokens: number }
         trendIntervalMs: number
         providerStats: Array<{ providerId: string; percent: number }>
         modelStats: Array<{ providerModelName: string; successRate: number; avgTps: number | null }>
@@ -201,6 +201,9 @@ describe('analytics route', () => {
     expect(payload.data.trendIntervalMs).toBe(budget.trendIntervalMs)
     expect(payload.data.summary.totalRequests).toBeGreaterThanOrEqual(2)
     expect(payload.data.summary.failedCount).toBeGreaterThanOrEqual(1)
+    // 平均输出的分子分母必须同源：失败尝试只在尝试级留下数字，请求级用量只有成功那一次
+    // 镜像过来的 100 输入 / 20 输出，所以卡片的两个总量与它们的合计都要对得上。
+    expect(payload.data.summary).toMatchObject({ inputTokens: 100, outputTokens: 20, totalTokens: 120 })
     expect(payload.data.providerStats).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: provider.id })]))
     // 速度的分母是整段尝试耗时 1500ms，首字等待不扣：20 / 1.5 = 13.33…；
     // 失败的尝试不参与速度——它没有完整输出，也就没有可比的产出速率。
