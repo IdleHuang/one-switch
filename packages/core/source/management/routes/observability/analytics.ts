@@ -138,7 +138,6 @@ function mapModelStat(model: DatabaseModelStat): ModelStat {
     providerName: model.providerName,
     attempts: model.attempts,
     success: model.success,
-    avgLatencyMs: model.avgLatencyMs,
     avgTtftMs: model.avgTtftMs,
     // 输出速度的公式只写在 `@common/metrics` 里，这里只是把同一批尝试的两个合计值送进去。
     // 参数由数据库成对选出：分子是这批尝试的输出 Token，分母是同一批尝试的整段耗时。

@@ -226,7 +226,7 @@ describe('analytics route', () => {
     const detailPayload = responseData(detailRes) as {
       success: boolean
       data: {
-        summary: { attempts: number; success: number; failed: number; totalTokens: number }
+        summary: { attempts: number; success: number; failed: number; cacheHitRate: number | null; totalTokens: number }
         trendIntervalMs: number
         requestTrend: Array<{ success: number; failed: number; avgLatencyMs: number }>
         tokenTrend: Array<{ inputTokens: number; outputTokens: number }>
@@ -237,10 +237,10 @@ describe('analytics route', () => {
     }
     expect(detailPayload.success).toBe(true)
     expect(detailPayload.data.trendIntervalMs).toBe(budget.trendIntervalMs)
-    expect(detailPayload.data.summary).toEqual(expect.objectContaining({ attempts: 2, success: 1, failed: 1, totalTokens: 160 }))
+    expect(detailPayload.data.summary).toEqual(expect.objectContaining({ attempts: 2, success: 1, failed: 1, cacheHitRate: 0.25, totalTokens: 160 }))
     expect(detailPayload.data.requestTrend.reduce((total, point) => total + point.success + point.failed, 0)).toBe(2)
     expect(detailPayload.data.tokenTrend.reduce((total, point) => total + point.inputTokens + point.outputTokens, 0)).toBe(160)
-    // 首字分布只统计成功的尝试，与 avgLatencyMs / avgTtftMs 同一口径；
+    // 首字分布只统计成功的尝试，与模型表的 `avgTtftMs` 同一口径；
     // 空档会一并返回，所以只盯有样本的那一格。
     expect(detailPayload.data.latencyDistribution.filter(bucket => bucket.count > 0)).toEqual([
       expect.objectContaining({ count: 1, percent: 100 }),
@@ -330,9 +330,10 @@ describe('analytics route', () => {
 
     const firstDetailRes = mockResponse()
     await analyticsRoutes.invoke('/api/analytics/provider-detail', firstDetailRes, { providerId: firstProvider.id, range: '7d' })
-    const firstDetail = responseData(firstDetailRes) as { data: { summary: { attempts: number; success: number; failed: number; avgLatencyMs: number; totalTokens: number }; models: Array<{ providerModelId: string; success: number; avgLatencyMs: number }>; latencyDistribution: Array<{ count: number }>; failureReasons: Array<{ reason: string }> } }
-    expect(firstDetail.data.summary).toEqual(expect.objectContaining({ attempts: 1, success: 0, failed: 1, avgLatencyMs: 0, totalTokens: 0 }))
-    expect(firstDetail.data.models).toEqual([expect.objectContaining({ providerModelId: 'model_first', success: 0, avgLatencyMs: 0 })])
+    const firstDetail = responseData(firstDetailRes) as { data: { summary: { attempts: number; success: number; failed: number; cacheHitRate: number | null; totalTokens: number }; models: Array<{ providerModelId: string; success: number; cacheHitRate: number | null }>; latencyDistribution: Array<{ count: number }>; failureReasons: Array<{ reason: string }> } }
+    // 两次尝试都是「没有输出的失败」，没有任何输入 Token，命中率因此是 null 而不是 0。
+    expect(firstDetail.data.summary).toEqual(expect.objectContaining({ attempts: 1, success: 0, failed: 1, cacheHitRate: null, totalTokens: 0 }))
+    expect(firstDetail.data.models).toEqual([expect.objectContaining({ providerModelId: 'model_first', success: 0, cacheHitRate: null })])
     expect(firstDetail.data.latencyDistribution.reduce((total, bucket) => total + bucket.count, 0)).toBe(1)
     expect(firstDetail.data.failureReasons).toEqual([])
 

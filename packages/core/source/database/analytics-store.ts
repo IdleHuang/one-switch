@@ -290,20 +290,29 @@ export async function getRequestSourceStats(sinceMs: number, limit = 20): Promis
 // `(providerId, createdTime)` 索引——按请求表过滤时，SQLite 只能先按 providerId
 // 把该提供方的全部历史尝试捞出来，再逐行回查请求与时间窗比对，代价与时间窗无关。
 
-/** 提供方统计的「一次调用」以「一次上游尝试」为单位，字段名因此叫 attempts。 */
-export interface ProviderStat { providerId: string; providerName: string; attempts: number; success: number; failed: number; avgLatencyMs: number }
+/**
+ * 提供方统计的「一次调用」以「一次上游尝试」为单位，字段名因此叫 attempts。
+ *
+ * 命中率与模型表同一口径：分子分母都取**成功的尝试**（见 `getModelStats` 的 `successOnly`）。
+ * 失败尝试的上游用量要么根本没有、要么只覆盖半截响应，算进分母会让命中率随失败率一起漂移。
+ */
+export interface ProviderStat { providerId: string; providerName: string; attempts: number; success: number; failed: number; cacheHitRate: number | null }
 
-const providerStatSelect = {
-  providerId: requestAttempts.providerId,
-  // 分组键（providerId）已经确定了名称，直接把它带出来即可，不必每行再回查一次。
-  providerName: sql<string>`max(${requestAttempts.providerName})`.as('providerName'),
-  attempts: sql<number>`count(*)`.as('attempts'),
-  success: sql<number>`sum(case when ${requestAttempts.status} = 'success' then 1 else 0 end)`.as('success'),
-  failed: sql<number>`sum(case when ${requestAttempts.status} = 'failed' then 1 else 0 end)`.as('failed'),
-  avgLatency: sql<number>`avg(case when ${requestAttempts.status} = 'success' then ${requestAttempts.durationMilliseconds} end)`.as('avgLatency'),
+function providerStatSelect(pivot: AttemptUsagePivot) {
+  const successOnly = (type: UsageTokenType) => sql<number>`coalesce(sum(case when ${requestAttempts.status} = 'success' then ${pivot[type]} else 0 end), 0)`
+  return {
+    providerId: requestAttempts.providerId,
+    // 分组键（providerId）已经确定了名称，直接把它带出来即可，不必每行再回查一次。
+    providerName: sql<string>`max(${requestAttempts.providerName})`.as('providerName'),
+    attempts: sql<number>`count(*)`.as('attempts'),
+    success: sql<number>`sum(case when ${requestAttempts.status} = 'success' then 1 else 0 end)`.as('success'),
+    failed: sql<number>`sum(case when ${requestAttempts.status} = 'failed' then 1 else 0 end)`.as('failed'),
+    cachedInputTokens: successOnly('cachedInputTokens').as('cachedInputTokens'),
+    inputTokens: successOnly('inputTokens').as('inputTokens'),
+  }
 }
 
-type ProviderStatRow = { providerId: string; providerName: string; attempts: number | null; success: number | null; failed: number | null; avgLatency: number | null }
+type ProviderStatRow = { providerId: string; providerName: string; attempts: number | null; success: number | null; failed: number | null; cachedInputTokens: number | null; inputTokens: number | null }
 
 function normalizeDevelopmentProviderName(providerId: string, providerName: string): string {
   // 开发种子数据给提供方名带过 `（开发示例）` 后缀，库里可能还留着这样的行，读的时候就地去掉。
@@ -311,16 +320,34 @@ function normalizeDevelopmentProviderName(providerId: string, providerName: stri
 }
 
 function mapProviderStat(row: ProviderStatRow): ProviderStat {
-  return { providerId: row.providerId, providerName: normalizeDevelopmentProviderName(row.providerId, row.providerName), attempts: row.attempts ?? 0, success: row.success ?? 0, failed: row.failed ?? 0, avgLatencyMs: row.avgLatency ?? 0 }
+  return {
+    providerId: row.providerId,
+    providerName: normalizeDevelopmentProviderName(row.providerId, row.providerName),
+    attempts: row.attempts ?? 0,
+    success: row.success ?? 0,
+    failed: row.failed ?? 0,
+    cacheHitRate: cacheHitRate(row.cachedInputTokens ?? 0, row.inputTokens ?? 0),
+  }
 }
 
 export async function getProviderStats(sinceMs: number): Promise<ProviderStat[]> {
-  const rows = getDataDb().select(providerStatSelect).from(requestAttempts).where(gte(requestAttempts.createdTime, sinceMs)).groupBy(requestAttempts.providerId).orderBy(sql`attempts desc`).all()
+  const pivot = buildAttemptUsagePivot(sinceMs)
+  const rows = getDataDb().select(providerStatSelect(pivot)).from(requestAttempts)
+    .leftJoin(pivot, eq(pivot.attemptId, requestAttempts.id))
+    .where(gte(requestAttempts.createdTime, sinceMs))
+    .groupBy(requestAttempts.providerId)
+    .orderBy(sql`attempts desc`)
+    .all()
   return rows.map(mapProviderStat)
 }
 
 export async function getProviderStat(providerId: string, sinceMs: number): Promise<ProviderStat | null> {
-  const row = getDataDb().select(providerStatSelect).from(requestAttempts).where(and(eq(requestAttempts.providerId, providerId), gte(requestAttempts.createdTime, sinceMs))).groupBy(requestAttempts.providerId).get()
+  const pivot = buildAttemptUsagePivot(sinceMs)
+  const row = getDataDb().select(providerStatSelect(pivot)).from(requestAttempts)
+    .leftJoin(pivot, eq(pivot.attemptId, requestAttempts.id))
+    .where(and(eq(requestAttempts.providerId, providerId), gte(requestAttempts.createdTime, sinceMs)))
+    .groupBy(requestAttempts.providerId)
+    .get()
   return row ? mapProviderStat(row) : null
 }
 
@@ -410,7 +437,7 @@ function normalizeProviderRequestTrendPoint(row: ProviderTrendRow): ProviderRequ
  * 失败尝试既没有可用输出也没有完整耗时，混进来会让平均与比率失真（尤其是
  * 以尝试耗时作分母的 TPS）。
  */
-export interface ModelStat { providerModelId: string; providerModelName: string; providerId: string; providerName: string; attempts: number; success: number; avgLatencyMs: number; avgTtftMs: number | null; cachedInputTokens: number; inputTokens: number; outputTokens: number; speedOutputTokens: number; speedDurationMs: number }
+export interface ModelStat { providerModelId: string; providerModelName: string; providerId: string; providerName: string; attempts: number; success: number; avgTtftMs: number | null; cachedInputTokens: number; inputTokens: number; outputTokens: number; speedOutputTokens: number; speedDurationMs: number }
 
 export async function getModelStats(sinceMs: number, limit = 10, providerId?: string): Promise<ModelStat[]> {
   // 时间窗同样按尝试表自己的 `createdTime` 收窄（等价性见 `getProviderStats` 上方注释）：
@@ -438,7 +465,6 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
     latestAttemptCreatedTime: sql<number>`max(${requestAttempts.createdTime})`.as('latestAttemptCreatedTime'),
     attempts: sql<number>`count(*)`.as('attempts'),
     success: sql<number>`sum(case when ${requestAttempts.status} = 'success' then 1 else 0 end)`.as('success'),
-    avgLatency: sql<number>`avg(case when ${requestAttempts.status} = 'success' then ${requestAttempts.durationMilliseconds} end)`.as('avgLatency'),
     avgTtft: sql<number>`avg(case when ${requestAttempts.status} = 'success' then ${requestAttempts.ttftMilliseconds} end)`.as('avgTtft'),
     cachedInputTokens: successOnly('cachedInputTokens').as('cachedInputTokens'),
     inputTokens: successOnly('inputTokens').as('inputTokens'),
@@ -458,7 +484,7 @@ export async function getModelStats(sinceMs: number, limit = 10, providerId?: st
     .orderBy(sql`attempts desc, ${requestAttempts.providerModelId} asc`)
     .limit(limit)
     .all()
-  return rows.map(row => ({ providerModelId: row.providerModelId, providerModelName: row.providerModelName, providerId: row.providerId, providerName: normalizeDevelopmentProviderName(row.providerId, row.providerName), attempts: row.attempts ?? 0, success: row.success ?? 0, avgLatencyMs: row.avgLatency ?? 0, avgTtftMs: row.avgTtft ?? null, cachedInputTokens: row.cachedInputTokens ?? 0, inputTokens: row.inputTokens ?? 0, outputTokens: row.outputTokens ?? 0, speedOutputTokens: row.speedOutputTokens ?? 0, speedDurationMs: row.speedDurationMs ?? 0 }))
+  return rows.map(row => ({ providerModelId: row.providerModelId, providerModelName: row.providerModelName, providerId: row.providerId, providerName: normalizeDevelopmentProviderName(row.providerId, row.providerName), attempts: row.attempts ?? 0, success: row.success ?? 0, avgTtftMs: row.avgTtft ?? null, cachedInputTokens: row.cachedInputTokens ?? 0, inputTokens: row.inputTokens ?? 0, outputTokens: row.outputTokens ?? 0, speedOutputTokens: row.speedOutputTokens ?? 0, speedDurationMs: row.speedDurationMs ?? 0 }))
 }
 
 export interface LatencyBucket { range: string; count: number }
@@ -496,7 +522,7 @@ function getTtftP95(filters: SQL[]): number | null {
 // （`request_attempts.ttftMilliseconds`），只有这样才能把它正确地归到
 // 真正产生这段输出的提供方身上。使用请求级指标 + EXISTS 会让一次失败转
 // 移的请求同时计入它尝试过的每一个提供方。
-// 只看成功的尝试与 `avgLatencyMs` 保持同一口径：首字已经到达但随后失败的
+// 只看成功的尝试与 `avgTtftMs` 保持同一口径：首字已经到达但随后失败的
 // 尝试，代表不了一次可用的响应。
 //
 // 分桶直接在 SQL 里做：`group by 桶号` 只为出现过的桶返回一行。
