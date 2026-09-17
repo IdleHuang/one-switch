@@ -16,7 +16,9 @@ const appDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const repositoryRoot = path.resolve(appDirectory, '..', '..')
 const outputDirectory = path.join(appDirectory, 'dist', 'command')
 const mainBundlePath = path.join(outputDirectory, 'index.js')
-// 服务进程的入口。它必须在，否则 Electron 一起来就会因为找不到服务脚本而报错。
+// preload 与服务进程的入口也必须在，两个名字都是运行期约定（由各自的 vite 配置钉死）：
+// preload 缺了窗口没有桥，服务脚本缺了核心起不来。
+const preloadBundlePath = path.join(outputDirectory, 'preload.js')
 const serviceBundlePath = path.join(outputDirectory, 'service-main.mjs')
 
 // 渲染层 dev server 地址。`packages/console/vite.config.ts` 里端口是写死的（strictPort），
@@ -49,9 +51,9 @@ async function waitForConsoleServer() {
   throw new Error(`Console dev server is not reachable at ${consoleDevUrl}`)
 }
 
-/** 本包三份产物的第一份就绪信号。缺一个就不用起 Electron 了。 */
+/** 本包三份产物的就绪信号。缺一个就不用起 Electron 了。 */
 async function waitForBundles() {
-  const required = [mainBundlePath, serviceBundlePath]
+  const required = [mainBundlePath, preloadBundlePath, serviceBundlePath]
   for (let attempt = 1; attempt <= 1200; attempt += 1) {
     if (required.every(bundle => fs.existsSync(bundle))) return
     await sleep(100)

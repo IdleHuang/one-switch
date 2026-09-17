@@ -11,8 +11,8 @@ export const preloadEntry = fileURLToPath(new URL('./source/preload.ts', import.
 // 核心服务进程入口。产物落在 `dist/command` 里，和主进程同一层，理由是这里的路径都是
 // `__dirname` 相关的运行期路径，typecheck / lint / 单测都照不到：
 //   - 迁移基线：`packages/core/source/database/index.ts` 从 `import.meta.url` 往上找
-//     `packages/core/drizzle`。放在 `dist/command/` 时上两层正好是应用根（打包态是
-//     asar 根，开发态是仓库根），和主进程用的是同一个起点。
+//     `packages/core/drizzle`。放在 `dist/command/` 就和主进程同深度，两者不会因为
+//     一方挪了目录而各上溯不同的层数（开发态再往上才是仓库根，打包态到 asar 根）。
 //   - 入口名是运行期约定：`server-host.ts` 按名字找 `service-main.mjs`
 //     （名字由 `vite.server.config.ts` 的 `entryFileNames` 钉死）。
 export const serviceEntry = fileURLToPath(new URL('./source/service.ts', import.meta.url))

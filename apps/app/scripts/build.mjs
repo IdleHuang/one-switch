@@ -6,7 +6,7 @@ import { run } from '../../../packages/toolkit/scripts/lib/run.mjs'
 
 // 宿主构建。
 //
-//   node scripts/build.mjs                    只构建主进程与 preload
+//   node scripts/build.mjs                    只构建本包的三份产物（主进程、preload、服务进程）
 //   node scripts/build.mjs --package          构建后交给 electron-builder 打包
 //   node scripts/build.mjs --package --win    打包指定平台（其余参数原样透传）
 //
