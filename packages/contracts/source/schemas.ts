@@ -766,7 +766,13 @@ export const ProviderStatSchema = z.object({
   attempts: z.number().int().nonnegative(),
   success: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
-  avgLatencyMs: z.number().nonnegative(),
+  /**
+   * 缓存命中率：该提供方**成功尝试**的缓存读取 Token ÷ 输入 Token 总量。
+   *
+   * 与模型表同一口径（分子分母都只取成功的尝试）。没有输入 Token 时为 `null`，
+   * 界面写 `—`：没测到不是命中率为零。
+   */
+  cacheHitRate: z.number().min(0).max(1).nullable(),
   percent: z.number().int().min(0).max(100),
 })
 export type ProviderStat = z.infer<typeof ProviderStatSchema>
@@ -780,7 +786,6 @@ export const ModelStatSchema = z.object({
   attempts: z.number().int().nonnegative(),
   success: z.number().int().nonnegative(),
   successRate: z.number().min(0).max(1),
-  avgLatencyMs: z.number().nonnegative(),
   avgTtftMs: z.number().nonnegative().nullable(),
   avgTps: z.number().nonnegative().nullable(),
   /**
@@ -846,7 +851,7 @@ export const ProviderDetailSummarySchema = z.object({
   success: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
   successRate: z.number().min(0).max(1),
-  avgLatencyMs: z.number().nonnegative(),
+  cacheHitRate: z.number().min(0).max(1).nullable(),
   totalTokens: z.number().int().nonnegative(),
 })
 export type ProviderDetailSummary = z.infer<typeof ProviderDetailSummarySchema>
