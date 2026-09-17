@@ -19,13 +19,19 @@ export function ProviderDistribution(props: ProviderDistributionProps) {
   return (
     <Card className="min-w-70">
       <CardSectionHeader title={t('overview.providers.title')} description={t('overview.providers.description')} compact />
-      <CardContent className="pt-1">
+      {/* 不加 `pt-1`：列表区与图表区都是 `h-44`，两张卡并排时高度才能一分不差。 */}
+      <CardContent>
+        {/*
+          列表区固定 `h-44`（与右边「用量分布」的图表区同一个数）：供应商有几家、条数多少
+          都不该改变卡片高度，多了就滚动。`content-start` 是必要的——网格容器比内容高时
+          默认会把 auto 行拉满，两三条供应商之间会被撑出大段空隙。
+        */}
         {stats.length === 0 ? (
-          <div className="flex min-h-24 items-center justify-center system-xs-regular text-text-tertiary">
+          <div className="flex h-44 items-center justify-center system-xs-regular text-text-tertiary">
             {t('overview.providers.empty')}
           </div>
         ) : (
-          <div className="max-h-72 grid gap-2.5 overflow-y-auto pr-1">
+          <div className="grid h-44 content-start gap-2.5 overflow-y-auto pr-1">
             {stats.map((p, idx) => (
               <button
                 key={p.providerId}

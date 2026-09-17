@@ -54,7 +54,7 @@ export function OverviewPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_2fr]">
         <Card className="p-4">
           <Skeleton className="mb-4 h-4 w-24" />
-          <div className="space-y-3">
+          <div className="h-44 space-y-3">
             {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="flex items-center gap-2">
                 <Skeleton className="h-3 w-3 rounded-full" />
@@ -65,19 +65,22 @@ export function OverviewPage() {
           </div>
         </Card>
         {/* 用量分布：骨架照着真图的形状铺（热力图 175 格 = 25 列 × 7 行，接近 30 天的 181 格；
-            柱状图是 h-44 的一整块），卡片就不会在数据到位时跳一下高度。 */}
+            柱状图是 h-44 的一整块）。外面套的 `h-44` 与真图一致（见 `HEAT_AREA_HEIGHT`），
+            两张卡片不会在数据到位时跳一下高度。 */}
         <Card className="p-4">
           <Skeleton className="mb-2 h-4 w-24" />
           <Skeleton className="mb-3 h-3 w-40" />
-          {distributionMode === 'heatmap' ? (
-            <div className="mx-auto grid w-full gap-0.75" style={{ gridTemplateColumns: 'repeat(25, minmax(0, 1fr))' }}>
-              {Array.from({ length: 175 }).map((_, i) => (
-                <Skeleton key={i} className="aspect-square w-full rounded-[2px]" />
-              ))}
-            </div>
-          ) : (
-            <Skeleton className="h-44 w-full" />
-          )}
+          <div className="flex h-44 flex-col justify-center">
+            {distributionMode === 'heatmap' ? (
+              <div className="mx-auto grid w-full gap-0.75" style={{ gridTemplateColumns: 'repeat(25, minmax(0, 1fr))' }}>
+                {Array.from({ length: 175 }).map((_, i) => (
+                  <Skeleton key={i} className="aspect-square w-full rounded-[2px]" />
+                ))}
+              </div>
+            ) : (
+              <Skeleton className="h-44 w-full" />
+            )}
+          </div>
         </Card>
       </div>
       <div className="grid grid-cols-1 gap-4">

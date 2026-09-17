@@ -54,7 +54,15 @@ export function UsageDistribution(props: UsageDistributionProps) {
         )}
       />
       <CardContent className="min-w-0">
-        {heatmap ? <UsageHeatGrid buckets={heat} /> : <TrendBars trend={trend} />}
+        {/*
+          固定高度的图表区：两种画法的自然高度不一样（热力图按行数长、柱状图是 `h-44` 的
+          `ChartContainer`），范围一变格数也变。不锁死的话切模式、切范围时整行卡片都会跳，
+          右边这张卡还牵着左边的供应商分布一起重排。`justify-center` 让矮的那一种居中，
+          而不是贴着顶。高度值与 `HEAT_AREA_HEIGHT` / `ProviderDistribution` 是同一个数。
+        */}
+        <div className="flex h-44 min-w-0 flex-col justify-center">
+          {heatmap ? <UsageHeatGrid buckets={heat} /> : <TrendBars trend={trend} />}
+        </div>
       </CardContent>
     </Card>
   )
