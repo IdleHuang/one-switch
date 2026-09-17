@@ -2,16 +2,25 @@ import { builtinModules } from 'node:module'
 import { fileURLToPath, URL } from 'node:url'
 import type { UserConfig } from 'vite'
 
-// 主进程与 preload 是两个独立构建（输出格式不同），但共享同样的入口约定与别名。
-// 这些常量放在这里，免得两份配置各写一遍、然后慢慢长歪。
+// 主进程、preload、核心服务进程是三次独立构建（输出格式与运行环境都不同），但共享同样的
+// 入口约定与别名。这些常量放在这里，免得几份配置各写一遍、然后慢慢长歪。
 
 export const mainEntry = fileURLToPath(new URL('./source/index.ts', import.meta.url))
 export const preloadEntry = fileURLToPath(new URL('./source/preload.ts', import.meta.url))
 
+// 核心服务进程入口。产物落在 `dist/command` 里，和主进程同一层，理由是这里的路径都是
+// `__dirname` 相关的运行期路径，typecheck / lint / 单测都照不到：
+//   - 迁移基线：`packages/core/source/database/index.ts` 从 `import.meta.url` 往上找
+//     `packages/core/drizzle`。放在 `dist/command/` 时上两层正好是应用根（打包态是
+//     asar 根，开发态是仓库根），和主进程用的是同一个起点。
+//   - 入口名是运行期约定：`server-host.ts` 按名字找 `service-main.mjs`
+//     （名字由 `vite.server.config.ts` 的 `entryFileNames` 钉死）。
+export const serviceEntry = fileURLToPath(new URL('./source/service.ts', import.meta.url))
+
 // 输出目录名不是随意的。打包后这一段落在 asar 的 `dist/command`，而主进程代码用
 // `__dirname` 反推两个位置：
 //   `__dirname/..`    → `dist`，渲染层静态产物所在处（`loadFile(dist/render/index.html)`）
-//   `__dirname/../..` → 应用根，`packages/core/drizzle` 迁移基线的探测起点
+//   `__dirname/../..` → 应用根（asar 根），`packages/core/drizzle` 迁移基线的探测起点
 // 这两条都是运行期路径，typecheck / lint / 单测都看不见它们。改名必须同步改
 // `electron-builder.config.cjs` 里的映射与 `packages/core/source/database/index.ts` 的候选列表。
 export const outputDirectory = fileURLToPath(new URL('./dist/command', import.meta.url))
@@ -23,8 +32,8 @@ export const alias = {
   '@server': fileURLToPath(new URL('../../packages/core/source', import.meta.url)),
 }
 
-// 两次构建共用同一个输出目录，所以两边都不能让 Vite 清空它：任何一次 `emptyOutDir`
-// 都会抹掉另一边的产物（`--watch` 下尤其明显——改主进程会把 preload.js 删掉而不会重建）。
+// 三次构建共用同一个输出目录，所以三边都不能让 Vite 清空它：任何一次 `emptyOutDir`
+// 都会抹掉另外两边的产物（`--watch` 下尤其明显——改主进程会把 preload.js 删掉而不会重建）。
 // 清空由 `scripts/build.mjs` 在构建前统一做一次。
 //
 // `assetsInlineLimit: Infinity`：图标必须编成 data URL。托盘图标是用

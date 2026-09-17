@@ -4,7 +4,9 @@
 
 ```mermaid
 flowchart LR
-   UI[Electron 控制台 UI] --> Management[管理服务<br/>127.0.0.1:9301]
+   UI[Electron 控制台 UI] --> Host[Electron 主进程<br/>窗口 / 托盘 / 菜单 / 自动更新]
+   Host -->|RPC| Service[核心服务进程<br/>Electron utilityProcess<br/>node:sqlite 的唯一连接持有者]
+   Service --> Management[管理服务<br/>127.0.0.1:9301]
    Management --> Store[(SQLite + 密钥存储)]
    Management --> Lifecycle[代理生命周期控制]
 
@@ -18,7 +20,18 @@ flowchart LR
 
 管理服务与代理服务是两个独立的 HTTP 监听器。两者共享应用级配置和密钥存储，但代理可以单独启动、停止或重启，管理服务在此过程中持续可用。
 
-两个监听器的内部模块划分与依赖方向见 [server-architecture.md](./server-architecture.md)；代理侧的分层职责见 [proxy-engine.md](./proxy-engine.md)；代理对外可见的行为契约见 [proxy.md](./proxy.md)。
+**核心服务跑在专用子进程里（Electron `utilityProcess`），不在 Electron 主进程里。** `node:sqlite` 的 `DatabaseSync` 只有同步 API，一条聚合查询就会阻塞它所在的事件循环：实测 `/api/analytics/summary?range=30d` 打到 6.6 GB 库上时 p50 159 ms、max 330 ms，而同时段的 `/api/settings/get` 空闲时只要 1.9 ms——同一时间片里的界面与托盘全部陪等（issue #9）。所以整个 `core` 由 `utilityProcess.fork()` 起成一个真进程（入口 `dist/command/service-main.mjs`），主进程只剩这个进程的遥控器（`apps/app/source/server-host.ts`），两者之间只有 KB 级控制消息，没有请求体/响应体过线。
+
+用真进程而不是 `worker_threads` 的关键原因在打包侧：`worker_threads` 的 `fs` 没有被 Electron 的 asar 补丁包住，读不到 `app.asar` 里的文件，只能把服务代码摊到 `app.asar.unpacked`/`extraResources`；而 `utilityProcess` 走的是和主进程同一套模块加载路径，asar 原生可读，于是**所有资源重新收回 `app.asar` 一个文件**（见 [packaging.md](./packaging.md)）。代价是一次冷启动约多 100 ms。
+
+由此带来四条必须遵守的约束：
+
+- 主进程**不得** import 任何会拉起 `node:sqlite` 的模块。宿主与服务进程共享的只有类型（`packages/core/source/host/protocol.ts`），一旦那个文件出现运行期代码，整个搬家就白做。
+- 跨进程传的东西必须能结构化克隆。`startProxyServer()` 返回的 `http.Server` 带函数字段，直接 `postMessage` 会 `DataCloneError`，所以协议里这两个方法的 `result` 就是 `void`。
+- 服务进程的启动参数（dataDir、监听端口…）没有 `workerData` 可用，改为服务进程起来后的第一个动作——主动向宿主调 `runtime.config`；宿主在 `fork()` 的同一拍就把这个 handler 注册好，因此不存在启动竞态。
+- 进程隔离是双向的：服务进程崩了不会带走宿主，宿主在 `exit` 回调里按退避重启（`service-host.ts` 的 `RESTART_POLICY`），所以服务进程内 `process.exit()` 是安全的。
+
+两个监听器的内部模块划分与依赖方向见 [server-architecture.md](./server-architecture.md)；代理侧的分层职责见 [proxy-engine.md](./proxy-engine.md)；代理对外可见的行为契约见 [proxy.md](./proxy.md)；服务进程的打包与部署约束见 [packaging.md](./packaging.md)。
 
 ## 核心概念
 

@@ -14,9 +14,11 @@
  * 锁用 `open(path, 'wx')` 的原子创建把这个空窗收掉：并发时只有一个能创建成功。
  *
  * 锁**不长期持有句柄**：Windows 上 `fs` 的默认共享模式允许别的进程删掉它，持有句柄
- * 并不能形成强制锁。所以它是一份「带 pid 的声明」，残留靠两条判断来识别：
- *   1. 持有者 pid 已死 → 残留；
- *   2. 心跳过期 → 残留。**只看 pid 是不够的**：系统会把 pid 复用给无关进程，
+ * 并不能形成强制锁。所以它是一份「带 pid 的声明」，残留靠三条判断来识别：
+ *   1. 持有的就是**本进程自己**（见 `acquireInstanceLock` 里那段注释：崩溃重启的残影，
+ *      或 pid 被系统回收后恰好又回到自己身上）→ 残留；
+ *   2. 持有者 pid 已死 → 残留；
+ *   3. 心跳过期 → 残留。**只看 pid 是不够的**：系统会把 pid 复用给无关进程，
  *      那时「pid 活着」并不代表锁的主人还在，用户会被一个自己不认识的理由永久拦住，
  *      只能手删锁文件。心跳由持有者定时改写，被复用的 pid 不会替我们续期。
  */
@@ -108,6 +110,22 @@ export async function acquireInstanceLock(dataDir: string): Promise<AcquireLockR
     if (existing === null) {
       if (await isWithinWriteGrace(filePath)) return { ok: false, reason: 'indeterminate', filePath }
       // 过了宽限期还读不出来：上次崩溃留下的半截文件，清掉重试。
+      await removeLockFile(filePath)
+      continue
+    }
+
+    // 持有者就是本进程：这锁不再是「别的实例在跑」，而是残影。
+    //
+    // 正常路径本来撞不到这里：服务跑在**独立进程**里，重启时是新 pid，上一个化身的 pid
+    // 已经死了，会被上面的 `isHolderAlive` 收掉（宿主也只在收到进程 exit 之后才重起，
+    // 见 `service-host.ts` 的 `scheduleRestart`）。这条分支兜的是两种剩下的情况：
+    //   - 宿主处置的是「服务自己报失败」而不是进程退出，那一瞬旧 pid 可能还在；
+    //   - pid 被系统回收后，恰好又分给了新的服务进程。
+    // 两种都是残留，不是别人在跑——锁的主人是自己这件事，在任何情况下都不构成
+    // 「另一个实例正拿着它」。不加这一条，上面两种情况都要干等
+    // `HEARTBEAT_STALE_MILLISECONDS`（30s）才能起来。
+    // 接管动作仍然只发生在这个竞争者内部，没有给宿主开「替别人清残留」的口子。
+    if (existing.pid === process.pid) {
       await removeLockFile(filePath)
       continue
     }

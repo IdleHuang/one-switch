@@ -161,7 +161,9 @@ one-switch/
 挪动这些资产时必须同步核对的四处：
 
 1. **图标同时被源码级相对路径引用**。`?url` 的解析基准是源码文件而不是配置文件，所以改目录必须连带改源码里的引用，只看配置文件会漏。
-2. **`__dirname` 推导需要重新核对**。产物布局是「主进程代码住 `apps/app/dist/command/`，渲染层与迁移基线由 electron-builder 抬进 asar 的 `dist/render` 与 `packages/core/drizzle`」——这三条映射是一组，动一条必须重新验算另外两条。`apps/app/electron-builder.config.cjs` 与 `apps/app/vite.shared.ts` 里各有一段注释专门记录这层约束。
+2. **`__dirname` 推导需要重新核对**。产物布局是「主进程、preload 与服务进程都住 `apps/app/dist/command/`，渲染层与迁移基线由 electron-builder 抬进 asar 的 `dist/render` 与 `packages/core/drizzle`」——这几条映射是一组，动一条必须重新验算其他条。`apps/app/electron-builder.config.cjs` 与 `apps/app/vite.shared.ts`（以及 `vite.server.config.ts` 的 `entryFileNames` / `chunkFileNames`）里各有一段注释专门记录这层约束。
+
+   这里有一个踩过的坑（当前配置已绕开，保留备查）：**`asarUnpack` 在 `files` 含跨包 `{ from, to }` 映射时根本用不了**。它的过滤根被钉死在 `projectDir`（即 `apps/app`），而只要它不是空数组，打包时就会拿这个过滤器去扫**整个**文件集——扫到源在仓库别处的条目（`packages/console/dist`、`packages/core/drizzle`）时直接抛 `... must be under .../apps/app`。当时换 `extraResources` 绕开了这层：它一个文件一个 `to`，可以直接指向 `app.asar.unpacked/...`，且不参与 `files` 过滤。但服务进程改成 `utilityProcess` 后，服务代码同主进程一样能直接从 asar 里加载（见 §5.7），所以 `asarUnpack` 与 `extraResources` 都已从配置里删干净，`files` 里只剩 `dist` 与紧跟在后的两条排除。
 3. **脚本的「仓库根」是数目录数出来的**。脚本用 `import.meta.url` 往上数目录定位仓库根，换目录必须同步改层数，否则它会在错误的 cwd 里跑（症状是「找不到 tsconfig」而不是「找不到脚本」）。同理，跨包引用运行库用相对路径时，层数也跟着目录深度变。
 4. **electron-builder 只在自己的包里找 Electron**。它探测版本靠读 `<projectDir>/node_modules/electron/package.json`，**不会逐级向上找**，而打包时的 `projectDir` 就是 `apps/app`——所以 Electron 必须由 `apps/app/package.json` 声明。同理 `author` 与产物入口 `main` 也得在被打包的那份清单里，根清单不参与。根 `package.json` 保留 `electron` 只剩一个理由：仓库级测试要跑在 Electron 的 Node 里（`node:sqlite` 的 ABI 必须与 app 对齐），那是测试基建的事，不是宿主的事。
 
@@ -300,7 +302,13 @@ CLI 的 native 层需要一套独立文案（启动横幅、端口占用、数�
 | 形态 | 模块目录 | 到 `packages/core/drizzle` 的上溯层数 |
 | --- | --- | --- |
 | 开发（`pnpm dev`） | `apps/app/dist/command/` | 4 层到仓库根 |
-| 打包（asar 内） | `app.asar/dist/command/` | 2 层到 asar 根（electron-builder 把 `packages/core/drizzle` 映射进去） |
+| 打包（asar 内，主进程与服务进程） | `app.asar/dist/command/` | 2 层到 asar 根（electron-builder 把 `packages/core/drizzle` 映射进去） |
+
+打包形态只有上面**一种**：服务进程是 Electron 的 `utilityProcess`，走的是和主进程同一套模块加载路径（`fs` 上的 asar 补丁对它同样生效），于是 `service-main.mjs` 与其 chunk 直接住在 `app.asar/dist/command/`，两者上溯层数天然一致，不需要任何刻意对齐。
+
+这也是从 `worker_threads` 搬家的根本原因：`worker_threads` 读不了 asar（Electron 只给主进程的 `fs` 装了 asar 解析，worker 线程没有这层补丁），所以才曾经不得不把服务代码与一份迁移基线摊到 `app.asar.unpacked/` 下，既多一层路径假设，又让产物分成两截。
+
+`files` 里那两条排除模式（`!dist/**/*.map`、`!node_modules`）**必须紧跟在 `dist` 后面**：electron-builder 把连续的字符串项归一化成同一个 file set 的 `filter`，而每个 `{ from, to }` 项各自独立成一个 set；一旦排除项被 `{ from, to }` 隔开，它就退化成「只含排除项」的 set，而 `minimatchAll` 是逐个模式累进判定的，没有前置正向模式时排除项会静默失效。`!node_modules` 排除的是 `@one-switch/*` 那几包：它们以 `exports: "./source/*.ts"` 形态被 electron-builder 整包拷进 asar，里面只有 TS 源码与 `*.test.ts`，而 Vite 已经把要用的代码全部 bundle 进 `dist/`（实测打包产物里 `@one-switch/` 的出现次数为 0），白白占掉约 3 MB / 29% 的 asar 体积。
 
 固定层数必然在某一侧失效，且失效是运行期才报的。上溯查找对两端同时成立，产物布局再变也不会静默失配。
 
@@ -319,7 +327,7 @@ CLI 的 native 层需要一套独立文案（启动横幅、端口占用、数�
 | `contracts` | 不产出构建物，`exports` 直接指向 `./source/*.ts` | — |
 | `core` | 同上 | — |
 | `console` | 静态文件 `packages/console/dist` | `vite build`（`packages/console/vite.config.ts`） |
-| `app` | `apps/app/dist/command/{index.js,preload.js}`，再交给 electron-builder | 两份 Vite 配置 + `apps/app/scripts/build.mjs` |
+| `app` | `apps/app/dist/command/{index.js,preload.js,service-main.mjs}`（三份产物连同 chunk 全在 asar 内），再交给 electron-builder | 三份 Vite 配置 + `apps/app/scripts/build.mjs` |
 | `cli` | ESM `dist/index.js`（`bin` 指向它）+ `dist/web`（拷入的控制台产物） | `vite build`（`apps/cli/vite.config.ts`）+ `apps/cli/scripts/build.mjs` |
 
 编排由 Turborepo 承担（`turbo.json`）：

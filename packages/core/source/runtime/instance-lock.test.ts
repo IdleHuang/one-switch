@@ -71,6 +71,17 @@ describe('acquireInstanceLock', () => {
     expect((await acquireInstanceLock(dataDir)).ok).toBe(true)
   })
 
+  it('takes over a fresh lock left behind by this very process', async () => {
+    // 锁的主人写的是自己：pid 活着、心跳还新鲜，但它只可能是自己上一次的残影
+    // （服务崩溃重启的瞬间，或 pid 被回收后又轮到自己）。不接管就得干等 30 秒心跳过期。
+    writeLockFile({ pid: process.pid, startedAt: LONG_AGO, heartbeatAt: new Date().toISOString() })
+
+    const result = await acquireInstanceLock(dataDir)
+    expect(result.ok).toBe(true)
+    expect((await readLockHolder(lockFilePath(dataDir)))?.pid).toBe(process.pid)
+  })
+
+
   it('waits out an empty lock file instead of stealing it', async () => {
     // 创建与写入之间必然有一瞬是空文件；这一瞬被当成残留，两个进程就都会以为自己拿到了锁。
     writeLockFile(null, '')
