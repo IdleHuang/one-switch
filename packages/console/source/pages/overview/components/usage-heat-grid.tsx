@@ -16,6 +16,18 @@ const CELL_MAX_SIZE = 26
 const HEAT_GAP = 3
 
 /**
+ * 图表区的固定高度（`h-44` = 176px），与柱状图的 `ChartContainer` 一致。
+ *
+ * 热力图的自然高度由行数推出来（今日 5 行、近 7 天 / 近 30 天 6 行），柱状图是一整块
+ * `h-44`；不锁死的话同一张卡片切模式、切范围时高度都会跳，整行布局跟着重排。
+ * `ProviderDistribution` 用的是同一个数，两张卡并排时不互相拉扯。
+ */
+export const HEAT_AREA_HEIGHT = 176
+
+/** 图例那一行占的高度（`mt-3` 间距 + 一行 10px 的色块），算格子高度上限时要先扣掉。 */
+const LEGEND_HEIGHT = 30
+
+/**
  * 块的形状：宽约是高的 {@link HEAT_BLOCK_ASPECT} 倍。
  *
  * 一格一桶，格数由范围的**完整时长**决定（今日 144、近 7 天 169、近 30 天 181，见
@@ -61,11 +73,18 @@ export function UsageHeatGrid(props: UsageHeatGridProps) {
   const crossesDays = useMemo(() => trendCrossesDays(buckets.map(bucket => bucket.label)), [buckets])
 
   const columns = resolveHeatColumns(buckets.length)
-  // 块宽按「最大格子 + 间距」算死：格子在宽卡里不会被摊成扁平的长方块，桶少时块也不会
+  const rows = Math.max(1, Math.ceil(buckets.length / columns))
+  // 格子边长同时受宽、高两条约束：宽是 `CELL_MAX_SIZE`，高是把整块塞进固定高度的图表区
+  // （扣掉图例那一行）。两者取小，所以 5 行与 6 行的块高度一致，切范围时不会长高。
+  const cellSize = Math.min(
+    CELL_MAX_SIZE,
+    Math.floor((HEAT_AREA_HEIGHT - LEGEND_HEIGHT - (rows - 1) * HEAT_GAP) / rows),
+  )
+  // 块宽按「格子 + 间距」算死：格子在宽卡里不会被摊成扁平的长方块，桶少时块也不会
   // 被拉满整张卡——`mx-auto` 把它居中。窗口太窄时 `w-full` 兜底，格子跟着缩。
   const gridStyle: CSSProperties = {
     gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-    maxWidth: columns * CELL_MAX_SIZE + (columns - 1) * HEAT_GAP,
+    maxWidth: columns * cellSize + (columns - 1) * HEAT_GAP,
   }
 
   const handlePointerOver = (event: ReactMouseEvent<HTMLDivElement>) => {
