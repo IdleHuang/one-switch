@@ -13,7 +13,7 @@
 import { app } from 'electron'
 import { DEFAULT_LOCALE, resolveLocale, type LanguagePreference, type Locale } from '@common/i18n'
 import { createAppTranslator } from '@common/i18n/catalogs'
-import { getSettings, onSettingsChanged } from '@server/database/settings-store'
+import { getSettings, onSettingsChanged } from './server-host'
 
 export type NativeTranslator = ReturnType<typeof createAppTranslator>
 

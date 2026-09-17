@@ -6,7 +6,7 @@ import {
   getProxyServerStatus,
   startProxyServer,
   stopProxyServer,
-} from '@server/proxy/runtime/server'
+} from './server-host'
 
 /**
  * 「已复制」的回执只能借用 tooltip：菜单项点完就关，没有别的地方能显示反馈。

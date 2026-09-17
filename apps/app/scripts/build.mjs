@@ -10,8 +10,8 @@ import { run } from '../../../packages/toolkit/scripts/lib/run.mjs'
 //   node scripts/build.mjs --package          构建后交给 electron-builder 打包
 //   node scripts/build.mjs --package --win    打包指定平台（其余参数原样透传）
 //
-// 清空输出目录由这里负责而不是交给 Vite 的 `emptyOutDir`：主进程与 preload 是两次
-// `vite build`，共用 `dist/command`，任何一次对自己做 emptyOutDir 都会抹掉另一次的产物
+// 清空输出目录由这里负责而不是交给 Vite 的 `emptyOutDir`：三次构建共用 `dist/command`，
+// 任何一次对自己做 emptyOutDir 都会抹掉另两次的产物
 // （`--watch` 下尤其明显：改主进程会把 preload.js 删掉而不会重建）。
 
 const appDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -21,10 +21,13 @@ const arguments_ = process.argv.slice(2)
 const shouldPackage = arguments_.includes('--package')
 const electronBuilderArguments = arguments_.filter(argument => argument !== '--package')
 
-// 两次构建：主进程（ESM）与 preload（CJS）。顺序不重要，但都在清空目录之后。
+// 三次构建：主进程（ESM）、preload（CJS）、核心服务进程（ESM）。
+// 顺序不重要，但都在清空目录之后。服务进程必须单独一份构建，因为它可以 import
+// `node:sqlite`，而主进程那份产物里出现它就等于主进程会卡（见 issue #9）。
 const viteSteps = [
   { label: 'main process', args: ['exec', 'vite', 'build'] },
   { label: 'preload', args: ['exec', 'vite', 'build', '--config', 'vite.preload.config.ts'] },
+  { label: 'service process', args: ['exec', 'vite', 'build', '--config', 'vite.server.config.ts'] },
 ]
 
 const main = async () => {
@@ -36,7 +39,7 @@ const main = async () => {
     log.info(`${step.label} built`)
   }
 
-  log.success('Main process and preload built')
+  log.success('Main process, preload and service process built')
 
   if (!shouldPackage) return
 

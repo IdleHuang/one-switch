@@ -8,7 +8,7 @@ import { log } from '../../../packages/toolkit/scripts/lib/log.mjs'
 // 宿主开发会话。
 //
 // 拆成两个包之后，「开发」不再是单个 `vite` 能搞定的事：渲染层由 `packages/console` 的
-// dev server 提供，主进程与 preload 由本包构建成 `dist/command`，最后 Electron 把两者接起来。
+// dev server 提供，主进程、preload 与服务进程由本包构建成 `dist/command`，最后 Electron 把三者接起来。
 // 顺序在 turbo 里表达不出来——`dev` 是长驻任务，turbo 只会并行启动它，不会等对方就绪——
 // 所以「等控制台起来了再启动 Electron」这件事由这个脚本负责。
 
@@ -16,6 +16,8 @@ const appDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const repositoryRoot = path.resolve(appDirectory, '..', '..')
 const outputDirectory = path.join(appDirectory, 'dist', 'command')
 const mainBundlePath = path.join(outputDirectory, 'index.js')
+// 服务进程的入口。它必须在，否则 Electron 一起来就会因为找不到服务脚本而报错。
+const serviceBundlePath = path.join(outputDirectory, 'service-main.mjs')
 
 // 渲染层 dev server 地址。`packages/console/vite.config.ts` 里端口是写死的（strictPort），
 // 端口漂移时 Vite 会直接失败，而不是安静地让 Electron 加载一张空白页。
@@ -47,13 +49,15 @@ async function waitForConsoleServer() {
   throw new Error(`Console dev server is not reachable at ${consoleDevUrl}`)
 }
 
-/** 主进程产物的第一份就绪信号。 */
-async function waitForMainBundle() {
+/** 本包三份产物的第一份就绪信号。缺一个就不用起 Electron 了。 */
+async function waitForBundles() {
+  const required = [mainBundlePath, serviceBundlePath]
   for (let attempt = 1; attempt <= 1200; attempt += 1) {
-    if (fs.existsSync(mainBundlePath)) return
+    if (required.every(bundle => fs.existsSync(bundle))) return
     await sleep(100)
   }
-  throw new Error(`Main process bundle was not produced at ${mainBundlePath}`)
+  const missing = required.filter(bundle => !fs.existsSync(bundle))
+  throw new Error(`Host bundles were not produced: ${missing.join(', ')}`)
 }
 
 /** 输出目录里最新的写入时间。没有产物时返回 null。 */
@@ -88,8 +92,8 @@ async function waitForFirstBuildSettle() {
 /**
  * 监听产物改动并重启 Electron。
  *
- * 挂上之后的头两秒丢弃事件：preload 的首次构建比主进程晚落盘，而监听器只能在 Electron
- * 起来之后才挂，紧贴着挂就会把它的首次写入当成「人改了代码」，凭空重启一次。这个窗口
+ * 挂上之后的头两秒丢弃事件：preload 与服务进程的首次构建比主进程晚落盘，而监听器只能在 Electron
+ * 起来之后才挂，紧贴着挂就会把它们的首次写入当成「人改了代码」，凭空重启一次。这个窗口
  * 只影响启动那一瞬，之后的改动照常触发重启。
  */
 function watchOutputDirectory() {
@@ -101,7 +105,7 @@ function watchOutputDirectory() {
 }
 
 /**
- * 两个监听器：主进程与 preload 是两份配置、两次构建，但写入同一个目录。
+ * 三个监听器：主进程、preload、服务进程是三份配置、三次构建，但写入同一个目录。
  * `shell: true` 而不是自己拼 `cmd.exe /c`：这里只需要长驻子进程，
  * 不需要 `packages/toolkit/scripts/lib/run.mjs` 那套退出码与信号转发。
  */
@@ -109,6 +113,7 @@ function startViteWatchers() {
   const commands = [
     'pnpm exec vite build --watch',
     'pnpm exec vite build --watch --config vite.preload.config.ts',
+    'pnpm exec vite build --watch --config vite.server.config.ts',
   ]
   for (const command of commands) {
     const child = spawn(command, { cwd: appDirectory, stdio: 'inherit', shell: true })
@@ -148,8 +153,8 @@ function startElectron() {
 
 function scheduleRestart() {
   if (restartTimer) clearTimeout(restartTimer)
-  // 一次改动会引发一串文件事件，而且两份构建是先后完成的：主进程约 0.1s、preload 约 1s，
-  // 每次写入都会重置这个计时器，所以等到最后一次写入后 1.5s 才真的重启——一次编辑只有一次
+  // 一次改动会引发一串文件事件，而且三份构建是先后完成的：主进程约 0.1s、preload 约 1s、
+  // 服务进程约 1.2s，每次写入都会重置这个计时器，所以等到最后一次写入后 1.5s 才真的重启——一次编辑只有一次
   // 重启。窗口给短了（试过 300ms）就会变成「主进程构建完重启一次、preload 构建完再重启一次」。
   restartTimer = setTimeout(() => {
     restartTimer = null
@@ -177,7 +182,7 @@ async function main() {
   log.info('console dev server is ready')
 
   startViteWatchers()
-  await waitForMainBundle()
+  await waitForBundles()
   await waitForFirstBuildSettle()
   startElectron()
   watchOutputDirectory()

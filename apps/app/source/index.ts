@@ -2,8 +2,7 @@ import { app, BrowserWindow, Menu, nativeImage, ipcMain, dialog, session, shell 
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { startServer, stopServer } from '@server/index'
-import { installLogCapture } from '@server/management/infrastructure/log-buffer'
+import { startServer, onServerStateChanged, stopServer } from './server-host'
 import { listCurrentDatabaseFileNames } from '@common/database-file'
 import { createRuntimeConfig } from '@common/runtime-config'
 import { getRuntimeProfile } from '@common/runtime-profile'
@@ -23,12 +22,15 @@ const __dirname = path.dirname(__filename)
 //
 // ├─┬ dist
 // │ ├─┬ command
-// │ │ ├── index.js        > Electron Main
-// │ │ └── preload.js
-// │ ├─┬ server
-// │ │   ...
+// │ │ ├── index.js          > Electron Main
+// │ │ ├── preload.js        > Preload
+// │ │ └── service-main.mjs  > Core service process（同步 SQLite 在里面，见 issue #9）
 // │ └─┬ render
 // │     ...
+//
+// 服务进程**必须在 `command` 目录里**：`packages/core/source/database/index.ts`
+// 从 `import.meta.url` 往上找 `packages/core/drizzle`，只有这一层的上两层
+// 在开发态（仓库根）与打包态（asar 根）都成立。
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL)
 const runtimeProfile = getRuntimeProfile(isDevelopment ? 'development' : 'production')
@@ -378,10 +380,17 @@ function focusExistingInstance(): void {
 async function bootstrap(): Promise<void> {
   await app.whenReady()
 
-  // 在输出任何启动日志前安装拦截，确保横幅等信息也能进入运行日志页面。
-  // installLogCapture 是幂等的，startServer 内部的重复调用会自动跳过。
-  installLogCapture()
+  // 这里**不**再安装日志拦截。核心服务的日志留在服务进程里（那边的
+  // `installLogCapture()` 直接写 `runtime_logs`），主进程只输出到 stdout。
+  // 把主进程的 console 也倒进运行日志页面过时了：那里现在是「服务在干什么」的窗口，
+  // 混进窗口管理、托盘、更新检查的噪声之后反而看不清服务本身。
   logStartupBanner()
+
+  // 服务进程崩溃重启的预算也会用尽。到那一步应用已经没什么可做的了：
+  // 有窗口的显示错误，没窗口的弹原生对话框，然后退出。
+  onServerStateChanged(state => {
+    if (state.kind === 'failed') reportFatalError(state.error)
+  })
 
   const userDataDir = app.getPath('userData')
   const runtimeConfig = createRuntimeConfig({
@@ -396,7 +405,6 @@ async function bootstrap(): Promise<void> {
       secretStore: new ElectronSecretStore(path.join(userDataDir, 'secrets.json')),
       systemProxyResolver: targetUrl => session.defaultSession.resolveProxy(targetUrl),
     })
-    console.info('[one-switch] server started successfully')
   } catch (error) {
     showStartupError(error)
     app.quit()

@@ -275,8 +275,10 @@ function getMigrationsFolder(role: DatabaseRole): string {
   // 迁移基线随核心包分发，但它和编译产物的相对深度在两种形态下并不一样：
   //
   //   - 打包后：electron-builder 把 `packages/core/drizzle` 映射进 asar
-  //     （见 `apps/app/electron-builder.config.cjs`），模块住在 `app.asar/dist/command/`，
-  //     上溯两层就是 asar 根。
+  //     （见 `apps/app/electron-builder.config.cjs`），服务进程的模块住在
+  //     `app.asar/dist/command/`，上溯两层就是 asar 根。
+  //     核心服务是 `utilityProcess` 子进程，走主进程同一套模块加载，asar 里的路径
+  //     对它和普通路径没有区别——所以这里只有**一种**布局。
   //   - 开发期：模块住在 `apps/app/dist/command/`，上溯两层只会落到 `apps/app`，
   //     要到仓库根得上溯四层。
   //

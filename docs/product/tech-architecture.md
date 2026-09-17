@@ -114,17 +114,20 @@ one-switch/
 │       └── scripts/                     # lint / test / typecheck / version / 包边界守卫 / lib
 │
 ├── apps/                                # 宿主壳，不作为库发布
-│   ├── app/                             # Electron 主进程、预加载与命令入口
+│   ├── app/                             # Electron 主进程、预加载与服务进程
 │   │   ├── vite.config.ts               # 主进程构建（ESM）
 │   │   ├── vite.preload.config.ts       # preload 构建（CJS，必须与主进程分成两次构建）
-│   │   ├── vite.shared.ts               # 两份配置共用的入口、别名与 Node 外部化
+│   │   ├── vite.server.config.ts        # 服务进程构建（ESM，utilityProcess 入口）
+│   │   ├── vite.shared.ts               # 三个入口共用的别名、Node 外部化与 target
 │   │   ├── electron-builder.config.cjs  # 打包配置
 │   │   ├── build/                       # 应用图标与托盘图标
 │   │   ├── scripts/                     # build.mjs、dev.mjs、release-notes.mjs、macos-adhoc-sign.cjs
-│   │   ├── dist/command/                # 构建产物：index.js（主进程）+ preload.js
+│   │   ├── dist/command/                # 构建产物：index.js（主进程）+ preload.js + service-main.mjs（服务进程）
 │   │   └── source/
 │   │       ├── index.ts                 # Electron 应用编排
 │   │       ├── preload.ts               # 暴露最小化 API 给渲染进程
+│   │       ├── server-host.ts           # 服务进程的宿主侧遥控器（fork/重启/停机/设置广播）
+│   │       ├── service.ts               # 服务进程的构建入口（转出 core 的 service-main）
 │   │       ├── auto-launch.ts           # 开机自启
 │   │       ├── tray-manager.ts          # 菜单栏/托盘管理
 │   │       ├── updater.ts               # 自动更新
@@ -202,7 +205,7 @@ SQLite（`node:sqlite` + Drizzle ORM）承载配置与日志，表结构与字�
 拆分的理由与两条边界见 [data-model.md](./data-model.md) §2.1；文件名里的版本号是两个**独立的 schema 版本**常量，不住在应用版本号上。
 
 - 首发基线：两条链各自只保留一份由 schema 直接生成的首发基线迁移与快照，`pnpm db:generate` 按角色各生成一次（drizzle-kit 一份配置只能喂一条链，所以是两份 `drizzle.config.<role>.ts`）
-- 基线随 `@one-switch/core` 包分发：开发期从模块目录逐级上溯找到 `packages/core/drizzle`，再按角色下钻一层；打包后则命中 asar 内映射的同名路径，两端不需要两套写死的深度
+- 基线随 `@one-switch/core` 包分发：开发期从模块目录逐级上溯找到 `packages/core/drizzle`，再按角色下钻一层；打包后则命中与入口同层的那份映射（`app.asar/dist/command/` 上溯两层就是 asar 根），不存在第二套深度
 - 首发后冻结基线，只追加后续迁移，不改写已发布历史
 - 换代（把 `DATABASE_SCHEMA_VERSIONS` 加一并重新生成基线）只发生在应用大版本发布时，用来甩掉累积的迁移历史；日常结构变化一律追加迁移，不要换文件名
 - 库边界由 `packages/core/scripts/check-database-boundaries.mjs` 在 `pnpm lint` 中强制：每个 store 只碰自己那个库，两份 schema 不互相引用
@@ -227,20 +230,22 @@ React 18 + TypeScript + shadcn/ui + Tailwind。页面通过 `packages/console/so
 
 ## 构建与打包
 
-包拆分后的交付形态与每包构建产物见 [packaging.md](./packaging.md)「交付形态」「构建与测试编排」。渲染进程与宿主是两套独立构建：控制台由 `packages/console/vite.config.ts` 构建为静态产物，Electron 主进程与 preload 由 `apps/app/` 下的两份配置分别构建；宿主不再内联渲染层构建。
+包拆分后的交付形态与每包构建产物见 [packaging.md](./packaging.md)「交付形态」「构建与测试编排」。渲染进程与宿主是两套独立构建：控制台由 `packages/console/vite.config.ts` 构建为静态产物，Electron 主进程、preload 与服务进程由 `apps/app/` 下的三份配置分别构建；宿主不再内联渲染层构建。
 
 ### Vite
 
 - 控制台：`packages/console/vite.config.ts`，输出 `packages/console/dist/`，dev server 固定 `127.0.0.1:5173`
 - 主进程（ESM）：`apps/app/vite.config.ts`，输出 `apps/app/dist/command/index.js`
 - preload（CJS）：`apps/app/vite.preload.config.ts`，输出 `apps/app/dist/command/preload.js`；必须与主进程分成两次构建，因为 Vite 一份配置只能产出一个格式
-- 三份配置共用 `apps/app/vite.shared.ts` 里的入口、别名、Node 内置模块外部化与 `target: node22`
-- 开发时 `pnpm dev` 由 turbo 启动各包 `dev` 任务，宿主侧的实际编排在 `apps/app/scripts/dev.mjs`：先等控制台 dev server 起来，再起两份 `vite build --watch`，等首轮构建落定后拉起 Electron，之后监听产物目录做整应用重启；渲染层热更新由 Vite HMR 提供
+- 服务进程（ESM）：`apps/app/vite.server.config.ts`，输出 `apps/app/dist/command/service-main.mjs`（外加按 hash 命名的共享 chunk）；它必须是**独立的一次构建**，因为主进程与服务进程的外部化边界不同：`node:sqlite` 允许进服务进程的 chunk 图，却**不得**被拉进主进程
+- 三份配置共用 `apps/app/vite.shared.ts` 里的别名、Node 内置模块外部化与 `target: node22`
+- 开发时 `pnpm dev` 由 turbo 启动各包 `dev` 任务，宿主侧的实际编排在 `apps/app/scripts/dev.mjs`：先等控制台 dev server 起来，再起三份 `vite build --watch`，等首轮构建落定后拉起 Electron，之后监听产物目录做整应用重启；渲染层热更新由 Vite HMR 提供
 - 生产构建由 Vite 直接产出静态产物，不再依赖开发期插件
 
 ### electron-builder
 
 - 打包成 macOS `.dmg` / `.app`、Windows `.exe`、Linux `.AppImage` / `.deb`
+- 所有东西都在 `app.asar` 一个文件里：`dist/command/` 的 `index.js`、`preload.js`、`service-main.mjs` 与全部 chunk，`dist/render/`，以及迁移基线 `packages/core/drizzle`。`node_modules` 被 `files` 里的 `!node_modules` 排除（里面只有 `@one-switch/*` 的 TS 源码与测试，运行时无人引用），细节与坑见 [packaging.md](./packaging.md) §5.7
 - macOS 无付费证书阶段使用显式 ad-hoc 签名；`afterPack` 必须对完整 `.app` 执行严格签名校验
 - ad-hoc 签名只保证应用包内部完整性，不提供开发者身份信任，也不能提交 Apple 公证
 - GitHub Release 必须附带 DMG 的 SHA-256 文件和“隐私与安全 > 仍要打开”的首次安装说明

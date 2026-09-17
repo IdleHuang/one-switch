@@ -6,6 +6,9 @@ import { createAppTranslator } from '@common/i18n/catalogs'
  * 托盘是原生 UI，只能在主进程里跑，没有 DOM 可以断言。
  * 所以这里把 electron 与两个外部依赖打桩，直接验菜单内容与点击行为——
  * 这是托盘唯一能被自动化覆盖的部分（视觉效果仍需人工看）。
+ *
+ * 代理开关打的是 `./server-host` 的桩，而不是核心服务：那三个函数现在会跨进程
+ * 发消息（见 `server-host.ts`），真去发只会变成「进程不存在」。
  */
 const mocks = vi.hoisted(() => {
   const tray = {
@@ -54,7 +57,7 @@ vi.mock('./i18n', () => ({
   onNativeLocaleChanged: () => () => undefined,
 }))
 
-vi.mock('@server/proxy/runtime/server', () => ({
+vi.mock('./server-host', () => ({
   getProxyServerStatus: mocks.getProxyServerStatus,
   startProxyServer: mocks.startProxyServer,
   stopProxyServer: mocks.stopProxyServer,
