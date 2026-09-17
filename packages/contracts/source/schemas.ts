@@ -718,7 +718,17 @@ export const StatsSummarySchema = z.object({
   successCount: z.number().int().nonnegative(),
   failedCount: z.number().int().nonnegative(),
   successRate: z.number().min(0).max(1),
-  avgLatencyMs: z.number().nonnegative(),
+  /**
+   * 输入 Token 总量，含缓存读取——缓存只是计费便宜，上下文该读进去的字节一个不少。
+   *
+   * 与 `outputTokens` 一起由同一次扫描选出，供用量结构的派生值使用。
+   */
+  inputTokens: z.number().int().nonnegative(),
+  /**
+   * 输出 Token 总量。与 `totalRequests` 一起构成「单次请求平均输出」的分子与分母。
+   */
+  outputTokens: z.number().int().nonnegative(),
+  /** 输入 + 输出，派生值；卡片上的「Token 消耗」。 */
   totalTokens: z.number().int().nonnegative(),
 })
 export type StatsSummary = z.infer<typeof StatsSummarySchema>
