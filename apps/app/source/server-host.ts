@@ -104,12 +104,10 @@ export async function startServer(options: StartServerOptions): Promise<void> {
     if (state.kind === 'restarting') {
       console.warn(`[service-host] restarting after a crash attempt=${state.attempt}`, state.error)
     }
+    // 这里不再包一层 try/catch：`ServiceHost` 的 `setState` 已经逐个兜住了监听器的
+    // 异常（并打出同一条日志），再兜一次只会让同一个错误被记两遍。
     for (const listener of stateListeners) {
-      try {
-        listener(state)
-      } catch (error) {
-        console.error('[service-host] state listener failed', error)
-      }
+      listener(state)
     }
   })
   try {

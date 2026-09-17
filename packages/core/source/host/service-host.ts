@@ -16,12 +16,11 @@
  *    服务推过来（`settings.changed`）。缓存之后那些调用完全不过线，服务重启的空窗里
  *    也还能答得出来。
  *
- * 为什么是独立进程而不是 `worker_threads` 线程：asar。Electron 只给主进程那份 `fs`
- * 装了 asar 解析，线程的模块加载路径完全没有补丁，`app.asar/...` 在线程里就是 ENOENT
- * ——产物与迁移基线因此只能摊到 asar 外面，多出一整套路径推导。`utilityProcess` 走
- * 主进程同一套加载，asar 里的入口与它的 ESM 分包都能直接加载。代价是启动慢约 100 ms
- * （实测热启动 163 ms vs 59 ms），换来的是真进程隔离：服务崩溃不再可能带走主进程，
- * `process.exit()` 也不再是禁品（它只结束这个进程）。
+ * 为什么是独立进程而不是 `worker_threads` 线程：asar。线程读不了 `app.asar`（Electron
+ * 只给主进程那份 `fs` 装了 asar 解析），产物与迁移基线因此只能摊到 asar 外面，多出
+ * 一整套路径推导；`utilityProcess` 走主进程同一套模块加载，asar 里的入口与它的 ESM
+ * 分包都能直接加载。代价是冷启动多约 100 ms，换来的是真进程隔离：服务崩溃不再可能
+ * 带走主进程。选型过程与实测数字在 `apps/app/source/server-host.ts`。
  */
 import { createRpcEndpoint, reviveError, type RpcEndpoint, type RpcPort } from './rpc'
 import type { HostCalls, RuntimeStartResult, ServiceCalls, ServiceEvents } from './protocol'
@@ -168,10 +167,15 @@ export class ServiceHost {
 
     const child = this.child
     const endpoint = this.endpoint
+    const pending = this.pendingReady
     this.child = null
     this.endpoint = null
     this.settings = null
     this.pendingReady = null
+
+    // 正在启动（或正在重启）时被叫停：`launch()` 还挂在 `ready` 上，不唤醒它就永远
+    // 等不到答案，重启路径那个 `.catch` 也永远不会跑——于是没有任何一处知道它结束了。
+    pending?.reject(new Error('Service host stopped'))
 
     if (child !== null && endpoint !== null) {
       try {
@@ -353,6 +357,9 @@ export class ServiceHost {
 
   private scheduleRestart(error: unknown): void {
     const policy = this.restart
+    // `stop()` 之后不该再有重启。正在重启的那次启动会被 `stop()` 以「已停止」拒掉，
+    // 它的 catch 会顺着走到这里来——那条路不是崩溃，不能算进重启预算。
+    if (this.stopping) return
     if (policy === null || this.attempts >= policy.maxAttempts) {
       // 预算用尽：把错误交出去，让宿主弹窗退出。继续无限重起只会把「起不来」
       // 变成「一直起不来」——用户看到的是转不完的启动动画。

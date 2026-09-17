@@ -186,6 +186,21 @@ describe('service host startup', () => {
     await expect(harness.host.start()).rejects.toThrow('already running')
   })
 
+  it('settles an in-flight start when the host is stopped', async () => {
+    const harness = createHost()
+
+    // 启动是异步的（服务起来要一百多毫秒），这中间随时可能收到退出请求。
+    // 断言先挂上，别让这次拒绝在 `stop()` 返回前变成一条无人认领的 unhandled rejection。
+    const starting = harness.host.start()
+    const rejected = expect(starting).rejects.toThrow('Service host stopped')
+    await harness.host.stop()
+
+    // 被叫停的那次启动必须**有结论**：既不留在那里等一个永不到来的 `service.ready`，
+    // 也不能把状态翻回 `running`。
+    await rejected
+    expect(harness.host.getState().kind).toBe('stopped')
+  })
+
   it('rejects instead of hanging when no service process is attached', async () => {
     const harness = createHost()
     await expect(harness.host.getProxyStatus()).rejects.toThrow('not running')
