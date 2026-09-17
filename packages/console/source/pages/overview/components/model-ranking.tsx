@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { CardSectionHeader } from '@/components/card-section-header'
 import { Card, CardContent } from '@/components/ui/card'
-import { formatMilliseconds, formatOutputSpeed } from '@common/metrics'
+import { formatAverageOutput, formatMilliseconds, formatOutputSpeed } from '@common/metrics'
 import { useLocale, useTranslation } from '@/i18n/provider'
 import { formatCount } from '../lib/format'
 
@@ -29,9 +29,9 @@ export function ModelRanking(props: ModelRankingProps) {
                 <th className={tableHeaderCellClass}>{t('overview.models.column.model')}</th>
                 <th className={tableHeaderCellClass}>{t('overview.models.column.provider')}</th>
                 <th className={cn(tableHeaderCellClass, 'text-right')}>{t('overview.models.column.requests')}</th>
-                <th className={cn(tableHeaderCellClass, 'text-right')}>{t('overview.models.column.avgLatency')}</th>
                 <th className={cn(tableHeaderCellClass, 'text-right')}>{t('overview.models.column.avgTtft')}</th>
                 <th className={cn(tableHeaderCellClass, 'text-right')}>{t('overview.models.column.avgTps')}</th>
+                <th className={cn(tableHeaderCellClass, 'text-right')}>{t('overview.models.column.avgOutput')}</th>
                 <th className={cn(tableHeaderCellClass, 'text-right')}>{t('overview.models.column.cacheHitRate')}</th>
                 <th className={cn(tableHeaderCellClass, 'px-4 text-right')}>{t('overview.models.column.successRate')}</th>
               </tr>
@@ -56,9 +56,9 @@ export function ModelRanking(props: ModelRankingProps) {
                   <td className={cn(tableCellClass, 'system-xs-medium text-text-primary')}>{m.providerModelName}</td>
                   <td className={cn(tableCellClass, 'text-text-tertiary')}>{m.providerName}</td>
                   <td className={cn(tableCellClass, 'text-right tabular-nums')}>{formatCount(locale, m.attempts)}</td>
-                  <td className={cn(tableCellClass, 'text-right tabular-nums')}>{formatMilliseconds(m.avgLatencyMs)}</td>
                   <td className={cn(tableCellClass, 'text-right tabular-nums')}>{formatMilliseconds(m.avgTtftMs)}</td>
                   <td className={cn(tableCellClass, 'text-right tabular-nums')}>{formatOutputSpeed(m.avgTps)}</td>
+                  <td className={cn(tableCellClass, 'text-right tabular-nums')}>{formatAverageOutput(m.avgOutputTokens)}</td>
                   <td className={cn(tableCellClass, 'text-right tabular-nums')}>{m.cacheHitRate == null ? '—' : `${(m.cacheHitRate * 100).toFixed(1)}%`}</td>
                   <td className={cn(tableCellClass, 'px-4 text-right')}>
                     <Badge variant={m.successRate >= 0.95 ? 'success' : m.successRate >= 0.8 ? 'warning' : 'destructive'} className="h-5 px-1.5 font-mono">

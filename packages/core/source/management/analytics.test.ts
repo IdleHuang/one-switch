@@ -178,7 +178,7 @@ describe('analytics route', () => {
       errorMessage: 'rate limited',
     })
     // 服务该请求的尝试把用量镜像到请求级；失败的尝试只在尝试级留下自己的数字。
-    await recordAttemptUsage({ attemptId: successAttempt.id, servesRequest: true, ...EMPTY_USAGE, inputTokens: 100, outputTokens: 20, cachedInputTokens: 0, cacheCreationInputTokens: 0 })
+    await recordAttemptUsage({ attemptId: successAttempt.id, servesRequest: true, ...EMPTY_USAGE, inputTokens: 100, outputTokens: 20, cachedInputTokens: 25, cacheCreationInputTokens: 0 })
     await recordAttemptUsage({ attemptId: failedAttempt.id, servesRequest: false, ...EMPTY_USAGE, inputTokens: 30, outputTokens: 10, cachedInputTokens: 0, cacheCreationInputTokens: 0 })
 
     const res = mockResponse()
@@ -188,10 +188,10 @@ describe('analytics route', () => {
     const payload = responseData(res) as {
       success: boolean
       data: {
-        summary: { totalRequests: number; failedCount: number; inputTokens: number; outputTokens: number; totalTokens: number }
+        summary: { totalRequests: number; failedCount: number; inputTokens: number; outputTokens: number; totalTokens: number; cacheHitRate: number | null }
         trendIntervalMs: number
         providerStats: Array<{ providerId: string; percent: number }>
-        modelStats: Array<{ providerModelName: string; successRate: number; avgTps: number | null }>
+        modelStats: Array<{ providerModelName: string; successRate: number; avgTps: number | null; avgOutputTokens: number | null; cacheHitRate: number | null }>
         failureReasons: Array<{ reason: string; count: number }>
       }
     }
@@ -204,12 +204,20 @@ describe('analytics route', () => {
     // 平均输出的分子分母必须同源：失败尝试只在尝试级留下数字，请求级用量只有成功那一次
     // 镜像过来的 100 输入 / 20 输出，所以卡片的两个总量与它们的合计都要对得上。
     expect(payload.data.summary).toMatchObject({ inputTokens: 100, outputTokens: 20, totalTokens: 120 })
+    // 命中率 = 请求级缓存读取 ÷ 请求级输入总量 = 25 / 100；失败的尝试只在尝试级留数字，不进这两项。
+    expect(payload.data.summary.cacheHitRate).toBeCloseTo(0.25, 6)
     expect(payload.data.providerStats).toEqual(expect.arrayContaining([expect.objectContaining({ providerId: provider.id })]))
     // 速度的分母是整段尝试耗时 1500ms，首字等待不扣：20 / 1.5 = 13.33…；
     // 失败的尝试不参与速度——它没有完整输出，也就没有可比的产出速率。
     expect(payload.data.modelStats).toEqual(expect.arrayContaining([
-      expect.objectContaining({ providerModelName: 'provider-success', avgTps: 20 / 1.5 }),
-      expect.objectContaining({ providerModelName: 'provider-failed', avgTps: null }),
+      expect.objectContaining({ providerModelName: 'provider-success', avgTps: 20 / 1.5, cacheHitRate: 0.25 }),
+      expect.objectContaining({ providerModelName: 'provider-failed', avgTps: null, cacheHitRate: null }),
+    ]))
+    // 平均输出的分母是成功调用数（1），不是全部尝试数（1 成功 + 1 失败）；
+    // 没有成功调用的模型没有可报的平均值，写 null 而不是 0。
+    expect(payload.data.modelStats).toEqual(expect.arrayContaining([
+      expect.objectContaining({ providerModelName: 'provider-success', avgOutputTokens: 20 }),
+      expect.objectContaining({ providerModelName: 'provider-failed', avgOutputTokens: null }),
     ]))
     expect(payload.data.failureReasons).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'RATE_LIMITED' })]))
 

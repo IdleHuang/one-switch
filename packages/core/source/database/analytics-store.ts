@@ -1,6 +1,7 @@
 import { and, eq, gte, sql, type SQL } from 'drizzle-orm'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { DAY_MILLISECONDS, formatLatencyBinLabel, formatTrendBucketLabel, resolveHeatBuckets, resolveLatencyBinEdges, resolveTrendBuckets, type AnalyticsBuckets } from '@common/analytics-buckets'
+import { cacheHitRate } from '@common/metrics'
 import type { FailureReasonCategory, RequestSourceStat, RequestStatus, UsageTrendPoint } from '@common/schemas'
 import { getDataDb } from './index'
 import { attemptUsages, requestAttempts, requestAttributes, requestLogs, requestUsages } from './data-schema'
@@ -44,6 +45,7 @@ export interface StatsSummary {
   inputTokens: number
   outputTokens: number
   totalTokens: number
+  cacheHitRate: number | null
 }
 
 export async function getStatsSummary(sinceMs: number): Promise<StatsSummary> {
@@ -57,7 +59,7 @@ export async function getStatsSummary(sinceMs: number): Promise<StatsSummary> {
     .from(requestLogs)
     .where(sql`${requestLogs.createdTime} >= ${sinceMs}`)
     .get()
-  // 用量拆成两个合计值取，而不是先合再分：界面要的「单次请求平均输出」是输出 ÷ 请求数，
+  // 用量按类型各取一个合计值，而不是先合再分：命中率要的是缓存读取 ÷ **输入总量**，
   // 分子与分母必须是**同一批样本**的两个总量，同一次扫描同时取出才不会各写一份筛选条件。
   //
   // 逐类型取值意味着 `raw` 行（上游原始报文，数值列为 NULL）不会进入任何一列。
@@ -69,6 +71,7 @@ export async function getStatsSummary(sinceMs: number): Promise<StatsSummary> {
     .select({
       inputTokens: sql<number>`coalesce(sum(case when ${requestUsages.type} = 'inputTokens' then ${requestUsages.value} else 0 end), 0)`.as('inputTokens'),
       outputTokens: sql<number>`coalesce(sum(case when ${requestUsages.type} = 'outputTokens' then ${requestUsages.value} else 0 end), 0)`.as('outputTokens'),
+      cachedInputTokens: sql<number>`coalesce(sum(case when ${requestUsages.type} = 'cachedInputTokens' then ${requestUsages.value} else 0 end), 0)`.as('cachedInputTokens'),
     })
     .from(requestUsages)
     .where(gte(requestUsages.createdTime, sinceMs))
@@ -78,8 +81,10 @@ export async function getStatsSummary(sinceMs: number): Promise<StatsSummary> {
   const failed = result?.failed ?? 0
   const inputTokens = usageResult?.inputTokens ?? 0
   const outputTokens = usageResult?.outputTokens ?? 0
-  // 总 token 是派生值：输入 + 输出。两个加数来自同一次扫描，合计与两列必然自洽。
-  return { totalRequests: total, successCount: success, failedCount: failed, successRate: total > 0 ? success / total : 0, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }
+  const cachedInputTokens = usageResult?.cachedInputTokens ?? 0
+  // 总 token 与命中率都是派生值：加数、分子分母都来自同一次扫描，合计与各列必然自洽。
+  // 命中率的公式只写在 `@common/metrics` 里，这里只是把同一批样本的两个总量送进去。
+  return { totalRequests: total, successCount: success, failedCount: failed, successRate: total > 0 ? success / total : 0, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheHitRate: cacheHitRate(cachedInputTokens, inputTokens) }
 }
 
 /** SQL 侧只能产出用量列：标签属于桶清单，由 JS 在补齐空桶时赋上。 */

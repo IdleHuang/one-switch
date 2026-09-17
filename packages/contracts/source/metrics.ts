@@ -179,38 +179,45 @@ export function formatOutputSpeed(tokensPerSecond: number | null | undefined): s
 }
 
 /**
- * 单次请求的平均输出 Token：同一时间窗内的输出 Token 总量 ÷ 请求总数。
+ * 每次调用的平均输出 Token：某个口径下的输出 Token 总量 ÷ 产出这些输出的调用数。
  *
- * 分子是**所有请求的输出之和**，不区分成功与否——分母是窗口里的全部请求，
- * 分子就必须是这些请求产出的全部输出，两边是同一批样本；请求级聚合天然满足这一点。
+ * 请求级与尝试级是同一个式子的两个口径：窗口整体是「输出总量 ÷ 请求总数」，
+ * 排行里一行是「该模型成功调用的输出总量 ÷ 成功调用数」。两处的判据是同一条：
+ * **分母数的是谁，分子就得是这批调用产出的输出**——拿只含成功样本的分子去除以全部
+ * 调用数，比值会被单方面压低，得到的数既不描述成功的那批，也不描述全部。
  *
- * 它回答「一次请求平均产出多少内容」，与响应体量成正比不是缺陷，正是它的定义。
+ * 它回答「一次调用平均产出多少内容」，与响应体量成正比不是缺陷，正是它的定义。
  *
- * 请求数为 0 时返回 `null` 而不是 0：没有请求就是「没测到」，不是「平均输出为零」。
- * 有请求但输出为 0 时返回 0，那是真实的「测得 0」。
+ * 调用数为 0 时返回 `null` 而不是 0：没调用就是「没测到」，不是「平均输出为零」。
+ * 有调用但输出为 0 时返回 0，那是真实的「测得 0」。
  */
-export function averageOutputTokensPerRequest(outputTokens: number, totalRequests: number): number | null {
-  if (!(totalRequests > 0)) return null
-  return outputTokens / totalRequests
+export function averageOutputTokensPerCall(outputTokens: number, callCount: number): number | null {
+  if (!(callCount > 0)) return null
+  return outputTokens / callCount
 }
 
 /**
- * 平均输出的展示分解：显示的数值与小数位。
+ * 缓存命中率：缓存读取 Token ÷ 输入 Token 总量。
  *
- * {@link formatAverageOutput} 是它的文本形态，两者共用同一套取舍规则
- * （见 {@link magnitudeDecimalPlaces}）。没有样本时为 `null`——界面据此写 `—`，而不是 `0`。
+ * 分子本就是分母的一部分——输入 Token 总量含缓存读取（缓存只是计费便宜，上下文该读进去的
+ * 字节一个不少），两者同一口径相除才是命中率。换一个分母（例如输入与缓存相加）会把比率
+ * 稀释成另一个数。
+ *
+ * 输入为 0 时返回 `null` 而不是 0：没有输入就是「没测到」，不是「一次都没命中」。
+ * 输入为正但一次没命中时返回 0，那是真实的「测得 0」。
  */
-export function averageOutputDisplayParts(value: number | null | undefined): { value: number; decimalPlaces: number } | null {
-  if (value == null || !Number.isFinite(value)) return null
-  return { value, decimalPlaces: magnitudeDecimalPlaces(value) }
+export function cacheHitRate(cachedInputTokens: number, inputTokens: number): number | null {
+  if (!(inputTokens > 0)) return null
+  return cachedInputTokens / inputTokens
 }
 
 /**
- * 单次请求平均输出的文本形态。
+ * 平均输出的文本形态。
  *
- * 没有样本时写 `—`，不写 `0`——「没测到」和「测得 0」必须在界面上分得开。
+ * 小数位取舍见 {@link magnitudeDecimalPlaces}：同一个数在排行榜写 `80`、在别处写 `80.3`
+ * 会被读成两个数。没有样本时写 `—`，不写 `0`——「没测到」和「测得 0」必须在界面上分得开。
  */
 export function formatAverageOutput(value: number | null | undefined): string {
-  const parts = averageOutputDisplayParts(value)
-  return parts ? parts.value.toFixed(parts.decimalPlaces) : '—'
+  if (value == null || !Number.isFinite(value)) return '—'
+  return value.toFixed(magnitudeDecimalPlaces(value))
 }
