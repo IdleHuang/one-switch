@@ -2,14 +2,20 @@ packages:
   - packages/*
   - apps/*
 
-# `app-builder-lib@26.15.3` 声明 `@electron/get: ^3.0.0`，代码里却用了
-# `ElectronDownloadCacheMode`（`ReadWrite`/`WriteOnly`）。这个枚举是
-# `@electron/get@3.1.0` 才引入的，而 3.0.0 虽然满足 `^3.0.0` 却没有它
-# → 打包时任何一次 Electron 产物下载都会抛
-# `TypeError: Cannot read properties of undefined (reading 'ReadWrite')`。
-# pnpm 不会自动把已满足范围的 3.0.0 提升到 3.1.0，必须显式钉住。
+# 精确到「谁依赖谁」，不按版本号整段覆盖：3.x 这个 major 目前只有 app-builder-lib
+# 在用（electron 自己是 5.x），但 `@electron/get@3` 这种写法会在它将来升级到 5.x
+# 后静默失效，而 `parent>child` 会在 parent 改名/移除时直接报错，暴露得更早。
+#
+# 为什么必须钉住（2026-10 正式版发布失败的直接原因）：
+# app-builder-lib@26.15.3 声明 `@electron/get: ^3.0.0`，代码里却无条件读
+# `ElectronDownloadCacheMode.ReadWrite`（`out/util/electronGet.js` 的 `resolveCacheMode`）。
+# 该枚举是 3.1.0 才引入的，3.0.0 满足 `^3.0.0` 却根本没有它 → 打包时下载 Electron
+# 产物抛 `TypeError: Cannot read properties of undefined (reading 'ReadWrite')`。
+# 没有任何配置开关能绕过：`ELECTRON_DOWNLOAD_CACHE_MODE` 那条分支自己也读同一个枚举，
+# `electronDist` 也绕不过（`resolveCacheMode()` 在构造下载配置时无条件调用）。
+# 上游 v26 最新版（26.17.0）仍是 `^3.0.0` + 同样写法，只有 27.0.0-alpha 改成 `^5.0.0`。
 overrides:
-  '@electron/get@3': 3.1.0
+  'app-builder-lib>@electron/get': ^3.1.0
 
 allowBuilds:
   electron: true
