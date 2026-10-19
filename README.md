@@ -244,7 +244,7 @@ Better to be clear about the edges than let you find them the hard way:
 
 ## Local development
 
-Node.js 22+ and pnpm 11 are required:
+Node.js 22+ and pnpm 12 are required (the exact version is pinned by `packageManager` in the root `package.json`, so `corepack` installs it for you):
 
 ```bash
 pnpm install

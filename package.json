@@ -5,7 +5,7 @@
   "license": "PolyForm-Noncommercial-1.0.0",
   "author": "yinxulai <yinxulai@hotmail.com>",
   "type": "module",
-  "packageManager": "pnpm@11.8.0",
+  "packageManager": "pnpm@12.14.0",
   "engines": {
     "node": ">=22"
   },
@@ -100,7 +100,7 @@
     "@typescript-eslint/parser": "^8.71.2",
     "@typescript-eslint/utils": "^8.71.2",
     "@vitejs/plugin-react": "^6.1.2",
-    "@vitest/coverage-v8": "5.0.4",
+    "@vitest/coverage-v8": "^5.0.5",
     "@yinxulai/eslint-plugin-peculiar": "^1.0.6",
     "drizzle-kit": "1.0.0-rc.4",
     "electron": "^44.7.0",
@@ -113,6 +113,6 @@
     "@typescript/native": "npm:typescript@^7.0.2",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vite": "^8.3.4",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.5"
   }
 }

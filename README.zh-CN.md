@@ -246,7 +246,7 @@ curl http://127.0.0.1:9300/v1/models
 
 ## 本地开发
 
-需要 Node.js 22+ 和 pnpm 11：
+需要 Node.js 22+ 和 pnpm 12（确切版本由根 `package.json` 的 `packageManager` 钉住，`corepack` 会自动装好）：
 
 ```bash
 pnpm install

@@ -2,21 +2,19 @@ packages:
   - packages/*
   - apps/*
 
-# 精确到「谁依赖谁」，不按版本号整段覆盖：3.x 这个 major 目前只有 app-builder-lib
-# 在用（electron 自己是 5.x），但 `@electron/get@3` 这种写法会在它将来升级到 5.x
-# 后静默失效，而 `parent>child` 会在 parent 改名/移除时直接报错，暴露得更早。
+# 不要再随手写出类似 `'app-builder-lib>@electron/get': ^3.1.0` 的 override。
 #
-# 为什么必须钉住（2026-10 正式版发布失败的直接原因）：
-# app-builder-lib@26.15.3 声明 `@electron/get: ^3.0.0`，代码里却无条件读
-# `ElectronDownloadCacheMode.ReadWrite`（`out/util/electronGet.js` 的 `resolveCacheMode`）。
-# 该枚举是 3.1.0 才引入的，3.0.0 满足 `^3.0.0` 却根本没有它 → 打包时下载 Electron
-# 产物抛 `TypeError: Cannot read properties of undefined (reading 'ReadWrite')`。
-# 没有任何配置开关能绕过：`ELECTRON_DOWNLOAD_CACHE_MODE` 那条分支自己也读同一个枚举，
-# `electronDist` 也绕不过（`resolveCacheMode()` 在构造下载配置时无条件调用）。
-# 上游 v26 最新版（26.17.0）仍是 `^3.0.0` + 同样写法，只有 27.0.0-alpha 改成 `^5.0.0`。
-overrides:
-  'app-builder-lib>@electron/get': ^3.1.0
-
+# 背景（2026-10 正式版发布失败）：app-builder-lib@26.15.3 声明 `@electron/get: ^3.0.0`，
+# 代码里却无条件读 `ElectronDownloadCacheMode.ReadWrite`（`out/util/electronGet.js` 的
+# `resolveCacheMode`）。该枚举是 3.1.0 才引入的，3.0.0 满足 `^3.0.0` 却根本没有它 →
+# 打包时下载 Electron 产物抛 `TypeError: Cannot read properties of undefined (reading 'ReadWrite')`。
+#
+# 当时用 override 兜住了，但那是治标：真正的原因是 pnpm 11.8 在读取 npmmirror 的
+# abbreviated metadata 时，顶层 `time` 字段被截断（只剩 3 个 key，而 `versions` 有 44 个），
+# 于是 semver 挑最高版本时缺少发布时间信息，把 `^3.0.0` 解析成了 3.0.0 而不是 3.1.0。
+# 同一份锁文件在 registry.npmjs.org 下、或 pnpm >= 11.28 下都能正确得到 3.1.0；
+# 受影响的不止这一个包（同一镜像下 66 个包被 pnpm 11.8 钉在旧版本）。
+# 所以 `packageManager` 里的 pnpm 版本是这条链路的唯一保障，降级会静默复现。
 allowBuilds:
   electron: true
   electron-winstaller: true
