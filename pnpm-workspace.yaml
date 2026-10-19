@@ -2,6 +2,15 @@ packages:
   - packages/*
   - apps/*
 
+# `app-builder-lib@26.15.3` 声明 `@electron/get: ^3.0.0`，代码里却用了
+# `ElectronDownloadCacheMode`（`ReadWrite`/`WriteOnly`）。这个枚举是
+# `@electron/get@3.1.0` 才引入的，而 3.0.0 虽然满足 `^3.0.0` 却没有它
+# → 打包时任何一次 Electron 产物下载都会抛
+# `TypeError: Cannot read properties of undefined (reading 'ReadWrite')`。
+# pnpm 不会自动把已满足范围的 3.0.0 提升到 3.1.0，必须显式钉住。
+overrides:
+  '@electron/get@3': 3.1.0
+
 allowBuilds:
   electron: true
   electron-winstaller: true
