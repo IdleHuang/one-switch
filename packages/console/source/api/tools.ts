@@ -2,6 +2,18 @@ import type { ModelTestMode, Protocol } from '@common/schemas'
 import type { TranslateParams } from '@common/i18n'
 import { request } from './client'
 
+export interface ModelTestRoundResult {
+  round: number
+  success: boolean
+  statusCode?: number
+  durationMilliseconds: number
+  errorMessage?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  ttftMilliseconds?: number | null
+  tokensPerSecond?: number | null
+}
+
 export interface ModelTestResult {
   modelId: string
   modelName: string
@@ -17,14 +29,23 @@ export interface ModelTestResult {
   durationMilliseconds: number
   ttftMilliseconds?: number | null
   tokensPerSecond?: number | null
+  /** 逐轮明细；老服务端不返回这个字段，界面据此退回「只有一次结论」的展示。 */
+  rounds?: ModelTestRoundResult[]
 }
 
 export interface ModelTestFilters { providerIds?: string[]; modelIds?: string[] }
 
+/** 诊断参数。轮次与提示词只影响这一次测试，不写入任何配置。 */
+export interface ModelTestOptions {
+  rounds?: number
+  prompt?: string
+  inputLength?: number
+}
+
 export const modelTestApi = {
-  run: (protocol: Protocol, mode: ModelTestMode, filters: ModelTestFilters = {}, signal?: AbortSignal) => request<{ results: ModelTestResult[] }>(
+  run: (protocol: Protocol, mode: ModelTestMode, filters: ModelTestFilters = {}, options: ModelTestOptions = {}, signal?: AbortSignal) => request<{ results: ModelTestResult[] }>(
     '/model-test/run',
-    { protocol, mode, ...filters },
+    { protocol, mode, ...filters, ...options },
     { signal },
   ),
 }

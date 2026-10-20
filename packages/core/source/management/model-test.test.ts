@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeDatabases, initDatabases } from '../database'
-import { buildTestBody, modelTestRoutes, readUsage, StreamProbeResponse } from './routes/diagnostics/model-test'
+import { buildTestBody, modelTestRoutes, padPrompt, readUsage, StreamProbeResponse } from './routes/diagnostics/model-test'
 import { mockResponse } from './test-support'
 
 let temporaryDirectory: string
@@ -101,6 +101,55 @@ describe('model test payload', () => {
     // 数到 200 会被 16 个 Token 掐断，测出来的就不是「出字速度」而是「上限速度」。
     expect(JSON.parse(buildTestBody('anthropic-messages', 'claude', false, 'speed')).max_tokens).toBeGreaterThan(16)
     expect(JSON.parse(buildTestBody('anthropic-messages', 'gpt', true, 'speed'))).not.toHaveProperty('max_tokens')
+  })
+})
+
+/**
+ * 「测试配置」里那几项落到请求体上的样子。
+ *
+ * 这几条守的是同一个原则：配置只改**发出去的那句话**，不改诊断本身的形态。
+ * 提示词换了，模式仍是模式（流式与否、max_tokens 都不跟着动）。
+ */
+describe('model test body options', () => {
+  function promptOf(body: string): string {
+    const parsed = JSON.parse(body) as { messages?: { content: string }[]; input?: { content: string }[] }
+    return (parsed.messages ?? parsed.input)![0].content
+  }
+
+  it('自定义提示词替换掉模式默认值，三种协议都换', () => {
+    const prompt = '只回一个词'
+    expect(promptOf(buildTestBody('openai-completions', 'gpt', false, 'connectivity', { prompt }))).toBe(prompt)
+    expect(promptOf(buildTestBody('openai-responses', 'gpt', false, 'connectivity', { prompt }))).toBe(prompt)
+    expect(promptOf(buildTestBody('anthropic-messages', 'claude', false, 'connectivity', { prompt }))).toBe(prompt)
+  })
+
+  it('提示词只去首尾空白：中间原样发出去', () => {
+    expect(promptOf(buildTestBody('openai-completions', 'gpt', false, 'connectivity', { prompt: '  a  b  ' }))).toBe('a  b')
+  })
+
+  it('空提示词回落到模式默认值，而不是发一句空话', () => {
+    // 界面留空就不传 prompt，服务端必须自己兜回默认值，否则上游会收到空 content。
+    expect(promptOf(buildTestBody('openai-completions', 'gpt', false, 'connectivity', { prompt: '   ' }))).toBe('Hi')
+    const speed = promptOf(buildTestBody('openai-completions', 'gpt', false, 'speed', {}))
+    expect(speed.length).toBeGreaterThan(20)
+  })
+
+  it('输入长度把提示词补齐到目标字符数', () => {
+    const padded = promptOf(buildTestBody('openai-completions', 'gpt', false, 'connectivity', { prompt: 'Hi', inputLength: 500 }))
+    expect(padded.length).toBe(500)
+    expect(padded.startsWith('Hi')).toBe(true)
+    // 补的是可忽略的填充句，不是重复同一个字符（重复字符会被网关压掉，长度就白加了）。
+    expect(padded).toContain('Ignore the following filler text')
+  })
+
+  it('已经超长的提示词不被截断：尊重用户写的那份', () => {
+    const prompt = 'x'.repeat(100)
+    expect(padPrompt(prompt, 50)).toBe(prompt)
+  })
+
+  it('输入长度为 0 时原样返回，不留尾随空白', () => {
+    expect(padPrompt('Hi', 0)).toBe('Hi')
+    expect(padPrompt('Hi', -1)).toBe('Hi')
   })
 })
 

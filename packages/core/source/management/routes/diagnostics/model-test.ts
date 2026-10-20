@@ -16,12 +16,23 @@ import { sendSuccess } from '../../core/response'
 import { tokensPerSecondFromTotals } from '@common/metrics'
 import { ModelTestModeSchema, ProtocolSchema, type ModelTestMode, type Protocol } from '@common/schemas'
 
+/** 轮次上限：多测几轮是看稳定性，不是压测，别把一个渠道刷成限流。 */
+export const MAX_TEST_ROUNDS = 5
+/** 提示词上限：诊断只回答「通不通 / 快不快」，再长就是替用户跑业务请求了。 */
+export const MAX_TEST_PROMPT_LENGTH = 20_000
+
 const TestModelsSchema = z.object({
   protocol: ProtocolSchema,
   // 不给模式就是连通性：老界面、老脚本发的请求仍然按原来的语义跑。
   mode: ModelTestModeSchema.default('connectivity'),
   providerIds: z.array(z.string()).optional(),
   modelIds: z.array(z.string()).optional(),
+  /** 每个目标重复测几轮；默认 1，与旧行为逐字相同。 */
+  rounds: z.number().int().min(1).max(MAX_TEST_ROUNDS).default(1),
+  /** 自定义提示词；留空按模式取默认值。 */
+  prompt: z.string().max(MAX_TEST_PROMPT_LENGTH).optional(),
+  /** 提示词补齐到的字符数；0 表示不补。 */
+  inputLength: z.number().int().min(0).max(MAX_TEST_PROMPT_LENGTH).default(0),
 })
 
 /**
@@ -32,6 +43,34 @@ const TestModelsSchema = z.object({
  */
 const SPEED_PROMPT = 'Count from 1 to 200, separated by single spaces. Output only the numbers.'
 const SPEED_MAX_TOKENS = 512
+
+/** 各模式在用户没写提示词时用的默认值。 */
+const DEFAULT_PROMPTS: Record<ModelTestMode, string> = {
+  connectivity: 'Hi',
+  streaming: 'Hi',
+  speed: SPEED_PROMPT,
+}
+
+/**
+ * 「输入长度」靠这段中性句子补齐。
+ *
+ * 它必须是可忽略的填充文本：诊断量的是链路的耗时与出字，不是模型读得懂不懂。
+ * 用一句固定的英文而不是随机串，是为了让同一组配置在不同渠道之间可比。
+ */
+const LENGTH_PADDING_SENTENCE = 'Ignore the following filler text, it only exists to make this diagnostic request longer. '
+
+/** 一轮诊断的结论。多轮时界面按它逐轮展开，顶层字段是这一组的汇总。 */
+export interface ModelTestRoundResult {
+  round: number
+  success: boolean
+  statusCode?: number
+  durationMilliseconds: number
+  errorMessage?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  ttftMilliseconds?: number | null
+  tokensPerSecond?: number | null
+}
 
 export interface ModelTestResult {
   modelId: string
@@ -50,13 +89,62 @@ export interface ModelTestResult {
   ttftMilliseconds?: number | null
   /** 输出速度；只有速度诊断且成功、且拿得到输出 Token 时才有值。 */
   tokensPerSecond?: number | null
+  /** 逐轮明细：单轮时只有一条，老界面可以完全忽略这个字段。 */
+  rounds?: ModelTestRoundResult[]
+}
+
+function averageOf(values: number[]): number | null {
+  if (values.length === 0) return null
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+/**
+ * 把多轮明细压成顶层那一行。
+ *
+ * - `success` 取**全部通过**：跑三轮挂一轮仍然要红，否则「稳定通过」和「碰巧过一次」看起来一样。
+ * - 状态码取**第一个失败轮**的：查错要看的是失败那次的 HTTP 码，不是最后一轮碰巧的 200。
+ * - 耗时 / TTFT / Token 取各轮均值：多轮之后顶层那一格代表「这个目标的典型值」。
+ */
+function summarizeRounds(rounds: ModelTestRoundResult[]): Omit<ModelTestResult, 'modelId' | 'modelName' | 'providerId' | 'providerName' | 'mode'> {
+  const failure = rounds.find(round => !round.success)
+  const ttftValues = rounds
+    .map(round => round.ttftMilliseconds)
+    .filter((value): value is number => typeof value === 'number')
+  const speedValues = rounds
+    .map(round => round.tokensPerSecond)
+    .filter((value): value is number => typeof value === 'number')
+  const inputValues = rounds
+    .map(round => round.inputTokens)
+    .filter((value): value is number => typeof value === 'number')
+  const outputValues = rounds
+    .map(round => round.outputTokens)
+    .filter((value): value is number => typeof value === 'number')
+  const ttft = averageOf(ttftValues)
+  const speed = averageOf(speedValues)
+  const inputTokens = averageOf(inputValues)
+  const outputTokens = averageOf(outputValues)
+  return {
+    success: rounds.every(round => round.success),
+    statusCode: failure?.statusCode ?? rounds.at(-1)?.statusCode,
+    durationMilliseconds: Math.round(averageOf(rounds.map(round => round.durationMilliseconds)) ?? 0),
+    errorMessage: failure?.errorMessage,
+    inputTokens: inputTokens === null ? null : Math.round(inputTokens),
+    outputTokens: outputTokens === null ? null : Math.round(outputTokens),
+    ttftMilliseconds: ttft === null ? null : Math.round(ttft),
+    tokensPerSecond: speed === null ? null : Math.round(speed * 100) / 100,
+    rounds,
+  }
 }
 
 export const modelTestRoutes = new HttpRouter<ManagementHandler>()
   .post('/api/model-test/run', handleTestModels)
 
 async function handleTestModels(req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> {
-  const { protocol, mode, providerIds, modelIds } = TestModelsSchema.parse(body)
+  const { protocol, mode, providerIds, modelIds, rounds, prompt, inputLength } = TestModelsSchema.parse(body)
+  const bodyOptions: ModelTestBodyOptions = {
+    prompt: prompt?.trim() || undefined,
+    inputLength,
+  }
   // 流式与速度都必须在流式形态下跑：速度诊断要的首字节时刻在整包响应里根本不存在，
   // 所以「测速度」不是「连通性 + 多测几个数」，而是另一种请求写法。
   const streaming = mode !== 'connectivity'
@@ -110,99 +198,60 @@ async function handleTestModels(req: IncomingMessage, res: ServerResponse, body:
     const endpoint = directEndpoint || findConvertibleEndpoint(model, protocol)
     if (!endpoint) continue
 
-    const startedAt = Date.now()
-    try {
-      const testBody = buildTestBody(protocol, model.modelName, !directEndpoint, mode)
-      // 诊断要测的是「用户当下保存的那一份」：端点 URL 为空时借用供应商级配置，
-      // 与真实请求的区别只在这里，因此直接复用规划器的目标映射，不自己拼字段。
-      const candidate = {
-        model: {
-          ...model,
-          endpoints: model.endpoints.map(candidate => ({
-            ...candidate,
-            endpointUrl: candidate.endpointUrl.trim() || providerEndpoints.get(provider.id)?.get(candidate.protocol) || '',
-          })),
-        },
-        provider,
-      }
-      const target = buildUpstreamTarget(candidate, protocol)
-      if (!target) {
-        results.push({
-          modelId: model.id,
-          modelName: model.modelName,
-          providerId: provider.id,
-          providerName: provider.name,
-          mode,
-          success: false,
-          durationMilliseconds: Date.now() - startedAt,
-          ttftMilliseconds: null,
-          tokensPerSecond: null,
-          // 这里只会是「两层都没有地址」：保存时的校验会拦住它，所以只有从旧版本继承下来的
-          // 数据会走到这里（见 `packages/core/source/errors.ts` 的 `endpointUrlMissingError`）。
-          errorMessage: `No upstream url is configured for protocol ${protocol}`,
-        })
-        continue
-      }
-
-      const probe = streaming ? new StreamProbeResponse() : null
-      const response: BufferedProxyResponse = probe ?? new BufferedProxyResponse()
-      await executeProxyRequest({
-        context: createRequestContext({
-          requestId: generateId('req_'),
-          logicalModelId: 'diagnostic',
-          clientProtocol: protocol,
-          // 客户端跳的形态由我们声明：上游会照着这个形态回，而我们正是要看它照不照做。
-          transport: streaming ? 'http-stream' : 'http',
-          method: 'POST',
-          path: `/diagnostic/${protocol}`,
-          headers: {
-            accept: streaming ? 'text/event-stream' : 'application/json',
-            'content-type': 'application/json',
-          },
-          requestBody: Buffer.from(testBody),
-          signal: controller.signal,
-        }),
-        targets: [target],
-        response,
-        // 连接测试是内部执行：它的用量由 `provider_tested` 回答，不是客户端任务（见 `ExecutionOrigin`）。
-        origin: 'internal',
-      })
-      const success = response.statusCode >= 200 && response.statusCode < 400
-      // 流式的正文是 SSE，`readUsage` 那个「解一个 JSON」的读法在它面前永远是空的：
-      // 用量由同一个累加器从流里读走（它也是唯一还在数首字的地方）。
-      const usage = probe ? probe.usage() : readUsage(response.body)
-      const durationMilliseconds = Date.now() - startedAt
-
-      results.push({
-        modelId: model.id,
-        modelName: model.modelName,
-        providerId: provider.id,
-        providerName: provider.name,
-        mode,
-        success,
-        statusCode: response.statusCode || undefined,
-        durationMilliseconds,
-        errorMessage: success ? undefined : getDiagnosticError(response),
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        ttftMilliseconds: probe ? probe.firstOutputElapsed(startedAt) : null,
-        tokensPerSecond: success && mode === 'speed' ? tokensPerSecondFromTotals(usage.outputTokens ?? 0, durationMilliseconds) : null,
-      })
-    } catch (error) {
-      if (controller.signal.aborted) break
-      results.push({
-        modelId: model.id,
-        modelName: model.modelName,
-        providerId: provider.id,
-        providerName: provider.name,
-        mode,
+    // 诊断要测的是「用户当下保存的那一份」：端点 URL 为空时借用供应商级配置，
+    // 与真实请求的区别只在这里，因此直接复用规划器的目标映射，不自己拼字段。
+    const candidate = {
+      model: {
+        ...model,
+        endpoints: model.endpoints.map(candidate => ({
+          ...candidate,
+          endpointUrl: candidate.endpointUrl.trim() || providerEndpoints.get(provider.id)?.get(candidate.protocol) || '',
+        })),
+      },
+      provider,
+    }
+    const target = buildUpstreamTarget(candidate, protocol)
+    if (!target) {
+      // 这里只会是「两层都没有地址」：保存时的校验会拦住它，所以只有从旧版本继承下来的
+      // 数据会走到这里（见 `packages/core/source/errors.ts` 的 `endpointUrlMissingError`）。
+      // 同一个配置每一轮都会得到同样的结论，所以不再重复发 N 轮。
+      const failure: ModelTestRoundResult = {
+        round: 1,
         success: false,
-        durationMilliseconds: Date.now() - startedAt,
+        durationMilliseconds: 0,
         ttftMilliseconds: null,
         tokensPerSecond: null,
-        errorMessage: (error as Error).message,
+        errorMessage: `No upstream url is configured for protocol ${protocol}`,
+      }
+      results.push({
+        modelId: model.id,
+        modelName: model.modelName,
+        providerId: provider.id,
+        providerName: provider.name,
+        mode,
+        ...summarizeRounds([failure]),
       })
+      continue
     }
+
+    const roundResults: ModelTestRoundResult[] = []
+    for (let round = 1; round <= rounds; round += 1) {
+      // 客户端断开时不再补后面的轮次：上游请求已经随 `signal` 断掉，接着测只是白花钱。
+      if (controller.signal.aborted) break
+      const roundResult = await runRound({ target, protocol, modelName: model.modelName, converted: !directEndpoint, mode, streaming, bodyOptions, signal: controller.signal, round })
+      // 被取消的那一轮不计入结论：它没有答案，记成失败会把「用户点了取消」算进失败率里。
+      if (controller.signal.aborted) break
+      roundResults.push(roundResult)
+    }
+    if (roundResults.length === 0) continue
+    results.push({
+      modelId: model.id,
+      modelName: model.modelName,
+      providerId: provider.id,
+      providerName: provider.name,
+      mode,
+      ...summarizeRounds(roundResults),
+    })
   }
 
   const aborted = controller.signal.aborted
@@ -215,6 +264,74 @@ async function handleTestModels(req: IncomingMessage, res: ServerResponse, body:
   }
   // 客户端断开后 socket 已经没了，再写回去只会多一次无意义的写失败；能写就写。
   if (!res.writableEnded && !res.destroyed) sendSuccess(res, { results })
+}
+
+interface RunRoundInput {
+  target: NonNullable<ReturnType<typeof buildUpstreamTarget>>
+  protocol: Protocol
+  modelName: string
+  converted: boolean
+  mode: ModelTestMode
+  streaming: boolean
+  bodyOptions: ModelTestBodyOptions
+  signal: AbortSignal
+  round: number
+}
+
+/** 跑一轮诊断。异常也收成本轮失败，不往上抛——多轮里挂一轮不该丢掉其余轮的结论。 */
+async function runRound(input: RunRoundInput): Promise<ModelTestRoundResult> {
+  const startedAt = Date.now()
+  try {
+    const testBody = buildTestBody(input.protocol, input.modelName, input.converted, input.mode, input.bodyOptions)
+    const probe = input.streaming ? new StreamProbeResponse() : null
+    const response: BufferedProxyResponse = probe ?? new BufferedProxyResponse()
+    await executeProxyRequest({
+      context: createRequestContext({
+        requestId: generateId('req_'),
+        logicalModelId: 'diagnostic',
+        clientProtocol: input.protocol,
+        // 客户端跳的形态由我们声明：上游会照着这个形态回，而我们正是要看它照不照做。
+        transport: input.streaming ? 'http-stream' : 'http',
+        method: 'POST',
+        path: `/diagnostic/${input.protocol}`,
+        headers: {
+          accept: input.streaming ? 'text/event-stream' : 'application/json',
+          'content-type': 'application/json',
+        },
+        requestBody: Buffer.from(testBody),
+        signal: input.signal,
+      }),
+      targets: [input.target],
+      response,
+      // 连接测试是内部执行：它的用量由 `provider_tested` 回答，不是客户端任务（见 `ExecutionOrigin`）。
+      origin: 'internal',
+    })
+    const success = response.statusCode >= 200 && response.statusCode < 400
+    // 流式的正文是 SSE，`readUsage` 那个「解一个 JSON」的读法在它面前永远是空的：
+    // 用量由同一个累加器从流里读走（它也是唯一还在数首字的地方）。
+    const usage = probe ? probe.usage() : readUsage(response.body)
+    const durationMilliseconds = Date.now() - startedAt
+    return {
+      round: input.round,
+      success,
+      statusCode: response.statusCode || undefined,
+      durationMilliseconds,
+      errorMessage: success ? undefined : getDiagnosticError(response),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      ttftMilliseconds: probe ? probe.firstOutputElapsed(startedAt) : null,
+      tokensPerSecond: success && input.mode === 'speed' ? tokensPerSecondFromTotals(usage.outputTokens ?? 0, durationMilliseconds) : null,
+    }
+  } catch (error) {
+    return {
+      round: input.round,
+      success: false,
+      durationMilliseconds: Date.now() - startedAt,
+      ttftMilliseconds: null,
+      tokensPerSecond: null,
+      errorMessage: (error as Error).message,
+    }
+  }
 }
 
 /**
@@ -301,10 +418,35 @@ export class StreamProbeResponse extends BufferedProxyResponse {
 }
 
 /** 导出仅供单测：诊断请求的默认正文是最容易被改错的一块。 */
-export function buildTestBody(protocol: Protocol, modelId: string, converted: boolean, mode: ModelTestMode = 'connectivity'): string {
+export interface ModelTestBodyOptions {
+  /** 自定义提示词；不传/空串时按模式取默认值。 */
+  prompt?: string
+  /** 提示词补齐到的字符数；0 表示不补。 */
+  inputLength?: number
+}
+
+/**
+ * 把提示词补齐到指定长度。
+ *
+ * 「输入长度」量的是**长上下文下的链路表现**（预填充耗时、网关缓冲），所以补的是中性的
+ * 填充句子而不是重复同一个字符：多数网关会把重复字符压掉，那样长度就白加了。
+ * 只补不截：用户写的提示词已经超过目标长度时，尊重他写的那份。
+ */
+export function padPrompt(prompt: string, inputLength: number): string {
+  if (inputLength <= 0 || prompt.length >= inputLength) return prompt
+  // 分隔符也算长度：先扣掉那`\n\n`，否则补出来的正文总比用户填的目标多两个字。
+  const separator = '\n\n'
+  const paddingLength = inputLength - prompt.length - separator.length
+  if (paddingLength <= 0) return prompt
+  const repeats = Math.ceil(paddingLength / LENGTH_PADDING_SENTENCE.length)
+  return `${prompt}${separator}${LENGTH_PADDING_SENTENCE.repeat(repeats).slice(0, paddingLength)}`
+}
+
+export function buildTestBody(protocol: Protocol, modelId: string, converted: boolean, mode: ModelTestMode = 'connectivity', options: ModelTestBodyOptions = {}): string {
   // 速度诊断要一段足够长的输出，否则出字快慢全被首字节和连接开销盖住；
   // 其余模式只问「通不通」，一句话就够，也就没有成本风险。
-  const prompt = mode === 'speed' ? SPEED_PROMPT : 'Hi'
+  const basePrompt = options.prompt?.trim() || DEFAULT_PROMPTS[mode]
+  const prompt = padPrompt(basePrompt, options.inputLength ?? 0)
   // 流式与否写在请求体里，不是写在头上：三种协议都靠 `stream: true` 表达这件事，
   // 上游也只认这个字段（Anthropic 同样是给 `stream` 才回 SSE）。速度诊断也要流式，
   // 否则量不到首字节与出字。

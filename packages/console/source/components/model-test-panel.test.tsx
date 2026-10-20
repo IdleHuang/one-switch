@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Provider, ProviderModelRoute } from '@common/schemas'
 import { PROTOCOL_DISPLAY_NAMES } from '@common/protocols'
@@ -17,10 +17,10 @@ import { ModelTestPanel } from './model-test-panel'
  * 1. **一格只放一个事实。** 结果表最后一格原本是「HTTP 404 ↓1234」：协议结论与产出量
  *    是两个量纲，挤在一格里读起来像一句话，横向比对时又只能整格从七零八落的宽度里找。
  *    现在状态列只说状态（HTTP 码退进 `title`），输出 Token 单列右对齐。
- * 2. **协议不进列，进色条。** 协议是贴在渠道 / 模型格左侧的那 2px 竖线上；协议名印在
- *    分段控件上，用正式写法（`OpenAI Completions`），不缩写成 `Completions`。独立一列
- *    要多付 62px 的固定宽度，而主体格右侧本来就空着一片。
- * 3. **协议只属于模型，不属于渠道。** 数据里协议长在模型端点上，一个模型可能三种协议
+ * 2. **协议单独成列。** 一行就是一个「模型 × 协议」，扫结果时最常问的就是「哪个协议挂了」，
+ *    所以协议进自己的列，色条退场（色条只能表达「是转出来的」，说不出「测的是哪个协议」）。
+ * 3. **每行能展开。** 展开后给出逐轮结果、成功率与错误原文；收起时不渲染明细。
+ * 4. **协议只属于模型，不属于渠道。** 数据里协议长在模型端点上，一个模型可能三种协议
  *    都有，所以渠道这一层不能出现任何协议名——那要么是从下面几行求和出来的重复，
  *    要么在说一件数据里并不存在的事。
  *
@@ -110,14 +110,12 @@ function selectProvider() {
  * 结果表里某个模型的**全部**行。
  *
  * 名字在页面上出现不止一次：左栏也印模型名，而一个模型可以按协议排出好几条任务。
- * 主体格是行里唯一带 `relative` 且含绝对定位色条的格子，用它把「结果表的行」筛出来；
- * 行本身是它的父节点。
+ * 结果行是整行可点的那枚 `role="button"`（展开明细用），用它把行筛出来。
  */
 function tableRowsFor(modelName: string): HTMLElement[] {
   return screen.getAllByText(modelName)
-    .map(node => node.closest('div.relative'))
-    .filter((cell): cell is HTMLElement => Boolean(cell?.querySelector('span.absolute')))
-    .map(cell => cell.parentElement as HTMLElement)
+    .map(node => node.closest('[role="button"][aria-expanded]'))
+    .filter((row): row is HTMLElement => Boolean(row))
 }
 
 /** 分段控件的凹槽（`PROTOCOL_TRACK_CLASS`）。限定在它里面找，就不会捞到渠道与模型那两圈勾选框。 */
@@ -129,9 +127,9 @@ function protocolSegments(index = 0): HTMLElement[] {
   return [...protocolSegmentTrack(index).querySelectorAll<HTMLElement>('button')]
 }
 
-/** 协议色条：主体格里那个绝对定位的 2px 竖线。 */
-function gutters(): HTMLElement[] {
-  return [...document.querySelectorAll<HTMLElement>('span.absolute.w-0\\.5')]
+/** 结果行最左侧那枚展开箭头（`aria-expanded` 挂在行上）。 */
+function expandToggles(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>('[role="button"][aria-expanded]')]
 }
 
 /**
@@ -169,7 +167,7 @@ function startTest() {
 }
 
 describe('结果表的列划分', () => {
-  it('表头六列，每列只写一个事实；协议不占列', async () => {
+  it('表头七列，每列只写一个事实；协议单独成列', async () => {
     renderPanel()
     selectProvider()
 
@@ -177,17 +175,18 @@ describe('结果表的列划分', () => {
     // 表头是 `TableHeaderSurface`，它就是那一层带底色的横条。
     const headerSpan = header ?? document.querySelector('div.border-b.border-border\\/50') as HTMLElement
     const labels = [...headerSpan.querySelectorAll('span')].map(node => node.textContent)
+    // 第一格空着：下面是每行的展开箭头，那一列不需要列名。
     expect(labels).toEqual([
+      '',
       zh('modelTest.table.target'),
+      zh('modelTest.table.protocol'),
       zh('modelTest.table.status'),
       zh('modelTest.table.ttft'),
       zh('modelTest.table.duration'),
       zh('modelTest.table.speed'),
       zh('modelTest.table.tokens'),
     ])
-    // 从前那个装着「HTTP 码 + 输出 Token」的响应列没有了。
-    expect(labels).not.toContain('协议')
-    // 四个数字列右对齐，两个文字列左对齐：对齐方向本身就是「这一列拿来比大小」的信号。
+    // 四个数字列右对齐，其余文字列左对齐：对齐方向本身就是「这一列拿来比大小」的信号。
     expect(headerSpan.querySelectorAll('span.text-right')).toHaveLength(4)
   })
 
@@ -235,18 +234,95 @@ describe('结果表的列划分', () => {
   })
 })
 
-describe('协议色条', () => {
-  it('转出来的协议换警告色，原生协议用中性色——一列一义，不抢状态列的颜色', async () => {
+describe('协议列', () => {
+  it('每行印出自己测的协议；转出来的协议带警告色标记', async () => {
     stubRunResults()
     renderPanel()
     selectProvider()
     startTest()
 
-    await waitFor(() => { expect(gutters().length).toBe(4) })
+    await waitFor(() => { expect(expandToggles()).toHaveLength(4) })
 
     // 4 行：转换模型 3 个协议（completions 原生 + 2 个转换）、原生模型 1 个协议。
-    expect(gutters().filter(node => node.className.includes('bg-warning'))).toHaveLength(2)
-    expect(gutters().filter(node => node.className.includes('bg-primary/50'))).toHaveLength(2)
+    const rows = expandToggles()
+    /*
+     * 协议名在结果行里出现：扫结果时最常问的就是「哪个协议挂了」。
+     * 一格里只说一个协议，所以逐行数「这一行命中了几个协议名」必须正好是 1——
+     * 用「全文某协议名出现几次」来数会串台：anthropic-messages 两个模型都在测。
+     */
+    const names = Object.values(PROTOCOL_DISPLAY_NAMES)
+    for (const row of rows) {
+      expect(names.filter(name => row.textContent?.includes(name))).toHaveLength(1)
+    }
+    expect(rows.filter(row => row.textContent?.includes(PROTOCOL_DISPLAY_NAMES['openai-completions']))).toHaveLength(1)
+    expect(rows.filter(row => row.textContent?.includes(PROTOCOL_DISPLAY_NAMES['openai-responses']))).toHaveLength(1)
+    // 转出来的协议走 warning 色（与左栏分段控件同一套语义），直连的不上色。
+    // 4 行里只有「原始协议」那两行是直连：转换模型 × completions、原生模型 × anthropic-messages。
+    expect(rows.filter(row => row.querySelector('span.text-text-warning'))).toHaveLength(2)
+  })
+})
+
+describe('展开逐轮明细', () => {
+  it('收起时不渲染明细，点开才出现成功率与逐轮行', async () => {
+    stubRunResults()
+    renderPanel()
+    selectProvider()
+    startTest()
+
+    await waitFor(() => { expect(expandToggles()).toHaveLength(4) })
+    expect(screen.queryByText(zh('modelTest.detail.summary'))).toBeNull()
+
+    const failedRow = expandToggles().find(row => row.textContent?.includes(CONVERTING_MODEL))!
+    expect(failedRow.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(failedRow)
+
+    await waitFor(() => { expect(screen.getAllByText(zh('modelTest.detail.summary')).length).toBe(1) })
+    expect(expandToggles().find(row => row.textContent?.includes(CONVERTING_MODEL))!.getAttribute('aria-expanded')).toBe('true')
+    // 单轮失败：0/1 轮成功，错误原文也在明细里。
+    // 断言限定在这一行里：同一个模型排了三条任务，三条的失败原文都一样。
+    const detail = within(failedRow).getByText(zh('modelTest.detail.summary')).closest('div.col-span-full') as HTMLElement
+    expect(within(detail).getByText('0/1 · 0%')).toBeTruthy()
+    expect(within(detail).getByText('invalid api key')).toBeTruthy()
+
+    // 再点一次收起，明细从 DOM 里消失。
+    fireEvent.click(expandToggles().find(row => row.textContent?.includes(CONVERTING_MODEL))!)
+    await waitFor(() => { expect(screen.queryByText(zh('modelTest.detail.summary'))).toBeNull() })
+  })
+
+  it('服务端给了逐轮记录就逐轮列出来，成功率按轮次算', async () => {
+    vi.mocked(modelTestApi.run).mockImplementation(async () => ({
+      success: true,
+      data: {
+        results: [{
+          modelId: 'm1',
+          modelName: CONVERTING_MODEL,
+          providerId: 'prov_1',
+          providerName: PROVIDER_NAME,
+          mode: 'connectivity',
+          // 两轮里挂了一轮：总账算失败，这正是「多轮才能看出稳定性」的用处。
+          success: false,
+          statusCode: 429,
+          durationMilliseconds: 800,
+          errorMessage: 'rate limited',
+          rounds: [
+            { round: 1, success: true, statusCode: 200, durationMilliseconds: 600, outputTokens: 12 },
+            { round: 2, success: false, statusCode: 429, durationMilliseconds: 1000, errorMessage: 'rate limited' },
+          ],
+        }],
+      },
+    }))
+    renderPanel()
+    selectProvider()
+    startTest()
+
+    await waitFor(() => { expect(expandToggles().length).toBeGreaterThan(0) })
+    const row = expandToggles()[0]
+    fireEvent.click(row)
+
+    await waitFor(() => { expect(within(row).getByText('1/2 · 50%')).toBeTruthy() })
+    expect(within(row).getByText(zh('modelTest.detail.round', { round: 1 }))).toBeTruthy()
+    expect(within(row).getByText(zh('modelTest.detail.round', { round: 2 }))).toBeTruthy()
+    expect(within(row).getByText('rate limited')).toBeTruthy()
   })
 })
 
@@ -291,15 +367,61 @@ describe('左侧勾选区', () => {
      * 所以展开后如果多出一行渠道级协议，它要么是从下面几行求和出来的（重复），
      * 要么在说一件数据里并不存在的事（误导）。
      *
-     * 协议名现在**正当地**出现在分段里，所以不能用「全文出现几次」来守这条：
-     * 改成数**哪些容器**里出现。分段控件的那条槽（`div.inline-flex.items-stretch`）
-     * 是唯一的合法容器，槽之外一个都不该有。
+     * 协议名现在**正当地**出现在两处：左栏分段、以及右侧结果行的协议列。
+     * 所以这条约束只看左栏（结果行是另一回事），并在左栏里只认分段控件那条槽
+     * （`div.inline-flex.items-stretch`）——槽之外一个都不该有。
      */
+    const aside = document.querySelector('aside') as HTMLElement
     for (const name of Object.values(PROTOCOL_DISPLAY_NAMES)) {
-      const nodes = screen.getAllByText(name)
+      const nodes = within(aside).getAllByText(name)
       expect(nodes.length).toBeGreaterThan(0)
       const hosts = nodes.map(node => node.closest('div.inline-flex.items-stretch'))
       expect(hosts.filter(Boolean)).toHaveLength(hosts.length)
     }
+  })
+})
+
+describe('测试配置页', () => {
+  it('设置按钮在开始按钮左边，点开后换到配置页而不是再叠一层弹窗', () => {
+    renderPanel()
+    selectProvider()
+
+    const settings = screen.getByRole('button', { name: zh('modelTest.action.settings') })
+    const start = screen.getByRole('button', { name: zh('modelTest.action.start') })
+    // 同一个动作区里，设置在开始之前（DOM 顺序即视觉顺序）。
+    expect(settings.compareDocumentPosition(start) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    fireEvent.click(settings)
+    expect(screen.getByText(zh('modelTest.config.concurrency'))).toBeTruthy()
+    expect(screen.getByText(zh('modelTest.config.rounds'))).toBeTruthy()
+    expect(screen.getByText(zh('modelTest.config.inputLength'))).toBeTruthy()
+    expect(screen.getByText(zh('modelTest.config.prompt'))).toBeTruthy()
+    // 结果表与开始按钮都不在了——是换页，不是叠层。
+    expect(screen.queryByRole('button', { name: zh('modelTest.action.start') })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: zh('modelTest.config.back') }))
+    expect(screen.getByRole('button', { name: zh('modelTest.action.start') })).toBeTruthy()
+  })
+
+  it('轮次与并发随请求一起发出去，提示词留空就不发', async () => {
+    stubRunResults()
+    renderPanel()
+    selectProvider()
+
+    fireEvent.click(screen.getByRole('button', { name: zh('modelTest.action.settings') }))
+    // 「测试轮次」那一条的 + 按钮：点两下从 1 变成 3。
+    const roundsRow = screen.getByText(zh('modelTest.config.rounds')).closest('div.flex') as HTMLElement
+    const plus = [...roundsRow.querySelectorAll('button')].find(node => node.getAttribute('aria-label') === '+')!
+    fireEvent.click(plus)
+    fireEvent.click(plus)
+
+    fireEvent.click(screen.getByRole('button', { name: zh('modelTest.config.back') }))
+    startTest()
+
+    await waitFor(() => { expect(modelTestApi.run).toHaveBeenCalled() })
+    const options = vi.mocked(modelTestApi.run).mock.calls[0][3]
+    expect(options).toMatchObject({ rounds: 3, inputLength: 0 })
+    // 空提示词不发：让服务端按模式取默认，两边口径一致。
+    expect(options?.prompt).toBeUndefined()
   })
 })

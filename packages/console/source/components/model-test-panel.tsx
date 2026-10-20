@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ArrowLeft,
   ChevronDown,
+  ChevronRight,
   Cpu,
   FlaskConical,
   Gauge,
@@ -8,6 +10,7 @@ import {
   Repeat,
   RotateCcw,
   Search,
+  Settings2,
   Square,
   Trash2,
   TriangleAlert,
@@ -16,8 +19,9 @@ import { formatMilliseconds, formatOutputSpeed, formatTokenCount } from '@common
 import { ALL_MODEL_TEST_MODES, type ModelTestMode, type Protocol, type Provider, type ProviderModelRoute } from '@common/schemas'
 import type { UiCatalogKey } from '@common/i18n/catalogs'
 import { CONVERTIBLE_PROTOCOLS, PROTOCOL_DISPLAY_NAMES } from '@common/protocols'
-import { modelTestApi, type ModelTestResult } from '@/api/tools'
+import { modelTestApi, type ModelTestResult, type ModelTestRoundResult } from '@/api/tools'
 import { InlineEmptyState } from '@/components/inline-empty-state'
+import { FormRow } from '@/components/form-kit'
 import { PROTOCOL_ICONS } from '@/components/protocol-icons'
 import { TableFrame, TableHeaderSurface, tableRowClass } from '@/components/table-primitives'
 import { Button } from '@/components/ui/button'
@@ -33,6 +37,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { useTranslation, type AppTranslator } from '@/i18n/provider'
 import {
   Dialog,
@@ -68,6 +73,31 @@ interface TestTask {
 const TEST_CONCURRENCY = 3
 
 /**
+ * 测试参数。
+ *
+ * 它们只影响**这一次诊断怎么写请求**，不进服务端配置：并发是界面侧的 worker 数，
+ * 轮次与提示词是随每次 `/model-test/run` 走的值。
+ */
+interface TestConfig {
+  concurrency: number
+  rounds: number
+  inputLength: number
+  prompt: string
+}
+
+const DEFAULT_TEST_CONFIG: TestConfig = {
+  concurrency: TEST_CONCURRENCY,
+  rounds: 1,
+  inputLength: 0,
+  prompt: '',
+}
+
+/** 并发上限与服务端的轮次上限同源口径：这是诊断，不是压测。 */
+const MAX_TEST_CONCURRENCY = 10
+const MAX_TEST_ROUNDS = 5
+const MAX_TEST_PROMPT_LENGTH = 20_000
+
+/**
  * 结果表列宽模板：表头与数据行共用一份，避免两处列宽只改一半。
  *
  * **一格只放一个事实。** 原先最后一格是「HTTP 404 ↓1234」：协议结论（上游回了什么）
@@ -75,53 +105,39 @@ const TEST_CONCURRENCY = 3
  * 整格扫——两列数据都等于没有列。现在 HTTP 状态回到它自己的「状态」列，输出 Token
  * 单独一列，与首字、耗时、速度三列并排，四个数字右对齐、等宽数字，扫一眼就能竖着比。
  *
- * 协议不再占一列：它挂在渠道 / 模型那一格里，做成左侧的**协议色条**（见
- * {@link protocolGutterClassName}）。独立一列要多付 62px 的固定宽度，而单元格右侧
- * 本来就空着一片；色条只花 2px，还把「这个模型跑的是哪个协议」贴在主体旁边，
- * 比隔着表头和空隙去看右边更直接。协议名不丢，它进 `title` + `aria-label`。
+ * 协议**单独成列**：色条只能表达「这条是转出来的」，说不出「测的是哪个协议」。
+ * 一行就是一个「模型 × 协议」，扫结果时最常见的提问就是「哪个协议挂了」，所以它值这一列。
+ *
+ * 最左边那 20px 是展开箭头：每行都能展开逐轮明细（轮次、成功率、错误原文）。
+ * 箭头单独占一列而不是塞进状态格，是因为状态格要能一眼竖着扫下来，多一个交互形状就扫不动。
  *
  * 列对所有模式都在：连通性只能填 `—`，但列数不跟着数据变——同一张表在三种模式之间
  * 来回切时列宽就不该跳。
  *
- * 窄屏（< md）落回单列堆叠，那时行里每格自带标签（{@link TASK_GRID_LABELS}），
+ * 窄屏（< md）落回单列堆叠，那时行里每格自带标签（{@link TaskCell} 的 `labelKey`），
  * 因为表头整条藏起来了。
  */
-const TASK_GRID_COLUMNS = 'md:grid-cols-[minmax(215px,1.5fr)_66px_62px_64px_64px_64px_64px]'
+const TASK_GRID_COLUMNS = 'md:grid-cols-[20px_minmax(150px,1.4fr)_minmax(120px,0.9fr)_66px_62px_64px_64px_64px]'
 
 /**
- * 网格里每一格的窄屏标签，顺序与 {@link TASK_GRID_COLUMNS} 逐格对应。
+ * 逐轮记录的**唯一来源**：新服务端给 `result.rounds`，老服务端只给一条总账。
  *
- * md 及以上由表头说话（标签只说一次），窄屏表头藏起来后由这里补上——堆叠成七段时
- * 右边那串裸数字没有表头，就只是几个没有名字的读数。
+ * 两种都要能展开，所以老数据就地补成「第 1 轮」——用同一条渲染路径，不写两套明细表，
+ * 也不因为服务端版本不同而让「点开看看」有时有内容、有时空白。
  */
-const TASK_GRID_LABELS: readonly (UiCatalogKey | null)[] = [
-  'modelTest.table.target',
-  'modelTest.table.status',
-  'modelTest.table.ttft',
-  'modelTest.table.duration',
-  'modelTest.table.speed',
-  'modelTest.table.tokens',
-]
-
-interface ProtocolGutterOptions {
-  converted: boolean
-  status?: TestTaskStatus
-}
-
-/**
- * 渠道 / 模型格左侧那条 2px 的协议色条。
- *
- * 颜色按语义分两类：**警告色=这个协议是转出来的**（请求会被改写，是全表最需要被看见的
- * 一类行）；**中性灰=直连协议**（正常，不该抢注意力）。全表没有红绿之争——成功与失败
- * 由状态列自己的图标和颜色说，色条只说协议，一列一义。
- *
- * 未跑之前（`status` 缺省）不上色：那时一行还没「成功 / 失败」可言，灰条已经能表达
- * 「这是一条普通协议」。
- */
-function protocolGutterClassName(options: ProtocolGutterOptions): string {
-  if (options.converted) return 'bg-warning'
-  if (options.status === 'cancelled') return 'bg-border'
-  return 'bg-primary/50'
+function getResultRounds(result: ModelTestResult): ModelTestRoundResult[] {
+  if (result.rounds?.length) return result.rounds
+  return [{
+    round: 1,
+    success: result.success,
+    statusCode: result.statusCode,
+    durationMilliseconds: result.durationMilliseconds,
+    errorMessage: result.errorMessage,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    ttftMilliseconds: result.ttftMilliseconds,
+    tokensPerSecond: result.tokensPerSecond,
+  }]
 }
 
 const TEST_MODE_LABEL_KEYS: Record<ModelTestMode, UiCatalogKey> = {
@@ -448,6 +464,13 @@ interface TestProgressProps {
 
 interface TestTaskRowProps {
   task: TestTask
+  expanded: boolean
+  onToggleExpanded: () => void
+}
+
+/** 展开体只接一条已完成的结论：没有 `result` 的行没有逐轮可看。 */
+interface TestTaskDetailProps {
+  task: TestTask
 }
 
 interface EmptyTestTasksProps {
@@ -543,18 +566,122 @@ function TaskCell(props: TaskCellProps) {
   )
 }
 
+/**
+ * 一行结果的展开体：先给一句总账，再给逐轮。
+ *
+ * 为什么两段都要：多轮诊断的结论是「全部轮次都成功才算成功」，所以只看逐轮列表
+ * 读不出「这个渠道到底算不算能用」；而只看成功率又不知道失败的那轮究竟回了什么。
+ * 总账在上、逐轮在下，先回答「能不能用」，再回答「哪一轮、为什么」。
+ *
+ * 明细里不重复「渠道 / 模型 / 协议」——它们就在正上面那一行，重复一遍只是把
+ * 一张小表拉长。
+ */
+function TaskDetail(props: TestTaskDetailProps) {
+  const t = useTranslation()
+  const rounds = getResultRounds(props.task.result!)
+  const successCount = rounds.filter(round => round.success).length
+  const successRate = Math.round((successCount / rounds.length) * 100)
+  return (
+    <div className="col-span-full rounded-lg border border-module-border">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/50 px-2.5 py-2 system-2xs-regular">
+        <span className="system-2xs-medium text-text-secondary">{t('modelTest.detail.summary')}</span>
+        <span className="text-text-tertiary">
+          {t('modelTest.detail.successRate')}{' '}
+          <span className={cn('font-mono tabular-nums', successRate === 100 ? 'text-text-success' : 'text-text-destructive')}>
+            {successCount}/{rounds.length} · {successRate}%
+          </span>
+        </span>
+        <span className="text-text-tertiary">
+          {t('modelTest.detail.protocol')}{' '}
+          <span className={cn('inline-flex items-center gap-1', props.task.converted ? 'text-text-warning' : 'text-text-secondary')}>
+            {props.task.converted && <Repeat size={9} aria-hidden />}
+            {PROTOCOL_DISPLAY_NAMES[props.task.protocol]}
+          </span>
+        </span>
+        <span className="text-text-tertiary">
+          {t('modelTest.detail.duration')}{' '}
+          <span className="font-mono tabular-nums text-text-secondary">{formatMilliseconds(props.task.result!.durationMilliseconds)}</span>
+        </span>
+      </div>
+
+      <div className="divide-y divide-border/40">
+        {rounds.map(round => (
+          <div key={round.round} className="grid gap-1.5 px-2.5 py-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 system-2xs-regular">
+              <span className="shrink-0 font-mono tabular-nums text-text-quaternary">
+                {t('modelTest.detail.round', { round: round.round })}
+              </span>
+              <span className={cn('shrink-0 system-2xs-medium', round.success ? 'text-text-success' : 'text-text-destructive')}>
+                {t(TASK_STATUS_LABEL_KEYS[round.success ? 'success' : 'failed'])}
+              </span>
+              {round.statusCode && (
+                <span className="shrink-0 text-text-tertiary">{t('modelTest.detail.httpStatus')} <span className="font-mono tabular-nums">{round.statusCode}</span></span>
+              )}
+              <span className="shrink-0 text-text-tertiary">
+                {t('modelTest.detail.ttft')} <span className="font-mono tabular-nums">{formatMilliseconds(round.ttftMilliseconds)}</span>
+              </span>
+              <span className="shrink-0 text-text-tertiary">
+                {t('modelTest.detail.duration')} <span className="font-mono tabular-nums">{formatMilliseconds(round.durationMilliseconds)}</span>
+              </span>
+              <span className="shrink-0 text-text-tertiary">
+                {t('modelTest.detail.tps')} <span className="font-mono tabular-nums">{formatOutputSpeed(round.tokensPerSecond)}</span>
+              </span>
+              <span className="shrink-0 text-text-tertiary">
+                {t('modelTest.detail.outputTokens')} <span className="font-mono tabular-nums">{formatTokenCount(round.outputTokens)}</span>
+              </span>
+            </div>
+            {/* 失败那一轮的原话单独占一行：它通常很长（上游把整个 JSON 错误体回过来），
+                挤在指标后面会把那一行撑成乱码一样的窄柱。成功轮不印这一行，避免「无错误」刷屏。 */}
+            {!round.success && (
+              <div className="wrap-break-word rounded-md border border-module-border bg-destructive/8 px-2 py-1.5 font-mono system-2xs-regular leading-4 text-text-destructive">
+                {round.errorMessage || t('modelTest.detail.noError')}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 一行诊断结论。
+ *
+ * 整行是一枚按钮（`aria-expanded`）：协议色条与标题都不可点，会让「这条能不能点开」
+ * 变成靠猜——诊断结果是查错入口，必须一眼看出还能往下钻。
+ * 展开按钮放在最左一列，与状态列分开，是因为状态列要能竖着扫；一行里出现两个交互
+ * 形状时，扫视最先坏掉的就是那种「像按钮又不像按钮」的格子。
+ */
 function TestTaskRow(props: TestTaskRowProps) {
   const { task } = props
   const t = useTranslation()
   const statusLabel = t(TASK_STATUS_LABEL_KEYS[task.status])
+  const expanded = props.expanded
+  const ProtocolIcon = PROTOCOL_ICONS[task.protocol]
   return (
-    <div className={cn(tableRowClass, 'grid grid-cols-1 gap-2.5 px-3 py-2.5 md:items-start md:gap-3', TASK_GRID_COLUMNS)}>
-      {/*
-       * 渠道 / 模型一格定主体。左侧那道 2px 竖线是**协议色条**：协议不进独立一列，
-       * 而是贴在被描述的对象旁边，扫一列就能看出哪些行是转出来的。
-       */}
-      <div className="relative min-w-0 pl-2.5">
-        <span aria-hidden className={cn('absolute top-0.5 bottom-0.5 left-0 w-0.5 rounded-full', protocolGutterClassName({ converted: task.converted, status: task.status }))} />
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      aria-label={expanded ? t('modelTest.detail.collapse') : t('modelTest.detail.expand')}
+      className={cn(
+        tableRowClass,
+        'grid cursor-pointer grid-cols-1 gap-2.5 px-3 py-2.5 md:items-start md:gap-3',
+        expanded && 'bg-state-base-hover',
+        TASK_GRID_COLUMNS,
+      )}
+      onClick={props.onToggleExpanded}
+      onKeyDown={event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        props.onToggleExpanded()
+      }}
+    >
+      <div className="flex items-center md:pt-0.5">
+        <ChevronRight size={13} aria-hidden className={cn('shrink-0 text-text-quaternary transition-transform', expanded && 'rotate-90')} />
+      </div>
+      {/* 渠道 / 模型一格定主体。 */}
+      <div className="min-w-0">
         <div className="flex items-baseline gap-2 md:block">
           {/* 窄屏表头不在这里，所以标签跟着主体走；md 及以上由表头统一说一次。 */}
           <span className="shrink-0 system-2xs-regular text-text-quaternary md:hidden">{t('modelTest.table.target')}</span>
@@ -564,12 +691,18 @@ function TestTaskRow(props: TestTaskRowProps) {
           </div>
         </div>
       </div>
+      {/* 协议列：转换出来的协议走 warning 色 + `Repeat`，与左侧栏那条槽用的是同一套语义。 */}
+      <TaskCell labelKey="modelTest.table.protocol">
+        <span className={cn('inline-flex min-w-0 items-center gap-1 system-2xs-regular', task.converted ? 'text-text-warning' : 'text-text-secondary')}>
+          {task.converted ? <Repeat size={9} aria-hidden className="shrink-0" /> : <ProtocolIcon size={11} aria-hidden className="shrink-0" />}
+          <span className="truncate">{PROTOCOL_DISPLAY_NAMES[task.protocol]}</span>
+        </span>
+      </TaskCell>
       <TaskCell labelKey="modelTest.table.status">
         <span
           title={getTaskStatusTitle(task, statusLabel)}
           className={cn('inline-flex items-center gap-1 system-2xs-medium', statusTextClassName(task.status))}
         >
-          {task.converted && <Repeat size={9} aria-hidden className="text-text-warning" />}
           {statusLabel}
         </span>
       </TaskCell>
@@ -577,7 +710,10 @@ function TestTaskRow(props: TestTaskRowProps) {
       <TaskCell labelKey="modelTest.table.duration" align="end">{getTaskDurationLabel(task)}</TaskCell>
       <TaskCell labelKey="modelTest.table.speed" align="end">{getTaskSpeedLabel(task)}</TaskCell>
       <TaskCell labelKey="modelTest.table.tokens" align="end">{getTaskTokenLabel(task)}</TaskCell>
-      {task.errorMessage && <div className="col-span-full wrap-break-word rounded-lg border border-module-border bg-destructive/8 px-2.5 py-2 font-mono system-2xs-regular leading-4 text-text-destructive">{task.errorMessage}</div>}
+      {/* 明细只在点开时挂了，收起时不渲染：一张几十行的表里每行都藏一份明细，滚动会变卡。 */}
+      {expanded && task.result && <TaskDetail task={task} />}
+      {/* 没有 `result`（例如请求整批失败）时只有错误原文，此时没有逐轮可展开。 */}
+      {!expanded && task.errorMessage && <div className="col-span-full wrap-break-word rounded-lg border border-module-border bg-destructive/8 px-2.5 py-2 font-mono system-2xs-regular leading-4 text-text-destructive">{task.errorMessage}</div>}
     </div>
   )
 }
@@ -596,6 +732,149 @@ function EmptyTestTasks(props: EmptyTestTasksProps) {
   )
 }
 
+interface TestConfigPanelProps {
+  config: TestConfig
+  onChange: (config: TestConfig) => void
+  onBack: () => void
+  onReset: () => void
+}
+
+interface ConfigNumberRowProps {
+  title: string
+  description: string
+  value: number
+  min: number
+  max: number
+  /** 数值单位。数字后面那个词必须说出来，否则 `3` 是 3 个并发还是 3 轮全看读者猜。 */
+  unitKey: UiCatalogKey
+  onChange: (value: number) => void
+}
+
+/**
+ * 一个数字设置项。右上角的 `—` / `+` 比裸输入框好用，也避免为了两个整数装一个滑块：
+ * 并发与轮次的可用区间都很窄（1–10 / 1–5），调一格就是一次点击。
+ */
+function ConfigNumberRow(props: ConfigNumberRowProps) {
+  const t = useTranslation()
+  const clamp = (value: number) => Math.min(props.max, Math.max(props.min, Number.isFinite(value) ? Math.trunc(value) : props.min))
+  return (
+    <FormRow
+      title={props.title}
+      description={props.description}
+      control={
+        <>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            disabled={props.value <= props.min}
+            aria-label="-"
+            onClick={() => props.onChange(clamp(props.value - 1))}
+          >
+            <span aria-hidden className="text-base leading-none">−</span>
+          </Button>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={props.min}
+            max={props.max}
+            value={props.value}
+            aria-label={props.title}
+            onChange={event => props.onChange(clamp(event.target.valueAsNumber))}
+            className="h-7 w-12 rounded-md border border-border bg-components-input-bg-normal text-center font-mono system-2xs-regular tabular-nums text-text-primary outline-none focus-visible:border-primary"
+          />
+          <Button
+            variant="outline"
+            size="icon-sm"
+            disabled={props.value >= props.max}
+            aria-label="+"
+            onClick={() => props.onChange(clamp(props.value + 1))}
+          >
+            <span aria-hidden className="text-base leading-none">+</span>
+          </Button>
+          <span className="w-10 shrink-0 system-2xs-regular text-text-quaternary">{t(props.unitKey)}</span>
+        </>
+      }
+    />
+  )
+}
+
+/**
+ * 测试配置页。
+ *
+ * 它是同一层弹窗里的**另一页**，不是嵌套弹窗：诊断本身已经压着页面，再叠一层会让人
+ * 在关闭路径上犯迷糊（关一次以为退了，其实只是退到上一层）。
+ *
+ * 每一项都是一条朴素横排（标题 + 说明在左、控件在右、`divide-y` 分隔），不套灰盒子、
+ * 行内不放图标——设置页的视觉噪音每多一分，读者就越难判断「这一项开没开」。
+ * 提示词是唯一例外：它要写长句，控件换到标题下方占满整行。
+ */
+function TestConfigPanel(props: TestConfigPanelProps) {
+  const t = useTranslation()
+  const { config } = props
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Button variant="ghost" size="icon-sm" title={t('modelTest.config.back')} aria-label={t('modelTest.config.back')} onClick={props.onBack}>
+            <ArrowLeft size={14} aria-hidden />
+          </Button>
+          <div className="min-w-0">
+            <div className="system-xs-medium text-text-primary">{t('modelTest.config.title')}</div>
+            <div className="mt-0.5 truncate system-2xs-regular text-text-tertiary">{t('modelTest.config.description')}</div>
+          </div>
+        </div>
+        <Button variant="ghost" size="xs" onClick={props.onReset}>
+          <RotateCcw size={11} aria-hidden /> {t('modelTest.config.reset')}
+        </Button>
+      </div>
+
+      <div className="divide-y divide-border/50 px-4">
+        <ConfigNumberRow
+          title={t('modelTest.config.concurrency')}
+          description={t('modelTest.config.concurrencyHint')}
+          value={config.concurrency}
+          min={1}
+          max={MAX_TEST_CONCURRENCY}
+          unitKey="modelTest.metric.concurrency"
+          onChange={concurrency => props.onChange({ ...config, concurrency })}
+        />
+        <ConfigNumberRow
+          title={t('modelTest.config.rounds')}
+          description={t('modelTest.config.roundsHint')}
+          value={config.rounds}
+          min={1}
+          max={MAX_TEST_ROUNDS}
+          unitKey="modelTest.config.unit.rounds"
+          onChange={rounds => props.onChange({ ...config, rounds })}
+        />
+        <ConfigNumberRow
+          title={t('modelTest.config.inputLength')}
+          description={t('modelTest.config.inputLengthHint')}
+          value={config.inputLength}
+          min={0}
+          max={MAX_TEST_PROMPT_LENGTH}
+          unitKey="modelTest.config.unit.characters"
+          onChange={inputLength => props.onChange({ ...config, inputLength })}
+        />
+        <div className="grid gap-1.5 py-3">
+          <div className="system-sm-medium text-text-primary">{t('modelTest.config.prompt')}</div>
+          <p className="system-xs-regular text-text-tertiary">{t('modelTest.config.promptHint')}</p>
+          <Textarea
+            value={config.prompt}
+            maxLength={MAX_TEST_PROMPT_LENGTH}
+            placeholder={t('modelTest.config.promptPlaceholder')}
+            className="mt-1"
+            onChange={event => props.onChange({ ...config, prompt: event.target.value })}
+          />
+          <span className="text-right font-mono system-2xs-regular tabular-nums text-text-quaternary">
+            {config.prompt.length} / {MAX_TEST_PROMPT_LENGTH}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ModelTestPanel(props: ModelTestPanelProps) {
   const t = useTranslation()
   const enabledModels = useMemo(() => props.models.filter(model => model.enabled), [props.models])
@@ -607,6 +886,20 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
   const [selectedProviderIds, setSelectedProviderIds] = useState<Set<string>>(new Set())
   const [tasks, setTasks] = useState<TestTask[]>([])
   const [failedOnly, setFailedOnly] = useState(false)
+  /**
+   * 右侧主体的两个视图。
+   *
+   * 配置做成「同一个弹窗里换一页」而不是第二个弹窗：诊断弹窗已经是叠在页面上的一层，
+   * 再叠一层调用表，用户在关闭路径上会迷路。
+   */
+  const [view, setView] = useState<'results' | 'config'>('results')
+  /**
+   * 测试参数。用 state 而不是持久化存储：这是「这次怎么测」，不是一份要长期生效的偏好。
+   * 关掉弹窗（或重开）就回到默认，下次诊断不会莫名其妙跑 5 轮。
+   */
+  const [config, setConfig] = useState<TestConfig>(DEFAULT_TEST_CONFIG)
+  /** 展开的行。只存 id，收起时不渲染明细，几十行的表也不变卡。 */
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set())
   /** 本轮诊断要问哪个问题。只影响「下一次开始」：已经有结论的行保留它自己跑的模式。 */
   const [testMode, setTestMode] = useState<ModelTestMode>('connectivity')
   const [running, setRunning] = useState(false)
@@ -660,6 +953,10 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
     if (isOpening) {
       setTasks(current => (current.length === 0 ? current : []))
       setFailedOnly(false)
+      // 展开态跟着结果走：重开面板时表是空的，残留的展开 id 只会在下一批结果里随机命中。
+      setExpandedTaskIds(current => (current.size === 0 ? current : new Set()))
+      setView('results')
+      setConfig(current => (current === DEFAULT_TEST_CONFIG ? current : DEFAULT_TEST_CONFIG))
       // 每次重新打开都从默认模式开始：上次点到「速度诊断」后关掉面板，
       // 下次再进来时应该看到默认的连通性诊断，而不是一个没被注意到的长提示词诊断。
       setTestMode('connectivity')
@@ -705,6 +1002,16 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
   const clearTasks = () => {
     setTasks([])
     setFailedOnly(false)
+    setExpandedTaskIds(current => (current.size === 0 ? current : new Set()))
+  }
+
+  const toggleTaskExpanded = (taskId: string) => {
+    setExpandedTaskIds(current => {
+      const next = new Set(current)
+      if (next.has(taskId)) next.delete(taskId)
+      else next.add(taskId)
+      return next
+    })
   }
   const toggleModelProtocol = (modelId: string, protocol: Protocol) => {
     if (running) return
@@ -780,7 +1087,7 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
    *
    * - `runningRef` 做同步闸门：诊断会真的请求上游并计费，任何时候都只允许一批在跑。
    * - 任务按 id 合并进结果表：整批开跑时表里通常是空的，重测时其它行的结论原样保留。
-   * - 并发只在这里控制（`TEST_CONCURRENCY` 个 worker），服务端一次请求只测一个目标。
+   * - 并发只在这里控制（`config.concurrency` 个 worker），服务端一次请求只测一个目标。
    */
   const runTasks = async (batch: TestTask[]) => {
     if (runningRef.current || batch.length === 0) return
@@ -804,6 +1111,11 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
           const response = await modelTestApi.run(task.protocol, testMode, {
             providerIds: [task.providerId],
             modelIds: [task.modelId],
+          }, {
+            rounds: config.rounds,
+            // 空提示词不发：不发与服务端会回退到该模式的默认提示词，两边口径一致。
+            prompt: config.prompt.trim() || undefined,
+            inputLength: config.inputLength,
           }, controller.signal)
           if (controller.signal.aborted) break
           const result = response.success
@@ -830,7 +1142,7 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
     }
 
     try {
-      await Promise.all(Array.from({ length: Math.min(TEST_CONCURRENCY, pending.length) }, () => worker()))
+      await Promise.all(Array.from({ length: Math.min(config.concurrency, pending.length) }, () => worker()))
     } finally {
       if (controller.signal.aborted) {
         setTasks(current => current.map(task => task.status === 'queued' || task.status === 'running'
@@ -883,129 +1195,165 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
           />
 
           <div className="flex min-h-0 flex-col bg-card">
-            <div className="px-4 pt-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <Gauge size={14} aria-hidden className="text-text-quaternary" />
-                    <div>
-                      <div className="font-mono text-base font-medium tabular-nums leading-none text-text-primary">{plannedTasks.length}</div>
-                      <div className="mt-1 system-2xs-regular text-text-tertiary">{t('modelTest.metric.tasks')}</div>
+            {view === 'config' ? (
+              <TestConfigPanel
+                config={config}
+                onChange={setConfig}
+                onBack={() => setView('results')}
+                onReset={() => setConfig(DEFAULT_TEST_CONFIG)}
+              />
+            ) : (
+              <>
+                <div className="px-4 pt-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <Gauge size={14} aria-hidden className="text-text-quaternary" />
+                        <div>
+                          <div className="font-mono text-base font-medium tabular-nums leading-none text-text-primary">{plannedTasks.length}</div>
+                          <div className="mt-1 system-2xs-regular text-text-tertiary">{t('modelTest.metric.tasks')}</div>
+                        </div>
+                      </div>
+                      <div className="h-7 w-px bg-border" />
+                      <div>
+                        <div className="font-mono text-base font-medium tabular-nums leading-none text-text-primary">{selectedProviderIds.size}</div>
+                        <div className="mt-1 system-2xs-regular text-text-tertiary">{t('modelTest.metric.channels')}</div>
+                      </div>
+                      <div className="h-7 w-px bg-border" />
+                      <div>
+                        <div className="font-mono text-base font-medium tabular-nums leading-none text-text-primary">{config.concurrency}</div>
+                        <div className="mt-1 system-2xs-regular text-text-tertiary">{t('modelTest.metric.concurrency')}</div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {hasResults && !running && (
+                        <Button variant="ghost" size="icon-sm" title={t('modelTest.action.clearResults')} aria-label={t('modelTest.action.clearResults')} onClick={clearTasks}>
+                          <Trash2 size={13} />
+                        </Button>
+                      )}
+                      {failureCount > 0 && !running && (
+                        <Button variant="outline" size="sm" onClick={retryFailedTests}>
+                          <RotateCcw size={12} /> {t('modelTest.action.retryFailed')}
+                        </Button>
+                      )}
+                      {running ? (
+                        <Button variant="destructive" size="sm" onClick={cancelTests}>
+                          <Square size={11} fill="currentColor" /> {t('modelTest.action.stop')}
+                        </Button>
+                      ) : (
+                        <>
+                          {/*
+                            设置按钮放在开始按钮**左边**：它是「开始之前先想一下」的前置动作，
+                            不是开始之后的补丁。不塞进分裂按钮里——那会把「参数」说成「模式」的一部分。
+                          */}
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            title={t('modelTest.action.settings')}
+                            aria-label={t('modelTest.action.settings')}
+                            onClick={() => setView('config')}
+                          >
+                            <Settings2 size={13} aria-hidden />
+                          </Button>
+                          {/*
+                            分裂按钮：左半是「用当前模式开始」，右半那枚箭头展开模式本身。
+                            箭头紧贴在开始按钮右侧、与之同色同高，读起来是一个控件；
+                            单独拿出一枚圆角按钮会把「选模式」说成另一件事。
+                          */}
+                          <ButtonGroup>
+                            <Button size="sm" disabled={startDisabled} onClick={startTests}>
+                              <Play size={12} fill="currentColor" /> {t('modelTest.action.start')}
+                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  size="icon-sm"
+                                  disabled={startDisabled}
+                                  aria-label={t('modelTest.mode.select', { mode: t(TEST_MODE_LABEL_KEYS[testMode]) })}
+                                  title={t('modelTest.mode.select', { mode: t(TEST_MODE_LABEL_KEYS[testMode]) })}
+                                >
+                                  <ChevronDown size={13} aria-hidden />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              {/* 浮层改成固定宽度：默认宽度跟随触发器（一枚 28px 的方块），两行文案会被挤成一列。 */}
+                              <DropdownMenuContent align="end" sideOffset={6} className="w-72 min-w-72">
+                                <DropdownMenuLabel>{t('modelTest.mode.label')}</DropdownMenuLabel>
+                                <DropdownMenuSeparator className="bg-components-panel-border" />
+                                <DropdownMenuRadioGroup
+                                  value={testMode}
+                                  onValueChange={value => {
+                                    const next = ALL_MODEL_TEST_MODES.find(mode => mode === value)
+                                    if (next) setTestMode(next)
+                                  }}
+                                >
+                                  {ALL_MODEL_TEST_MODES.map(mode => (
+                                    <DropdownMenuRadioItem
+                                      key={mode}
+                                      value={mode}
+                                      className="flex h-auto flex-col items-stretch gap-0.5 rounded-lg py-1.5 pl-2"
+                                    >
+                                      <span className="system-xs-medium text-text-primary">{t(TEST_MODE_LABEL_KEYS[mode])}</span>
+                                      <span className="system-2xs-regular leading-4 text-text-tertiary">{t(TEST_MODE_HINT_KEYS[mode])}</span>
+                                    </DropdownMenuRadioItem>
+                                  ))}
+                                </DropdownMenuRadioGroup>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </ButtonGroup>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <div className="h-7 w-px bg-border" />
-                  <div>
-                    <div className="font-mono text-base font-medium tabular-nums leading-none text-text-primary">{selectedProviderIds.size}</div>
-                    <div className="mt-1 system-2xs-regular text-text-tertiary">{t('modelTest.metric.channels')}</div>
-                  </div>
-                  <div className="h-7 w-px bg-border" />
-                  <div>
-                    <div className="font-mono text-base font-medium tabular-nums leading-none text-text-primary">{TEST_CONCURRENCY}</div>
-                    <div className="mt-1 system-2xs-regular text-text-tertiary">{t('modelTest.metric.concurrency')}</div>
-                  </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {hasResults && !running && (
-                    <Button variant="ghost" size="icon-sm" title={t('modelTest.action.clearResults')} aria-label={t('modelTest.action.clearResults')} onClick={clearTasks}>
-                      <Trash2 size={13} />
-                    </Button>
-                  )}
-                  {failureCount > 0 && !running && (
-                    <Button variant="outline" size="sm" onClick={retryFailedTests}>
-                      <RotateCcw size={12} /> {t('modelTest.action.retryFailed')}
-                    </Button>
-                  )}
-                  {running ? (
-                    <Button variant="destructive" size="sm" onClick={cancelTests}>
-                      <Square size={11} fill="currentColor" /> {t('modelTest.action.stop')}
-                    </Button>
-                  ) : (
-                    /*
-                      分裂按钮：左半是「用当前模式开始」，右半那枚箭头展开模式本身。
-                      箭头紧贴在开始按钮右侧、与之同色同高，读起来是一个控件；
-                      单独拿出一枚圆角按钮会把「选模式」说成另一件事。
-                    */
-                    <ButtonGroup>
-                      <Button size="sm" disabled={startDisabled} onClick={startTests}>
-                        <Play size={12} fill="currentColor" /> {t('modelTest.action.start')}
+
+                <TestProgress
+                  cancelledCount={cancelledCount}
+                  completedCount={completedCount}
+                  failureCount={failureCount}
+                  progress={progress}
+                  running={running}
+                  successCount={successCount}
+                  totalCount={visibleTotal}
+                />
+
+                <main className="min-h-0 flex-1 overflow-auto p-4">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Button variant={showFailedOnly ? 'ghost' : 'secondary'} size="xs" onClick={() => setFailedOnly(false)}>{t('modelTest.filter.all')}</Button>
+                      <Button variant={showFailedOnly ? 'secondary' : 'ghost'} size="xs" disabled={!hasResults || failureCount === 0} onClick={() => setFailedOnly(true)}>
+                        {failureCount > 0 ? `${t('modelTest.filter.failed')} · ${failureCount}` : t('modelTest.filter.failed')}
                       </Button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            disabled={startDisabled}
-                            aria-label={t('modelTest.mode.select', { mode: t(TEST_MODE_LABEL_KEYS[testMode]) })}
-                            title={t('modelTest.mode.select', { mode: t(TEST_MODE_LABEL_KEYS[testMode]) })}
-                          >
-                            <ChevronDown size={13} aria-hidden />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        {/* 浮层改成固定宽度：默认宽度跟随触发器（一枚 28px 的方块），两行文案会被挤成一列。 */}
-                        <DropdownMenuContent align="end" sideOffset={6} className="w-72 min-w-72">
-                          <DropdownMenuLabel>{t('modelTest.mode.label')}</DropdownMenuLabel>
-                          <DropdownMenuSeparator className="bg-components-panel-border" />
-                          <DropdownMenuRadioGroup
-                            value={testMode}
-                            onValueChange={value => {
-                              const next = ALL_MODEL_TEST_MODES.find(mode => mode === value)
-                              if (next) setTestMode(next)
-                            }}
-                          >
-                            {ALL_MODEL_TEST_MODES.map(mode => (
-                              <DropdownMenuRadioItem
-                                key={mode}
-                                value={mode}
-                                className="flex h-auto flex-col items-stretch gap-0.5 rounded-lg py-1.5 pl-2"
-                              >
-                                <span className="system-xs-medium text-text-primary">{t(TEST_MODE_LABEL_KEYS[mode])}</span>
-                                <span className="system-2xs-regular leading-4 text-text-tertiary">{t(TEST_MODE_HINT_KEYS[mode])}</span>
-                              </DropdownMenuRadioItem>
-                            ))}
-                          </DropdownMenuRadioGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </ButtonGroup>
+                    </div>
+                    <span className="font-mono system-2xs-regular tabular-nums text-text-quaternary">{visibleTasks.length} / {visibleTotal}</span>
+                  </div>
+                  {visibleTasks.length > 0 ? (
+                    <TableFrame>
+                      {/* 表头第一格空着：下面是展开箭头，给它一个 `aria-label` 就够，不需要列名。 */}
+                      <TableHeaderSurface className={cn('hidden gap-3 px-3 py-2 md:grid', TASK_GRID_COLUMNS)}>
+                        <span aria-hidden />
+                        <span>{t('modelTest.table.target')}</span>
+                        <span>{t('modelTest.table.protocol')}</span>
+                        <span>{t('modelTest.table.status')}</span>
+                        <span className="text-right">{t('modelTest.table.ttft')}</span>
+                        <span className="text-right">{t('modelTest.table.duration')}</span>
+                        <span className="text-right">{t('modelTest.table.speed')}</span>
+                        <span className="text-right">{t('modelTest.table.tokens')}</span>
+                      </TableHeaderSurface>
+                      {visibleTasks.map(task => (
+                        <TestTaskRow
+                          key={task.id}
+                          task={task}
+                          expanded={expandedTaskIds.has(task.id)}
+                          onToggleExpanded={() => toggleTaskExpanded(task.id)}
+                        />
+                      ))}
+                    </TableFrame>
+                  ) : (
+                    <EmptyTestTasks hasEnabledModels={enabledModels.length > 0} />
                   )}
-                </div>
-              </div>
-            </div>
-
-            <TestProgress
-              cancelledCount={cancelledCount}
-              completedCount={completedCount}
-              failureCount={failureCount}
-              progress={progress}
-              running={running}
-              successCount={successCount}
-              totalCount={visibleTotal}
-            />
-
-            <main className="min-h-0 flex-1 overflow-auto p-4">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5">
-                  <Button variant={showFailedOnly ? 'ghost' : 'secondary'} size="xs" onClick={() => setFailedOnly(false)}>{t('modelTest.filter.all')}</Button>
-                  <Button variant={showFailedOnly ? 'secondary' : 'ghost'} size="xs" disabled={!hasResults || failureCount === 0} onClick={() => setFailedOnly(true)}>
-                    {failureCount > 0 ? `${t('modelTest.filter.failed')} · ${failureCount}` : t('modelTest.filter.failed')}
-                  </Button>
-                </div>
-                <span className="font-mono system-2xs-regular tabular-nums text-text-quaternary">{visibleTasks.length} / {visibleTotal}</span>
-              </div>
-              {visibleTasks.length > 0 ? (
-                <TableFrame>
-                  <TableHeaderSurface className={cn('hidden gap-3 px-3 py-2 md:grid', TASK_GRID_COLUMNS)}>
-                    <span>{t('modelTest.table.target')}</span>
-                    <span>{t('modelTest.table.status')}</span>
-                    <span className="text-right">{t('modelTest.table.ttft')}</span>
-                    <span className="text-right">{t('modelTest.table.duration')}</span>
-                    <span className="text-right">{t('modelTest.table.speed')}</span>
-                    <span className="text-right">{t('modelTest.table.tokens')}</span>
-                  </TableHeaderSurface>
-                  {visibleTasks.map(task => <TestTaskRow key={task.id} task={task} />)}
-                </TableFrame>
-              ) : (
-                <EmptyTestTasks hasEnabledModels={enabledModels.length > 0} />
-              )}
-            </main>
+                </main>
+              </>
+            )}
           </div>
         </div>
       </DialogContent>
