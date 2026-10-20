@@ -159,7 +159,7 @@ osw/
 | `packages/core/source/infrastructure`、`packages/core/source/security` | 密钥环适配、Host 校验 | [security-privacy.md](./security-privacy.md) |
 | `packages/contracts/source` | 全形态共享契约（Zod schema、协议表、路由类型、i18n 核心与语言目录） | 各自主题文档、[i18n.md](./i18n.md) |
 | `apps/app/source` | Electron 主进程：窗口、托盘、开机自启、自动更新、密钥存储 | [desktop.md](./desktop.md) |
-| `packages/console/source` | React 控制台 | [desktop.md](./desktop.md) |
+| `packages/console/source` | React 控制台：五层分层（组装 / 视图 / 绑定 / 领域 / 传输），业务逻辑不依赖 React | [console-architecture.md](./console-architecture.md) |
 
 代理服务与管理服务是两个独立监听器：代理可单独停止、重启而不影响管理服务，两者都由 `ServerRuntime` 持有。协议范围以 `packages/contracts/source/protocols.ts` 为准，当前不支持 Gemini 或 Custom 协议。
 
@@ -225,7 +225,7 @@ SQLite（`node:sqlite` + Drizzle ORM）承载配置与日志，表结构与字�
 
 ### 渲染进程
 
-React 18 + TypeScript + shadcn/ui + Tailwind。页面通过 `packages/console/source/api/*.ts` 调用管理 API，领域状态按 `features/*` 与页面 hooks 组织，`infrastructure/polling-manager.ts` 提供共享轮询，`store/create-store.ts` 提供轻量外部 store。
+React 18 + TypeScript + shadcn/ui + Tailwind。**业务逻辑不认识 React，React 只是渲染层**：`api/` 是传输层，`data/` 是取数与写入的绑定层，`lib/`、`catalog/`、`platform/`、`pages/*/lib/` 是纯领域层，`components/` 只负责画。分层的完整说明、依赖方向与护栏见 [console-architecture.md](./console-architecture.md)。
 
 侧边栏分组与页面清单以 `packages/console/source/components/app-sidebar.tsx` 为准，各页面职责见 [desktop.md](./desktop.md) 的控制台页面表。
 

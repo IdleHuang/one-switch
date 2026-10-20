@@ -34,6 +34,7 @@
 | 技术架构 | [tech-architecture.md](./tech-architecture.md) | 技术栈与依赖、构建与打包、仓库顶层结构 |
 | 包结构与多形态分发 | [packaging.md](./packaging.md) | 包边界、目录归属、CLI 与 App 的宿主适配、运行时配置、阶段划分 |
 | 服务端结构 | [server-architecture.md](./server-architecture.md) | 两个监听服务、模块划分、依赖方向、启动与关闭 |
+| 控制台分层 | [console-architecture.md](./console-architecture.md) | 五层职责与依赖方向、业务逻辑与 React 的分工、`pnpm lint` 里的分层护栏 |
 | 桌面端形态 | [desktop.md](./desktop.md) | 托盘与菜单、控制台页面、用户流程 |
 
 ### 代理与请求

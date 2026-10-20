@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist, type PersistStorage } from 'zustand/middleware'
-import type { ThemeMode } from '@/components/app-sidebar'
-import { createLocalStorage } from '@/lib/persist-storage'
+import type { ThemeMode } from '@/lib/theme-mode'
+import { createLocalStorage } from './persist-storage'
 
 interface AppUiState {
   themeMode: ThemeMode

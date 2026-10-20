@@ -21,7 +21,7 @@ import { LiveMetricCard } from './components/live-metric-card'
 import { UpdateCard } from './components/update-card'
 import { useAppearance } from '@/hooks/use-appearance'
 import { useTranslation } from '@/i18n/provider'
-import type { ThemeMode } from '@/components/app-sidebar'
+import type { ThemeMode } from '@/lib/theme-mode'
 
 interface SettingsSectionProps {
   title: string

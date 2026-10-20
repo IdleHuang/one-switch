@@ -593,6 +593,7 @@ export const uiEn = {
   'logicalModels.create.idHint': 'Starts with a letter or digit and may contain letters, digits, dots, underscores and hyphens, up to 64 characters. Requests must send this ID as the model name, so version dots are allowed (e.g. deepseek-v4.1-flash).',
   'logicalModels.create.idPlaceholder': 'e.g. deepseek-v4.1-flash',
   'logicalModels.create.idInvalid': 'Enter a valid logical model ID',
+  'logicalModels.create.idRequired': 'Logical model ID is required',
   'logicalModels.create.descriptionLabel': 'Description (optional)',
   'logicalModels.create.descriptionPlaceholder': 'Describe what this logical model is for',
   'logicalModels.create.submitting': 'Creating…',

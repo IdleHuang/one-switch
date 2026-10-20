@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
-import { requestRewriteRuleApi, providerModelApi } from '@/api/models'
 import { useHealth } from '@/data/health'
+import { useModelRuleBindingNames } from '@/data/rule-bindings'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -23,23 +22,9 @@ interface ProviderModelRowProps {
 export function ProviderModelRow(props: ProviderModelRowProps) {
   const { model, selected, onSelectedChange, onEditModel, onToggleModelEnabled, onRemoveModel } = props
   const t = useTranslation()
-  const [ruleNames, setRuleNames] = useState<string[]>([])
+  const ruleNames = useModelRuleBindingNames(model.id)
   const { providerModels } = useHealth()
   const modelHealth = providerModels[model.id]
-
-  useEffect(() => {
-    let cancelled = false
-    void Promise.all([requestRewriteRuleApi.list(), providerModelApi.requestRewriteRules(model.id)])
-      .then(([allResponse, bindingsResponse]) => {
-        if (cancelled || !allResponse.success || !bindingsResponse.success) return
-        const allRules = allResponse.data
-        const names = bindingsResponse.data
-          .map(binding => allRules.find(rule => rule.id === binding.ruleId)?.name)
-          .filter((name): name is string => Boolean(name))
-        setRuleNames(names)
-      })
-    return () => { cancelled = true }
-  }, [model.id])
 
   return (
     <div className="px-3 py-2.5">

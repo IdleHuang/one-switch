@@ -11,7 +11,7 @@
 import { create } from 'zustand'
 import { persist, type PersistStorage } from 'zustand/middleware'
 import type { LanguagePreference } from '@common/i18n'
-import { createLocalStorage } from '@/lib/persist-storage'
+import { createLocalStorage } from '@/store/persist-storage'
 
 interface LanguageState {
   preference: LanguagePreference

@@ -38,7 +38,7 @@ import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { useLogicalModels } from '@/data/logical-models'
-import { useRouteMode } from '@/components/route-mode/use-route-mode'
+import { useRouteMode } from '@/hooks/use-route-mode'
 import { useTranslation } from '@/i18n/provider'
 import { cn } from '@/lib/utils'
 

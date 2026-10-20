@@ -53,6 +53,8 @@ Windows / Linux 的托盘底色随系统主题变化，彩色图标在浅色底�
 
 ## 控制台页面
 
+页面的内部分层——哪一层能调接口、领域逻辑放在哪里、为什么有状态的东西写成普通类而不是 hook——见 [console-architecture.md](./console-architecture.md)。
+
 侧边栏分组与页面清单以 `packages/console/source/components/app-sidebar.tsx` 为准：
 
 | 分组 | 页面 | 说明 |

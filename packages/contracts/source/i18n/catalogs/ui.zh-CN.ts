@@ -597,6 +597,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'logicalModels.create.idHint': '以字母或数字开头，可包含字母、数字、点、下划线和连字符，最多 64 个字符。请求里的模型名要能直接写成这个 id，所以版本号里的点是允许的（如 deepseek-v4.1-flash）。',
   'logicalModels.create.idPlaceholder': '例如：deepseek-v4.1-flash',
   'logicalModels.create.idInvalid': '请输入有效的逻辑模型 ID',
+  'logicalModels.create.idRequired': '逻辑模型 ID 不能为空',
   'logicalModels.create.descriptionLabel': '描述（可选）',
   'logicalModels.create.descriptionPlaceholder': '说明这个逻辑模型的用途',
   'logicalModels.create.submitting': '创建中…',
