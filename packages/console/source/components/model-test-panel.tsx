@@ -80,22 +80,25 @@ const TEST_CONCURRENCY = 3
  */
 interface TestConfig {
   concurrency: number
-  rounds: number
   inputLength: number
+  rounds: number
   prompt: string
 }
 
 const DEFAULT_TEST_CONFIG: TestConfig = {
   concurrency: TEST_CONCURRENCY,
-  rounds: 1,
   inputLength: 0,
+  rounds: 1,
   prompt: '',
 }
 
-/** 并发上限与服务端的轮次上限同源口径：这是诊断，不是压测。 */
-const MAX_TEST_CONCURRENCY = 10
-const MAX_TEST_ROUNDS = 5
-const MAX_TEST_PROMPT_LENGTH = 20_000
+/*
+ * 这三个参数**不设上限**。
+ *
+ * 它们约束的是「这一次怎么测」，不是服务端的容量：有人想一次跑五十轮、想把提示词
+ * 补到几十万字，那是他自己的账单和他的等待，界面不该替他判断「测到多少算够」。
+ * 只保留下界（轮次至少一轮、长度不为负）——那不是策略，是定义。
+ */
 
 /**
  * 结果表列宽模板：表头与数据行共用一份，避免两处列宽只改一半。
@@ -743,20 +746,26 @@ interface ConfigNumberRowProps {
   title: string
   description: string
   value: number
+  /** 下界是定义（轮次至少一轮），不是策略；上界故意不给，见上面的说明。 */
   min: number
-  max: number
   /** 数值单位。数字后面那个词必须说出来，否则 `3` 是 3 个并发还是 3 轮全看读者猜。 */
   unitKey: UiCatalogKey
   onChange: (value: number) => void
 }
 
 /**
- * 一个数字设置项。右上角的 `—` / `+` 比裸输入框好用，也避免为了两个整数装一个滑块：
- * 并发与轮次的可用区间都很窄（1–10 / 1–5），调一格就是一次点击。
+ * 一个数字设置项。右上角的 `—` / `+` 比裸输入框好用：调一格就是一次点击。
+ *
+ * 输入框不设 `max`，加号也不封顶。写大了是用户自己的选择，唯一要做的是别让非法值
+ * （空、负数、小数）混进配置里。
+ *
+ * 宽度是**固定但按大数留足**的（`w-20` ≈ 十位数）：不设上限之后，原先那点宽度会把
+ * 2000000 截成 200000，看着像程序改了他的输入；而宽度跟着位数走，三行的 `−`/`+`
+ * 又会各走各的、排不成一条竖线。宁可留白，也要两件事同时对。
  */
 function ConfigNumberRow(props: ConfigNumberRowProps) {
   const t = useTranslation()
-  const clamp = (value: number) => Math.min(props.max, Math.max(props.min, Number.isFinite(value) ? Math.trunc(value) : props.min))
+  const clamp = (value: number) => Math.max(props.min, Number.isFinite(value) ? Math.trunc(value) : props.min)
   return (
     <FormRow
       title={props.title}
@@ -776,22 +785,24 @@ function ConfigNumberRow(props: ConfigNumberRowProps) {
             type="number"
             inputMode="numeric"
             min={props.min}
-            max={props.max}
             value={props.value}
             aria-label={props.title}
             onChange={event => props.onChange(clamp(event.target.valueAsNumber))}
-            className="h-7 w-12 rounded-md border border-border bg-components-input-bg-normal text-center font-mono system-2xs-regular tabular-nums text-text-primary outline-none focus-visible:border-primary"
+            className="h-7 w-20 rounded-md border border-border bg-components-input-bg-normal px-1 text-center font-mono system-2xs-regular tabular-nums text-text-primary outline-none focus-visible:border-primary"
           />
           <Button
             variant="outline"
             size="icon-sm"
-            disabled={props.value >= props.max}
             aria-label="+"
             onClick={() => props.onChange(clamp(props.value + 1))}
           >
             <span aria-hidden className="text-base leading-none">+</span>
           </Button>
-          <span className="w-10 shrink-0 system-2xs-regular text-text-quaternary">{t(props.unitKey)}</span>
+          {/* 单位槽要**固定宽度 + 不折行**，两个条件缺一不可：
+              只给固定宽度，「个并发」会被按字断成两行；宽度跟着文字走，各行的
+              `−`/`+` 就会横向错开（`轮` 11px vs `个并发` 33px vs `concurrent` 54px），
+              三行读下来控件不成一条竖线。宽度按最长的英文单位留足余量。 */}
+          <span className="w-16 shrink-0 whitespace-nowrap system-2xs-regular text-text-quaternary">{t(props.unitKey)}</span>
         </>
       }
     />
@@ -834,8 +845,7 @@ function TestConfigPanel(props: TestConfigPanelProps) {
           description={t('modelTest.config.concurrencyHint')}
           value={config.concurrency}
           min={1}
-          max={MAX_TEST_CONCURRENCY}
-          unitKey="modelTest.metric.concurrency"
+          unitKey="modelTest.config.unit.concurrency"
           onChange={concurrency => props.onChange({ ...config, concurrency })}
         />
         <ConfigNumberRow
@@ -843,7 +853,6 @@ function TestConfigPanel(props: TestConfigPanelProps) {
           description={t('modelTest.config.roundsHint')}
           value={config.rounds}
           min={1}
-          max={MAX_TEST_ROUNDS}
           unitKey="modelTest.config.unit.rounds"
           onChange={rounds => props.onChange({ ...config, rounds })}
         />
@@ -852,7 +861,6 @@ function TestConfigPanel(props: TestConfigPanelProps) {
           description={t('modelTest.config.inputLengthHint')}
           value={config.inputLength}
           min={0}
-          max={MAX_TEST_PROMPT_LENGTH}
           unitKey="modelTest.config.unit.characters"
           onChange={inputLength => props.onChange({ ...config, inputLength })}
         />
@@ -861,13 +869,13 @@ function TestConfigPanel(props: TestConfigPanelProps) {
           <p className="system-xs-regular text-text-tertiary">{t('modelTest.config.promptHint')}</p>
           <Textarea
             value={config.prompt}
-            maxLength={MAX_TEST_PROMPT_LENGTH}
             placeholder={t('modelTest.config.promptPlaceholder')}
             className="mt-1"
             onChange={event => props.onChange({ ...config, prompt: event.target.value })}
           />
+          {/* 只报实际长度，不报「/ 上限」：没有上限，横杠后面那个数只是假的约束。 */}
           <span className="text-right font-mono system-2xs-regular tabular-nums text-text-quaternary">
-            {config.prompt.length} / {MAX_TEST_PROMPT_LENGTH}
+            {config.prompt.length}
           </span>
         </div>
       </div>
@@ -895,7 +903,7 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
   const [view, setView] = useState<'results' | 'config'>('results')
   /**
    * 测试参数。用 state 而不是持久化存储：这是「这次怎么测」，不是一份要长期生效的偏好。
-   * 关掉弹窗（或重开）就回到默认，下次诊断不会莫名其妙跑 5 轮。
+   * 关掉弹窗（或重开）就回到默认，下次诊断不会莫名其妙地沿用上一回调大的轮次。
    */
   const [config, setConfig] = useState<TestConfig>(DEFAULT_TEST_CONFIG)
   /** 展开的行。只存 id，收起时不渲染明细，几十行的表也不变卡。 */

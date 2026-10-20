@@ -16,10 +16,8 @@ import { sendSuccess } from '../../core/response'
 import { tokensPerSecondFromTotals } from '@common/metrics'
 import { ModelTestModeSchema, ProtocolSchema, type ModelTestMode, type Protocol } from '@common/schemas'
 
-/** 轮次上限：多测几轮是看稳定性，不是压测，别把一个渠道刷成限流。 */
-export const MAX_TEST_ROUNDS = 5
-/** 提示词上限：诊断只回答「通不通 / 快不快」，再长就是替用户跑业务请求了。 */
-export const MAX_TEST_PROMPT_LENGTH = 20_000
+/** 轮次下界：至少测一轮，这是定义不是策略。上界故意不给——多跑几轮是用户自己的账单。 */
+const MIN_TEST_ROUNDS = 1
 
 const TestModelsSchema = z.object({
   protocol: ProtocolSchema,
@@ -28,11 +26,11 @@ const TestModelsSchema = z.object({
   providerIds: z.array(z.string()).optional(),
   modelIds: z.array(z.string()).optional(),
   /** 每个目标重复测几轮；默认 1，与旧行为逐字相同。 */
-  rounds: z.number().int().min(1).max(MAX_TEST_ROUNDS).default(1),
+  rounds: z.number().int().min(MIN_TEST_ROUNDS).default(1),
   /** 自定义提示词；留空按模式取默认值。 */
-  prompt: z.string().max(MAX_TEST_PROMPT_LENGTH).optional(),
+  prompt: z.string().optional(),
   /** 提示词补齐到的字符数；0 表示不补。 */
-  inputLength: z.number().int().min(0).max(MAX_TEST_PROMPT_LENGTH).default(0),
+  inputLength: z.number().int().min(0).default(0),
 })
 
 /**

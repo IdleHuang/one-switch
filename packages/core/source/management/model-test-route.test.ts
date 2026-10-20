@@ -423,7 +423,9 @@ describe('model test run route — 诊断模式', () => {
     expect(result.tokensPerSecond as number).toBeGreaterThan(0)
     // 与观测页同一口径：输出 Token 除以整次尝试耗时（含首字），不是除以「出字那段时间」，
     // 也不是除以首字之后的耗时——换了分母，同一个渠道在诊断面板和观测页上就是两个数。
-    expect(result.tokensPerSecond).toBe(tokensPerSecondFromTotals(400, durationMilliseconds))
+    // 比的是**口径**不是浮点位：汇总结论会把速度保留两位小数，而耗时是实测的毫秒数，
+    // 一条 6ms 的替身响应就会让 400/0.006 舍成 66666.67，精确相等只在耗时整除时才成立。
+    expect(result.tokensPerSecond).toBeCloseTo(tokensPerSecondFromTotals(400, durationMilliseconds)!, 1)
   })
 
   it('速度诊断拿不到输出 Token 时不编一个速度出来', async () => {
