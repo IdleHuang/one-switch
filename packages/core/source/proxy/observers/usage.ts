@@ -253,9 +253,14 @@ export function extractTokenUsage(data: Record<string, unknown>): ExtractedUsage
   const cachedInputTokens = firstNumber(promptDetails?.cached_tokens, inputDetails?.cached_tokens, rawUsage?.cache_read_input_tokens, rawUsage?.cached_input_tokens, rawUsage?.cache_read_tokens, rawUsage?.cachedContentTokenCount, rawUsage?.total_cached_tokens)
   const cacheCreationInputTokens = firstNumber(promptDetails?.cache_write_tokens, inputDetails?.cache_write_tokens, rawUsage?.cache_creation_input_tokens, rawUsage?.cache_creation_tokens, rawUsage?.cached_creation_input_tokens, rawUsage?.cache_write_tokens, sumNumbers(cacheCreation?.ephemeral_5m_input_tokens, cacheCreation?.ephemeral_1h_input_tokens))
   const reportedInputTokens = firstNumber(rawUsage?.prompt_tokens, rawUsage?.input_tokens, rawUsage?.total_input_tokens, rawUsage?.promptTokenCount, data.input_tokens, data.prompt_tokens)
-  const usesAnthropicInputSemantics = rawUsage?.cache_read_input_tokens !== undefined
-    || rawUsage?.cache_creation_input_tokens !== undefined
-    || rawUsage?.cache_creation !== undefined
+  // `prompt_tokens` 是 OpenAI 的总输入，缓存已包含在内。部分聚合网关会同时附上
+  // Anthropic 的缓存字段；只有缺少（或仅给了占位 0）OpenAI 主字段时，才能按
+  // Anthropic 的「输入不含缓存」语义把缓存加回总量。
+  const hasOpenAiInputTokens = typeof rawUsage?.prompt_tokens === 'number' && rawUsage.prompt_tokens > 0
+  const usesAnthropicInputSemantics = !hasOpenAiInputTokens
+    && (rawUsage?.cache_read_input_tokens !== undefined
+      || rawUsage?.cache_creation_input_tokens !== undefined
+      || rawUsage?.cache_creation !== undefined)
   return {
     inputTokens: reportedInputTokens === null || !usesAnthropicInputSemantics
       ? reportedInputTokens
