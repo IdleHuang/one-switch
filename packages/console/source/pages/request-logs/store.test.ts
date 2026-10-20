@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
+
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useRequestLogsUiStore } from './store'
+import { resetRequestLogsScratch, useRequestLogsUiStore } from './store'
 
 /*
  * 请求记录页的界面状态。
@@ -19,7 +21,10 @@ const initialFilter = {
 }
 
 beforeEach(() => {
-  useRequestLogsUiStore.setState({ page: 1, expandedId: null, filter: initialFilter })
+  // 这一页的筛选条件、页码与展开项会写进 sessionStorage（`osw-scratch:request-logs`），
+  // 用例之间不清就会串味。
+  window.sessionStorage.clear()
+  resetRequestLogsScratch()
 })
 
 describe('初始状态', () => {

@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 import type { LogEntry } from '@common/schemas'
 import { I18nProvider } from '@/i18n/provider'
 import { useLanguageStore } from '@/i18n/store'
-import { useLogsUiStore } from './store'
+import { resetLogsScratch, useLogsUiStore } from './store'
 import { LogsTable } from './components/logs-table'
 import { LogsToolbar } from './components/logs-toolbar'
 
@@ -35,7 +35,10 @@ function log(overrides: Partial<LogEntry> = {}): LogEntry {
 
 beforeEach(() => {
   useLanguageStore.setState({ preference: 'zh-CN' })
-  useLogsUiStore.setState({ live: true, levelFilter: 'all', scopeFilter: 'proxy', searchText: '', page: 1 })
+  // 这一页的界面状态会写进 sessionStorage（`osw-scratch:logs`），
+  // 不清掉的话上一个用例留下的筛选会串到下一个。
+  window.sessionStorage.clear()
+  resetLogsScratch()
 })
 
 describe('运行日志页的界面状态', () => {

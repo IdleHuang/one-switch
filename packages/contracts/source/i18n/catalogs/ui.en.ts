@@ -132,7 +132,7 @@ export const uiEn = {
   'modelTest.action.stop': 'Stop',
   'modelTest.action.start': 'Start diagnostics',
   'modelTest.config.title': 'Test settings',
-  'modelTest.config.description': 'These parameters only affect diagnostics; they are not saved to the server.',
+  'modelTest.config.description': 'These parameters only affect diagnostics; they are not saved to the server. Your values are kept on this machine.',
   'modelTest.config.back': 'Back to results',
   'modelTest.config.concurrency': 'Concurrency',
   'modelTest.config.concurrencyHint': 'How many channels to request at once. No upper limit — whatever you enter is how many run in parallel. Higher is faster and more likely to hit upstream rate limits.',

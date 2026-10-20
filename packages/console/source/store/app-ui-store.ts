@@ -1,7 +1,5 @@
-import { create } from 'zustand'
-import { persist, type PersistStorage } from 'zustand/middleware'
 import type { ThemeMode } from '@/lib/theme-mode'
-import { createLocalStorage } from './persist-storage'
+import { createPersistedStore } from './persisted-store'
 
 interface AppUiState {
   themeMode: ThemeMode
@@ -31,10 +29,11 @@ interface AppUiState {
 
 type PersistedAppUiState = Pick<AppUiState, 'themeMode' | 'onboardingComplete' | 'sidebarPinned'>
 
-const appUiStorage: PersistStorage<PersistedAppUiState> | undefined = createLocalStorage<PersistedAppUiState>()
-
-export const useAppUiStore = create<AppUiState>()(persist(
-  set => ({
+const appUi = createPersistedStore<AppUiState, PersistedAppUiState>({
+  key: 'osw-ui',
+  // 这台机器上这个人怎么看这个界面：关掉应用再打开还在，换台机器重新来一遍是对的。
+  scope: 'machine',
+  create: set => ({
     themeMode: 'system',
     setThemeMode: themeMode => set({ themeMode }),
     onboardingComplete: false,
@@ -42,13 +41,12 @@ export const useAppUiStore = create<AppUiState>()(persist(
     sidebarPinned: false,
     setSidebarPinned: sidebarPinned => set({ sidebarPinned }),
   }),
-  {
-    name: 'osw-ui',
-    storage: appUiStorage,
-    partialize: state => ({
-      themeMode: state.themeMode,
-      onboardingComplete: state.onboardingComplete,
-      sidebarPinned: state.sidebarPinned,
-    }),
-  },
-))
+  pick: state => ({
+    themeMode: state.themeMode,
+    onboardingComplete: state.onboardingComplete,
+    sidebarPinned: state.sidebarPinned,
+  }),
+  defaults: { themeMode: 'system', onboardingComplete: false, sidebarPinned: false },
+})
+
+export const useAppUiStore = appUi.store

@@ -30,6 +30,21 @@ export function useModelData() {
   const setModels = useCallback((next: ProviderModelRoute[] | ((current: ProviderModelRoute[]) => ProviderModelRoute[])) => client.setQueryData<ProviderModelRoute[]>(modelKeys.all, current => typeof next === 'function' ? next(current ?? []) : next), [client])
   const loadModels = useCallback(async () => { const result = await query.refetch(); return !result.isError }, [query])
   const reload = useCallback(async () => { refreshProviders(); refreshHealth(); await loadModels() }, [loadModels, refreshHealth, refreshProviders])
-  useEffect(() => { if (!selectedProviderId && providers[0]) setSelectedProviderId(providers[0].id) }, [providers, selectedProviderId, setSelectedProviderId])
+  /*
+   * 自动选中第一个供应商。
+   *
+   * 判据是「记下的那个还在不在」，不是「有没有记过」：这个选择会跟着窗口一起恢复
+   * （`store/page-scratch.ts`），而供应商可能在别处被删掉。只看空不空的话，本机存着
+   * 一个已经消失的 id 时，页面会一直停在「请选择供应商」的空状态上，用户还以为供应商
+   * 全没了。
+   *
+   * 必须等 `providers` 有内容再判断：还没加载出来时列表是空的，按「不在列表里」处理会
+   * 把用户的选择直接擦掉。
+   */
+  useEffect(() => {
+    if (providers.length === 0) return
+    if (providers.some(provider => provider.id === selectedProviderId)) return
+    setSelectedProviderId(providers[0].id)
+  }, [providers, selectedProviderId, setSelectedProviderId])
   return { providers, health, providersLoading, models, setModels, selectedProviderId, setSelectedProviderId, loading: query.isPending || providersLoading, loadModels, reload }
 }

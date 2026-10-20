@@ -7,6 +7,7 @@ import { PROTOCOL_DISPLAY_NAMES } from '@common/protocols'
 import { createAppTranslator } from '@common/i18n/catalogs'
 import { I18nProvider } from '@/i18n/provider'
 import { useLanguageStore } from '@/i18n/store'
+import { DEFAULT_TEST_CONFIG, useModelTestConfigStore } from '@/store/model-test-config'
 import type { ModelTestResult } from '@/api/tools'
 import { ModelTestPanel } from './model-test-panel'
 
@@ -90,13 +91,17 @@ const MODELS = [
   }),
 ]
 
+function panelNode(open: boolean) {
+  return (
+    <I18nProvider>
+      <ModelTestPanel open={open} models={MODELS} providers={[provider()]} onOpenChange={() => {}} />
+    </I18nProvider>
+  )
+}
+
 function renderPanel() {
   useLanguageStore.setState({ preference: 'zh-CN' })
-  return render(
-    <I18nProvider>
-      <ModelTestPanel open models={MODELS} providers={[provider()]} onOpenChange={() => {}} />
-    </I18nProvider>,
-  )
+  return render(panelNode(true))
 }
 
 /**
@@ -160,6 +165,12 @@ function stubRunResults() {
 
 beforeEach(() => {
   vi.mocked(modelTestApi.run).mockReset()
+  /*
+   * 测试参数记在本机，而 store 是模块级的：不清就会把上一条用例调的轮次带到下一条里，
+   * 断言看起来「明明没点过却是 3 轮」。localStorage 一并清掉，免得存档跨用例复活。
+   */
+  window.localStorage.clear()
+  useModelTestConfigStore.setState({ config: DEFAULT_TEST_CONFIG })
 })
 
 function startTest() {
@@ -423,5 +434,41 @@ describe('测试配置页', () => {
     expect(options).toMatchObject({ rounds: 3, inputLength: 0 })
     // 空提示词不发：让服务端按模式取默认，两边口径一致。
     expect(options?.prompt).toBeUndefined()
+  })
+
+  /** 「测试轮次」那一条里的 + 按钮。 */
+  function roundsPlus(): HTMLElement {
+    const row = screen.getByText(zh('modelTest.config.rounds')).closest('div.flex') as HTMLElement
+    return [...row.querySelectorAll('button')].find(node => node.getAttribute('aria-label') === '+')!
+  }
+
+  it('关掉面板再打开，上一回填的轮次还在（记在本机）', () => {
+    const { rerender } = renderPanel()
+    selectProvider()
+
+    fireEvent.click(screen.getByRole('button', { name: zh('modelTest.action.settings') }))
+    fireEvent.click(roundsPlus())
+    fireEvent.click(roundsPlus())
+    expect(Number((screen.getByLabelText(zh('modelTest.config.rounds')) as HTMLInputElement).value)).toBe(3)
+
+    // 关掉再打开：参数不在这里复位，因为它是「这台机器上习惯怎么测」，不是这一次的值。
+    rerender(panelNode(false))
+    rerender(panelNode(true))
+
+    fireEvent.click(screen.getByRole('button', { name: zh('modelTest.action.settings') }))
+    expect(Number((screen.getByLabelText(zh('modelTest.config.rounds')) as HTMLInputElement).value)).toBe(3)
+  })
+
+  it('「恢复默认」是用户主动按的：重置之后重开仍是默认值', () => {
+    renderPanel()
+    selectProvider()
+
+    fireEvent.click(screen.getByRole('button', { name: zh('modelTest.action.settings') }))
+    fireEvent.click(roundsPlus())
+    expect(Number((screen.getByLabelText(zh('modelTest.config.rounds')) as HTMLInputElement).value)).toBe(2)
+
+    fireEvent.click(screen.getByRole('button', { name: zh('modelTest.config.reset') }))
+    expect(Number((screen.getByLabelText(zh('modelTest.config.rounds')) as HTMLInputElement).value)).toBe(1)
+    expect(useModelTestConfigStore.getState().config).toEqual(DEFAULT_TEST_CONFIG)
   })
 })

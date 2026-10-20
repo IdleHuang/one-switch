@@ -189,4 +189,30 @@ describe('ErrorFallback', () => {
     expect(screen.getByText('后端直接抛了字符串')).toBeTruthy()
     expect(screen.queryByText('调用栈')).toBeNull()
   })
+
+  /*
+   * 崩掉的那一页按定义还记着崩溃时那份筛选/页码。原样重载很容易一脚踩回同一个状态，
+   * 用户看到的就是「重新加载也没用」。所以重载前必须先清掉临时草稿。
+   */
+  it('点「重新加载应用」先清掉页面临时草稿，再重载', () => {
+    window.sessionStorage.setItem('osw-scratch:logs', '{"state":{"levelFilter":"error"},"version":0}')
+    window.localStorage.setItem('osw-ui', '{"state":{"themeMode":"dark"},"version":0}')
+    const reload = vi.fn()
+    const locationDescriptor = Object.getOwnPropertyDescriptor(window, 'location')
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...window.location, reload } })
+
+    try {
+      render(<ErrorFallback error={new Error('boom')} reset={() => {}} />, { wrapper: Wrapper })
+      fireEvent.click(screen.getByRole('button', { name: '重新加载应用' }))
+
+      expect(reload).toHaveBeenCalled()
+      expect(window.sessionStorage.getItem('osw-scratch:logs')).toBeNull()
+      // 主题这类长期偏好不该被一起清掉。
+      expect(window.localStorage.getItem('osw-ui')).not.toBeNull()
+    } finally {
+      window.sessionStorage.clear()
+      window.localStorage.clear()
+      if (locationDescriptor) Object.defineProperty(window, 'location', locationDescriptor)
+    }
+  })
 })

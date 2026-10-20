@@ -49,6 +49,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useModelTestRunner } from '@/pages/model-management/hooks/use-model-test-runner'
 import type { TestTask, TestTaskStatus } from '@/pages/model-management/lib/model-test-runner'
+import { useModelTestConfigStore, type TestConfig } from '@/store/model-test-config'
 
 interface ModelTestPanelProps {
   open: boolean
@@ -56,36 +57,6 @@ interface ModelTestPanelProps {
   models: ProviderModelRoute[]
   providers: Provider[]
 }
-
-const TEST_CONCURRENCY = 3
-
-/**
- * 测试参数。
- *
- * 它们只影响**这一次诊断怎么写请求**，不进服务端配置：并发是界面侧的 worker 数，
- * 轮次与提示词是随每次 `/model-test/run` 走的值。
- */
-interface TestConfig {
-  concurrency: number
-  inputLength: number
-  rounds: number
-  prompt: string
-}
-
-const DEFAULT_TEST_CONFIG: TestConfig = {
-  concurrency: TEST_CONCURRENCY,
-  inputLength: 0,
-  rounds: 1,
-  prompt: '',
-}
-
-/*
- * 这三个参数**不设上限**。
- *
- * 它们约束的是「这一次怎么测」，不是服务端的容量：有人想一次跑五十轮、想把提示词
- * 补到几十万字，那是他自己的账单和他的等待，界面不该替他判断「测到多少算够」。
- * 只保留下界（轮次至少一轮、长度不为负）——那不是策略，是定义。
- */
 
 /**
  * 结果表列宽模板：表头与数据行共用一份，避免两处列宽只改一半。
@@ -897,10 +868,15 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
    */
   const [view, setView] = useState<'results' | 'config'>('results')
   /**
-   * 测试参数。用 state 而不是持久化存储：这是「这次怎么测」，不是一份要长期生效的偏好。
-   * 关掉弹窗（或重开）就回到默认，下次诊断不会莫名其妙地沿用上一回调大的轮次。
+   * 测试参数。存在本机（`store/model-test-config`），不是 `useState`。
+   *
+   * 关掉弹窗再打开，上一回填的轮次还在——「这次怎么测」填到第三遍还从 1 开始，
+   * 每次都要重填一遍才叫莫名其妙。但它依然不进服务端配置：这是本机习惯，
+   * 换台机器重新来一遍是对的（`apps/docs/specs/diagnostics.md` §5）。
    */
-  const [config, setConfig] = useState<TestConfig>(DEFAULT_TEST_CONFIG)
+  const config = useModelTestConfigStore(state => state.config)
+  const setConfig = useModelTestConfigStore(state => state.setConfig)
+  const resetConfig = useModelTestConfigStore(state => state.resetConfig)
   /** 展开的行。只存 id，收起时不渲染明细，几十行的表也不变卡。 */
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set())
   /** 本轮诊断要问哪个问题。只影响「下一次开始」：已经有结论的行保留它自己跑的模式。 */
@@ -948,7 +924,7 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
       // 展开态跟着结果走：重开面板时表是空的，残留的展开 id 只会在下一批结果里随机命中。
       setExpandedTaskIds(current => (current.size === 0 ? current : new Set()))
       setView('results')
-      setConfig(current => (current === DEFAULT_TEST_CONFIG ? current : DEFAULT_TEST_CONFIG))
+      // 测试参数**不在这里复位**：它记在本机，重开面板应该还看得见上一回填的值。
       // 每次重新打开都从默认模式开始：上次点到「速度诊断」后关掉面板，
       // 下次再进来时应该看到默认的连通性诊断，而不是一个没被注意到的长提示词诊断。
       setTestMode('connectivity')
@@ -1133,7 +1109,7 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
                 config={config}
                 onChange={setConfig}
                 onBack={() => setView('results')}
-                onReset={() => setConfig(DEFAULT_TEST_CONFIG)}
+                onReset={resetConfig}
               />
             ) : (
               <>

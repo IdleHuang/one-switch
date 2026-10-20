@@ -4,7 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProviderModelRoute } from '@common/schemas'
 import { createQueryFixture, provider, providerHealth, providerModelHealth } from '@/test-support'
-import { useModelManagementUiStore } from '../store'
+import { resetModelManagementScratch, useModelManagementUiStore } from '../store'
 import { modelKeys, useModelData } from './use-model-data'
 
 /*
@@ -85,7 +85,9 @@ beforeEach(() => {
   state.health = { providers: [], providerModels: [] }
   state.refreshProviders.mockReset()
   state.refreshHealth.mockReset()
-  useModelManagementUiStore.setState({ selectedProviderId: '' })
+  // 「上次点开的是哪个供应商」会写进 sessionStorage，用例之间必须清干净。
+  window.sessionStorage.clear()
+  resetModelManagementScratch()
 })
 
 function setup() {
@@ -276,11 +278,33 @@ describe('供应商自动选中', () => {
   })
 
   it('已经选过时不覆盖用户的选择', async () => {
-    state.providers = [provider({ id: 'prov_primary' })]
+    state.providers = [provider({ id: 'prov_primary' }), provider({ id: 'prov_second' })]
+    useModelManagementUiStore.setState({ selectedProviderId: 'prov_second' })
+    const { result } = setup()
+
+    await waitFor(() => expect(result.current.providers).toHaveLength(2))
+    expect(useModelManagementUiStore.getState().selectedProviderId).toBe('prov_second')
+  })
+
+  /*
+   * 这个选择会跟着窗口一起恢复（见 `store/page-scratch.ts`），而被选中的供应商可能在
+   * 别处被删掉。不快进到第一个还在的供应商，页面就会永远停在「请选择供应商」上。
+   */
+  it('记下的供应商已经不存在时改选第一个还在的', async () => {
+    state.providers = [provider({ id: 'prov_primary' }), provider({ id: 'prov_second' })]
+    useModelManagementUiStore.setState({ selectedProviderId: 'prov_deleted' })
+    setup()
+
+    await waitFor(() => expect(useModelManagementUiStore.getState().selectedProviderId).toBe('prov_primary'))
+  })
+
+  // 列表还没加载出来时是空的，按「不在列表里」处理会把用户的选择直接擦掉。
+  it('供应商还没加载出来时不动已选的那个', async () => {
+    state.providers = []
     useModelManagementUiStore.setState({ selectedProviderId: 'prov_second' })
     setup()
 
-    await waitFor(() => expect(state.providers).toHaveLength(1))
+    await waitFor(() => expect(state.list).toHaveBeenCalled())
     expect(useModelManagementUiStore.getState().selectedProviderId).toBe('prov_second')
   })
 

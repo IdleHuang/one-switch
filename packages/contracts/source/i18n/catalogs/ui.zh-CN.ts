@@ -133,7 +133,7 @@ export const uiZhCN: Record<keyof typeof uiEn, MessageValue> = {
   'modelTest.action.stop': '停止',
   'modelTest.action.start': '开始诊断',
   'modelTest.config.title': '测试配置',
-  'modelTest.config.description': '这些参数只影响诊断本身，不写入服务端配置。',
+  'modelTest.config.description': '这些参数只影响诊断本身，不写入服务端配置；填过的值会记在这台机器上。',
   'modelTest.config.back': '返回结果',
   'modelTest.config.concurrency': '并发数量',
   'modelTest.config.concurrencyHint': '同时向几个渠道发请求。不设上限，填多少就开多少个并发；调高会更快，也更容易触发上游限流。',

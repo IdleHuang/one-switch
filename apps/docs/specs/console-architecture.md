@@ -6,7 +6,7 @@
 
 这条约束不是风格偏好，它决定了一件事——**能不能在没有浏览器的情况下验证一个行为**。诊断执行器要保证「连点两下不会打两批请求出去」、「取消不是失败」，路由规划要保证「同名节点不会互相覆盖」，绑定表要保证「绑定关着时规则也关着」。这些判断全是业务规则，如果它们长在 `useEffect` 和组件状态里，就只能靠点界面来验证；写成不依赖 React 的模块之后，它们各有一份直接的单元测试。
 
-这条约束由 `packages/console/scripts/check-console-layers.mjs` 在 `pnpm lint` 里强制，不是靠自觉（见 §4）。
+这条约束由 `packages/console/scripts/check-console-layers.mjs` 在 `pnpm lint` 里强制，不是靠自觉（见 §5）。
 
 ## 1. 五层与各自能做什么
 
@@ -64,7 +64,46 @@ React 一侧只留一个薄适配（`useSyncExternalStore(runner.subscribe, runn
 
 **协议名写全称。** `OpenAI Completions` / `OpenAI Responses` / `Anthropic Messages`，不写 `openai`、`responses`、`anthropic`。这三个名字会直接出现在用户面对的错误信息与日志里，缩写会让人分不清是哪一种。
 
-## 4. 约束怎么被强制
+## 4. 状态放在哪：三种寿命
+
+界面上的状态混着放就会互相污染，判据只有一句：**关掉窗口之后它该不该还在？**
+
+| 哪一类 | 例子 | 落在哪 | 活多久 |
+| --- | --- | --- | --- |
+| 服务端事实 | 供应商、模型、逻辑模型、设置 | 数据库 / 管理 API（`@/api/*`） | 永久，跟着数据走、跟着账号同步 |
+| 本机偏好 | 主题、语言、侧边栏是否钉住、诊断参数 | `createPersistedStore({ scope: 'machine' })` → `localStorage` | 永久，只在这台机器 |
+| 页面临时数据 | 筛选条件、页码、展开的是哪一条 | `createPageScratchStore`（`scope: 'window'` 的薄封装）→ `sessionStorage` | 这个窗口 |
+
+第三条的「这个窗口」是精确的：重载（F5、自动更新后重进）还在，关掉窗口就没了。这正好是「我刚才在看什么」的寿命——存成永久偏好之后，用户几天后打开会看到一份自己早已忘记的筛选条件，并把「筛完什么都没有」当成「真的什么都没有」，这是最难自查的一类界面缺陷。
+
+**所有持久化配置只有一份实现：`store/persisted-store.ts` 的 `createPersistedStore`。** 两档寿命对应它的 `scope` 取值，而「存在哪块 storage」不再由各个 store 自己挑——写成枚举是因为「存在哪」和「关掉窗口该不该还在」本来就是同一个判断，分开写迟早会写出两套互相矛盾的结论。
+
+```ts
+// 本机偏好
+export const useAppUiStore = createPersistedStore<AppUiState, PersistedAppUiState>({
+  key: 'osw-ui',
+  scope: 'machine',
+  create: set => ({ /* 普通 zustand store */ }),
+  pick: state => ({ themeMode: state.themeMode, sidebarPinned: state.sidebarPinned }),
+  defaults: { themeMode: 'system', sidebarPinned: false },
+}).store
+
+// 页面临时数据：同一套规则 + 键名前缀 + 批量清场
+export const useLogsUiStore = scratch.store   // scratch = createPageScratchStore({ page: 'logs', … })
+```
+
+`pick` 只挑「重进这一页还该看见」的项。翻页、搜索词、`live` 这类由路由或用户动作决定、挂载时必然被重新算出来的字段放进去只会让人以为它有用——存下来也会在下一次挂载的第一帧被擦掉。
+
+四件事因此只有一份实现：**挑哪块 storage**（探测不到就退回内存，界面照常能用）、**旧存档回落**（`pick` 与 `defaults` 分开声明，存档缺字段时填默认值而不是 `undefined`，对象再往里合一层）、**存档形状对不上时的取舍**（例如本该是对象却存成了字符串，就整份用默认值）、**复位**（`reset` 从 `getInitialState()` 取，各页面不手抄一份 `setState({ … })` 等着以后漏掉新加的字段）。
+
+`store/page-scratch.ts` 只是在这层之上补两件只跟页面有关的事：**键名前缀**（`osw-scratch:<page>`）与**批量清场**。清场有两个入口：`clearPageScratch(page)` 清一页，`clearAllPageScratch()` 清全部（只删 `osw-scratch:` 前缀的键，不碰 `localStorage`）。后者挂在错误边界的「重新加载应用」上：崩掉的那一页按定义还记着崩溃时那份筛选，原样重载很可能一脚踩回同一个状态里，用户看到的就是「重载也没用」。
+
+**不进临时草稿的两类东西**，写新页面时别顺手放进去：
+
+- **服务端事实的草稿**。`pages/runtime-settings/store.ts` 的 `draft` 是用户改了一半、还没保存的设置。存下来，下次启动会把一份**没被任何地方承认过的**值画成当前设置。
+- **瞬时界面动作**。`hooks/use-route-mode.ts` 的「对话框开着」「正在切页」属于正在发生的事，重新打开一个「对话框还开着」的界面没有意义。
+
+## 5. 约束怎么被强制
 
 `packages/console/scripts/check-console-layers.mjs` 在 `pnpm lint` 里跑，扫 `packages/console/source` 下除测试文件外的全部源码，把相对路径统一折成别名再比对。违反即退出码 1，并在输出里指明**文件、规则、以及为什么这条规则存在**。
 
@@ -80,7 +119,7 @@ React 一侧只留一个薄适配（`useSyncExternalStore(runner.subscribe, runn
 
 新增约束前先问：这条规则的每个命中，是不是都真的是缺陷？如果不是，改规则，不要改代码。
 
-## 5. 参考实现
+## 6. 参考实现
 
 | 主题 | 位置 |
 | --- | --- |
@@ -89,6 +128,8 @@ React 一侧只留一个薄适配（`useSyncExternalStore(runner.subscribe, runn
 | 纯规则由页面自理 | `pages/logical-models/lib/logical-model-form.ts`、`provider-model-candidates.ts`、`logical-model-writes.ts` |
 | 乐观草稿与真实取数并存 | `pages/model-management/components/provider-rule-bindings.tsx` |
 | 共享队列 | `lib/task-queue.ts` |
+| 本机偏好的持久化 | `store/persisted-store.ts`（唯一实现）+ `store/app-ui-store.ts`、`i18n/store.ts`、`store/model-test-config.ts` |
+| 页面临时数据 | `store/page-scratch.ts`（`persisted-store` 之上的薄封装）+ `pages/logs/store.ts`、`pages/request-logs/store.ts`、`pages/model-management/store.ts` |
 | 护栏本体 | `packages/console/scripts/check-console-layers.mjs` |
 
 页面清单与侧边栏分组仍以 `components/app-sidebar.tsx` 为准（见 [desktop.md](./desktop.md)）；技术栈与构建见 [tech-architecture.md](./tech-architecture.md)。

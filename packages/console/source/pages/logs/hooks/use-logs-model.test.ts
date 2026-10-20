@@ -4,7 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LogEntry } from '@common/schemas'
 import { createQueryFixture } from '@/test-support'
-import { useLogsUiStore } from '../store'
+import { resetLogsScratch, useLogsUiStore } from '../store'
 
 /*
  * 运行日志页的数据模型。
@@ -76,7 +76,10 @@ beforeEach(() => {
   state.revokeObjectURL.mockReset()
   state.createObjectURL.mockClear()
   state.click.mockReset()
-  useLogsUiStore.setState({ live: true, levelFilter: 'all', scopeFilter: 'proxy', searchText: '', page: 1 })
+  // 这一页会把自己的临时状态写进 sessionStorage，用例之间必须清干净，
+  // 否则上一个用例留下的筛选条件会串到下一个。
+  window.sessionStorage.clear()
+  resetLogsScratch()
 
   // jsdom 里 `URL.createObjectURL` 与 `<a>.click()` 都不实现真实行为，替换掉以免触发导航。
   vi.stubGlobal('URL', Object.assign(Object.create(URL), {
