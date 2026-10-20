@@ -19,7 +19,7 @@ import { formatMilliseconds, formatOutputSpeed, formatTokenCount } from '@common
 import { ALL_MODEL_TEST_MODES, type ModelTestMode, type Protocol, type Provider, type ProviderModelRoute } from '@common/schemas'
 import type { UiCatalogKey } from '@common/i18n/catalogs'
 import { CONVERTIBLE_PROTOCOLS, PROTOCOL_DISPLAY_NAMES } from '@common/protocols'
-import { modelTestApi, type ModelTestResult, type ModelTestRoundResult } from '@/api/tools'
+import type { ModelTestResult, ModelTestRoundResult } from '@common/diagnostics'
 import { InlineEmptyState } from '@/components/inline-empty-state'
 import { FormRow } from '@/components/form-kit'
 import { PROTOCOL_ICONS } from '@/components/protocol-icons'
@@ -47,27 +47,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { useModelTestRunner } from '@/pages/model-management/hooks/use-model-test-runner'
+import type { TestTask, TestTaskStatus } from '@/pages/model-management/lib/model-test-runner'
 
 interface ModelTestPanelProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   models: ProviderModelRoute[]
   providers: Provider[]
-}
-
-type TestTaskStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled'
-
-interface TestTask {
-  id: string
-  modelId: string
-  modelName: string
-  providerId: string
-  providerName: string
-  protocol: Protocol
-  converted: boolean
-  status: TestTaskStatus
-  result?: ModelTestResult
-  errorMessage?: string
 }
 
 const TEST_CONCURRENCY = 3
@@ -892,7 +879,15 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
   )
   const [selectedModelProtocols, setSelectedModelProtocols] = useState<Record<string, Set<Protocol>>>({})
   const [selectedProviderIds, setSelectedProviderIds] = useState<Set<string>>(new Set())
-  const [tasks, setTasks] = useState<TestTask[]>([])
+  /**
+   * 结果表与执行器。
+   *
+   * 执行不在这里：任务怎么排队、并发怎么限、取消之后那几行怎么收尾，都在
+   * `ModelTestRunner` 那个类里（`pages/model-management/lib/model-test-runner.ts`），
+   * 队列语义由 `lib/task-queue` 提供。面板只负责渲染，以及把「用户点了什么」
+   * 翻译成一批任务。
+   */
+  const { tasks, running, run, cancel, clear } = useModelTestRunner(t)
   const [failedOnly, setFailedOnly] = useState(false)
   /**
    * 右侧主体的两个视图。
@@ -910,18 +905,7 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set())
   /** 本轮诊断要问哪个问题。只影响「下一次开始」：已经有结论的行保留它自己跑的模式。 */
   const [testMode, setTestMode] = useState<ModelTestMode>('connectivity')
-  const [running, setRunning] = useState(false)
   const previousOpen = useRef(false)
-  const abortControllerRef = useRef<AbortController | null>(null)
-  /**
-   * `running` 是渲染状态，要等下一帧才变成 `true`：连点两下「开始诊断」时两个
-   * 事件处理器看到的都还是 `false`，会同时打两批真实请求（真的花钱）。
-   * 用 ref 做同步闸门，并把定时器 / 网络请求都挂在同一批身上。
-   */
-  const runningRef = useRef(false)
-
-  // 面板被卸载（切换页面）时掐掉在跑的那批诊断，避免用户已经离开还在持续计费。
-  useEffect(() => () => abortControllerRef.current?.abort(), [])
 
   /**
    * 模型 / 供应商集合变化后校正选中态。
@@ -959,7 +943,7 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
       return next.size === current.size ? current : next
     })
     if (isOpening) {
-      setTasks(current => (current.length === 0 ? current : []))
+      clear()
       setFailedOnly(false)
       // 展开态跟着结果走：重开面板时表是空的，残留的展开 id 只会在下一批结果里随机命中。
       setExpandedTaskIds(current => (current.size === 0 ? current : new Set()))
@@ -968,11 +952,10 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
       // 每次重新打开都从默认模式开始：上次点到「速度诊断」后关掉面板，
       // 下次再进来时应该看到默认的连通性诊断，而不是一个没被注意到的长提示词诊断。
       setTestMode('connectivity')
-      setRunning(false)
     }
-  }, [props.open, enabledModels, availableProviders])
+  }, [props.open, enabledModels, availableProviders, clear])
 
-  const plannedTasks = useMemo<TestTask[]>(() => enabledModels.flatMap(model => {
+  const plannedTasks = useMemo<readonly TestTask[]>(() => enabledModels.flatMap(model => {
     if (!selectedProviderIds.has(model.providerId)) return []
     const provider = props.providers.find(item => item.id === model.providerId)
     if (!provider) return []
@@ -1007,8 +990,9 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
     : plannedTasks
   const visibleTotal = hasResults ? tasks.length : plannedTasks.length
 
+  /** 清空结果表，并一并复位与结果绑定的视图状态（筛选、展开）。 */
   const clearTasks = () => {
-    setTasks([])
+    clear()
     setFailedOnly(false)
     setExpandedTaskIds(current => (current.size === 0 ? current : new Set()))
   }
@@ -1091,89 +1075,30 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
   }
 
   /**
-   * 跑一批诊断任务。
+   * 把当前参数与选择交给执行器。
    *
-   * - `runningRef` 做同步闸门：诊断会真的请求上游并计费，任何时候都只允许一批在跑。
-   * - 任务按 id 合并进结果表：整批开跑时表里通常是空的，重测时其它行的结论原样保留。
-   * - 并发只在这里控制（`config.concurrency` 个 worker），服务端一次请求只测一个目标。
+   * 面板只说「用什么参数跑哪一批」，排队、并发、取消收尾都在执行器里。
+   * 参数是**开跑那一刻**的快照：跑的过程中改配置不该影响已经发出去的那一批。
    */
-  const runTasks = async (batch: TestTask[]) => {
-    if (runningRef.current || batch.length === 0) return
-    const pending = batch.map(task => ({ ...task, status: 'queued' as const, result: undefined, errorMessage: undefined }))
-    const controller = new AbortController()
-    runningRef.current = true
-    abortControllerRef.current = controller
-    setRunning(true)
-    setTasks(current => {
-      if (current.length === 0) return pending
-      const byId = new Map(pending.map(task => [task.id, task]))
-      return current.map(task => byId.get(task.id) ?? task)
+  const runTasks = (batch: readonly TestTask[]) => {
+    void run(batch, {
+      mode: testMode,
+      concurrency: config.concurrency,
+      rounds: config.rounds,
+      prompt: config.prompt,
+      inputLength: config.inputLength,
     })
-    let nextIndex = 0
-
-    const worker = async () => {
-      while (!controller.signal.aborted && nextIndex < pending.length) {
-        const task = pending[nextIndex++]
-        setTasks(current => current.map(item => item.id === task.id ? { ...item, status: 'running' } : item))
-        try {
-          const response = await modelTestApi.run(task.protocol, testMode, {
-            providerIds: [task.providerId],
-            modelIds: [task.modelId],
-          }, {
-            rounds: config.rounds,
-            // 空提示词不发：不发与服务端会回退到该模式的默认提示词，两边口径一致。
-            prompt: config.prompt.trim() || undefined,
-            inputLength: config.inputLength,
-          }, controller.signal)
-          if (controller.signal.aborted) break
-          const result = response.success
-            ? response.data.results.find(item => item.modelId === task.modelId)
-            : undefined
-          const succeeded = Boolean(result?.success)
-          setTasks(current => current.map(item => item.id === task.id ? {
-            ...item,
-            status: succeeded ? 'success' : 'failed',
-            result,
-            errorMessage: response.success
-              ? result ? result.errorMessage : t('modelTest.error.missingEndpoint')
-              : response.errorMessage,
-          } : item))
-        } catch (error) {
-          if (controller.signal.aborted) break
-          setTasks(current => current.map(item => item.id === task.id ? {
-            ...item,
-            status: 'failed',
-            errorMessage: error instanceof Error ? error.message : t('modelTest.error.requestFailed'),
-          } : item))
-        }
-      }
-    }
-
-    try {
-      await Promise.all(Array.from({ length: Math.min(config.concurrency, pending.length) }, () => worker()))
-    } finally {
-      if (controller.signal.aborted) {
-        setTasks(current => current.map(task => task.status === 'queued' || task.status === 'running'
-          ? { ...task, status: 'cancelled', errorMessage: undefined }
-          : task))
-      }
-      if (abortControllerRef.current === controller) abortControllerRef.current = null
-      runningRef.current = false
-      setRunning(false)
-    }
   }
 
   const startTests = () => {
     setFailedOnly(false)
-    void runTasks(plannedTasks)
+    runTasks(plannedTasks)
   }
 
   /** 重测不重新规划：直接拿表里失败的那几行重跑，结果就地刷新，其它行不动。 */
   const retryFailedTests = () => {
-    void runTasks(tasks.filter(task => task.status === 'failed'))
+    runTasks(tasks.filter(task => task.status === 'failed'))
   }
-
-  const cancelTests = () => abortControllerRef.current?.abort()
 
   return (
     <Dialog open={props.open} onOpenChange={open => !running && props.onOpenChange(open)}>
@@ -1245,7 +1170,7 @@ export function ModelTestPanel(props: ModelTestPanelProps) {
                         </Button>
                       )}
                       {running ? (
-                        <Button variant="destructive" size="sm" onClick={cancelTests}>
+                        <Button variant="destructive" size="sm" onClick={cancel}>
                           <Square size={11} fill="currentColor" /> {t('modelTest.action.stop')}
                         </Button>
                       ) : (

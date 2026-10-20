@@ -118,6 +118,9 @@
 - [x] 渠道诊断面板重做：进度与结果统计常驻、失败过滤与重试失败、清空结果、真实 token 用量（无数据显 `—`）
 - [x] 诊断请求的载荷按协议对齐：OpenAI 协议不带输出上限，Anthropic 直连补最小 `max_tokens`（避免转换层默认 4096 带来的成本）
 - [x] 客户端中止诊断时正常收尾并返回已完成的尝试结果，不再出现无响应
+- [x] 三种诊断模式（连通性 / 流式 / 速度）、多轮重复与自定义提示词、输入长度补齐；参数只保留下界、不设上界（见 [diagnostics.md](./diagnostics.md) §5）
+- [x] 领域拆分：请求构造、流式读取、轮次汇总、目标规划四个模块各自单独测，路由只剩 HTTP 适配；线上契约收敛到 `packages/contracts/source/diagnostics.ts`（原先被抄了三份）
+- [x] 界面侧执行器改为 `ModelTestRunner` 类 + `subscribe`/`getSnapshot`（`useSyncExternalStore` 绑定），并发队列、取消收尾与同步闸门可在无 React 环境下测（见 [diagnostics.md](./diagnostics.md) §8）
 
 ### MVP（P0）：代理管线收尾
 

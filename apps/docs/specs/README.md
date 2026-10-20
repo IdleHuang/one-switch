@@ -68,6 +68,7 @@
 | 主题 | 权威文档 | 覆盖范围 |
 |------|---------|---------|
 | 观测 | [observability.md](./observability.md) | 请求日志与正文采集、用量统计、健康状态与冷却 |
+| 渠道诊断 | [diagnostics.md](./diagnostics.md) | 两个入口的分工、探测请求构造、多轮汇总口径、界面队列与取消语义 |
 | 安全与隐私 | [security-privacy.md](./security-privacy.md) | 监听边界、访问控制、密钥存储、脚本沙箱、隐私 |
 | 匿名使用统计 | [telemetry.md](./telemetry.md) | 默认开启、界面无任何入口的统计口径、事件白名单、上报链路与分析口径 |
 

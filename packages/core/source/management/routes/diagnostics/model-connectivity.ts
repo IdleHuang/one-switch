@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { z } from 'zod'
-import { ProtocolSchema, type Protocol, type Provider } from '@common/schemas'
+import { ModelConnectivityRequestSchema, type ModelConnectivityResult } from '@common/diagnostics'
+import type { Protocol, Provider } from '@common/schemas'
 import { PROTOCOL_DISPLAY_NAMES, createProtocolAuthHeaders } from '@common/protocols'
 import { coreNetworkClient } from '@server/infrastructure/network/core-network'
 import { getProvider, listProviderEndpoints } from '@server/database/provider-store'
@@ -9,7 +9,7 @@ import { HttpRouter } from '@server/http-router'
 import { isWebSocketEndpoint } from '@server/proxy/routing/upstream-url'
 import type { ManagementHandler } from '../../core/response'
 import { sendError, sendSuccess } from '../../core/response'
-import { buildTestBody } from './model-test'
+import { buildDiagnosticBody } from '../../diagnostics/probe-request'
 
 /**
  * 供应商模型对话框里的「连接测试」。
@@ -34,41 +34,10 @@ import { buildTestBody } from './model-test'
 export const modelConnectivityRoutes = new HttpRouter<ManagementHandler>()
   .post('/api/model/connectivity-test', handleTestModelConnectivity)
 
-/** 一行草稿端点。刻意不是 `ProtocolEndpointSchema`：草稿里没有 id、没有自定义鉴权头，也不该有。 */
-const DraftEndpointSchema = z.object({
-  protocol: ProtocolSchema,
-  /** 模型级覆盖地址；留空表示用供应商级地址。 */
-  endpointUrl: z.string().default(''),
-})
-
-const TestModelConnectivitySchema = z.object({
-  providerId: z.string(),
-  /** 草稿里的模型名，原样写进请求体——用户要确认的正是「上游认不认这个名字」。 */
-  modelName: z.string().trim().min(1),
-  /** 这次提交里启用的端点。空数组不是错误，是「还没配」，由界面拦在保存之前。 */
-  endpoints: z.array(DraftEndpointSchema).default([]),
-})
-
-export interface ModelConnectivityResult {
-  protocol: Protocol
-  /** 本次实际请求的地址；这一行没有任何可用地址时为 `null`。 */
-  endpointUrl: string | null
-  success: boolean
-  statusCode?: number
-  durationMilliseconds: number
-  /**
-   * 可本地化的错误码。只有契约里有的失败才有码（缺地址、上游拒凭证、超时……）；
-   * 上游原话式的失败（400 的报错正文）没有码，界面直接显示 `errorMessage`。
-   */
-  errorCode?: string
-  /** `errorCode` 的模板变量。服务端不拼句子，界面按码取文案（见 `apps/docs/specs/i18n.md` §5）。 */
-  errorParams?: Record<string, string>
-  /** 上游原话或本地诊断原文（英文）。 */
-  errorMessage?: string
-}
+/** 一行草稿端点。形状归契约层（`@common/diagnostics`），草稿里没有 id、没有自定义鉴权头。 */
 
 async function handleTestModelConnectivity(req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> {
-  const input = TestModelConnectivitySchema.parse(body)
+  const input = ModelConnectivityRequestSchema.parse(body)
   const provider = await getProvider(input.providerId)
   if (!provider) {
     sendError(res, 'NOT_FOUND', `Provider not found: ${input.providerId}`, 404, { providerId: input.providerId })
@@ -174,7 +143,7 @@ async function probeEndpoint(input: ProbeInput): Promise<ModelConnectivityResult
         // 探针不跟随重定向：跟着跳一次就变成了在测另一个地址，用户填的那条到底通不通就没结论了。
         signal: input.signal,
       },
-      Buffer.from(buildTestBody(protocol, input.modelName, false)),
+      Buffer.from(buildDiagnosticBody(protocol, input.modelName, false)),
     )
 
     const success = response.statusCode >= 200 && response.statusCode < 400
